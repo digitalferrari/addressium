@@ -61,11 +61,19 @@ organization's system.
 - **Email archive + click overlay**: a copy of every generic (per-campaign)
   rendered email is stored, so reporting can overlay per-link click data on the
   actual email — a click map
-- **Magic-link SSO tokens**: newsletter links can carry a signed token that logs
-  the reader into a *lite, content-only* session on the operator's main website
-  (paywall/registration-wall bypass), carrying selected profile claims including
-  an `entitlement`. addressium mints and signs the token; the main site verifies
-  it and establishes the session (that sign-in logic is out of scope — see §12)
+- **Subscriber identity via Cognito**: every subscriber has an account in a
+  Cognito user pool — **shared with the operator's main website** as the single
+  base identity everything hangs off. The Cognito `sub` keys the DynamoDB
+  subscriber profile, subscription preferences, and entitlement (see §4.10)
+- **Magic-link SSO tokens**: editorial newsletter links carry a per-recipient
+  signed token that logs the reader into a *lite, content-only* session on the
+  main website and removes the reg/paywall overlay (soft paywall — see §8.1),
+  carrying an `entitlement` (free/paid) plus whitelisted claims. addressium mints
+  and signs the token; the main site verifies and applies it (client-side, on a
+  CloudFront-cached page — that sign-in logic is out of scope, see §12)
+- **Editorial vs advertising link handling**: the sender adds tokens + click
+  tracking to **editorial** links only; **LiveIntent advertising** links are left
+  untouched (no token, no tracking)
 - **Migration importer**: Pinpoint export and CSV ingest (endpoints, segments,
   suppression lists)
 - **Admin console** (React SPA) protected by Cognito
@@ -93,7 +101,11 @@ organization's system.
 | Templating | MJML now, block editor later | Robust responsive email; store shaped for a visual editor |
 | Migration | First-class Pinpoint + CSV importer | Adoption hook for the "Pinpoint is ending" moment |
 | Email archive | Generic copy per campaign | Powers the click overlay; tiny storage; no recipient PII or tokens at rest |
-| Magic-link token | Asymmetric JWT + JWKS | Main site verifies offline; no shared secret; clean system separation |
+| Subscriber identity | Shared Cognito user pool | One base account for prefs + main-site login; `sub` ties everything together |
+| Magic-link token | Asymmetric JWT + JWKS | Verified **client-side** on a cached page — a shared secret would leak and be forgeable; asymmetric ships only the public key |
+| Token placement | URL fragment (`#tok=`) | Never sent to CDN/origin, no logs/Referer leak, never in the cache key; fall back to query param only if it can't survive the SES redirect |
+| Paywall model | Soft / cosmetic (client overlay) | Content stays in the page for SEO/Google indexing; token removes the overlay; graceful fallback to the wall on any token failure |
+| Entitlement | free/paid, staleness bounded by TTL | Client trusts the token's entitlement for its lifetime; churn self-corrects at expiry |
 | Token posture | Long-lived, low-privilege (lite scope) | Best newsletter UX; forwarded links can only ever read content, never touch account |
 | Token redemption | Reusable within TTL, stateless | No callback to addressium; keeps the two systems decoupled |
 | Entitlement freshness | Synced from system of record | addressium's entitlement copy stays current; token also stamps `entitlement_asof` |
@@ -135,10 +147,12 @@ organization's system.
 ### Request/data planes
 
 - **Public plane** (unauthenticated, WAF-protected, rate-limited + CAPTCHA):
-  signup, double-opt-in confirmation, preference center, one-click unsubscribe.
-  These write to DynamoDB but are strictly scoped to the acting subscriber.
-- **Admin plane** (Cognito-authenticated): list/subscriber/segment/campaign/
-  template/automation management, analytics, and settings.
+  signup, double-opt-in confirmation, one-click unsubscribe. Tokenized/signed so
+  a request can only affect the acting subscriber.
+- **Subscriber plane** (Cognito-authenticated, shared pool): the subscriber logs
+  in with their own account to manage list preferences and attributes (§4.10).
+- **Admin plane** (Cognito-authenticated, operator): list/subscriber/segment/
+  campaign/template/automation management, analytics, and settings.
 - **Sending plane** (async): campaign launch → segment resolution → suppression
   filter → SQS fan-out → throttled SES send.
 - **Event plane** (async): SES events → SNS → SQS → processor → counters +
@@ -210,15 +224,22 @@ mutate DynamoDB, enqueue async work. No business logic in the frontend.
   quota so the sandbox/production sending limits are never exceeded.
 - Every message is tagged (campaign id, subscriber id) via SES message tags so
   events can be attributed.
+- **Link classification** at render time: each link is tagged **editorial** or
+  **advertising**. Editorial links get a per-recipient magic-link token and SES
+  click tracking; **LiveIntent advertising links are left untouched** — no token,
+  no tracking, no rewrite. The link-map records the class so the click overlay
+  reports editorial performance only.
 - **Archive at render time** (once per campaign): the first render produces the
   **generic body** — the template rendered with merge fields and the magic-link
   token left as placeholders — which is written to the archive S3 bucket, and
-  each `<a>` is assigned a stable **link-id**. This is what the click overlay is
-  painted on (see §4.8). No per-recipient copies are stored.
+  each editorial `<a>` is assigned a stable **link-id**. This is what the click
+  overlay is painted on (see §4.8). No per-recipient copies are stored.
 - **Magic-link tokens are minted per recipient** (see §4.9) and passed as a
   per-destination `ReplacementTemplateData` merge variable, so `SendBulkEmail`
-  still batches 50 at a time. The token is the only per-recipient difference in
-  the link; the link's identity for reporting is its link-id, not its full URL.
+  still batches 50 at a time. The token rides in the destination URL's
+  **fragment** (`#tok=…`), so it stays client-side only (see §8.1). The token is
+  the only per-recipient difference in the link; the link's identity for
+  reporting is its link-id, not its full URL.
 
 ### 4.5 Events processor (`services/events`)
 
@@ -231,10 +252,10 @@ events → SNS → SQS → Lambda. The processor:
   link-id assigned at archive time) so the click overlay has per-link totals and
   unique counts.
 - **Redacts magic-link tokens before persistence.** SES click tracking reports
-  the full destination URL, which for a magic link includes the bearer token in
-  its query string. The processor **strips the token parameter** before writing
-  to the Events table or Firehose, so magic-link credentials never land at rest
-  in the analytics pipeline.
+  the full destination URL of an editorial link, which carries the bearer token
+  (in the URL fragment, or a query param on the fallback path). The processor
+  **strips the token** before writing to the Events table or Firehose, so
+  magic-link credentials never land at rest in the analytics pipeline.
 - Streams events to **Firehose → S3** for Athena querying.
 - On **hard bounce / complaint**, adds the address to the **suppression list**
   and flips the subscription status; monitors complaint rate and **auto-throttles**
@@ -291,25 +312,52 @@ sign-in / Cognito session-exchange logic on the main site is **out of scope**
 
 - **Signing**: an **asymmetric key in KMS** (ES256/RS256). addressium exposes a
   **JWKS endpoint** (via API Gateway/CloudFront) so the main website verifies
-  offline, with no shared secret and no callback.
+  offline, with no shared secret and no callback. Asymmetric is **mandatory**
+  here because verification happens **client-side on a cached page** (§8.1) — a
+  shared secret would be shipped to the browser and become forgeable.
+- **`sub` is the shared Cognito subject** — the same base identity used for
+  main-site login and preference management (§4.10). The main site resolves an
+  **existing** Cognito user; no JIT provisioning.
 - **Token shape** (JWT claims):
-  - `sub` — stable subscriber id
+  - `sub` — the subscriber's Cognito user-pool subject
   - `scope: "content:read"` — **lite** access only
   - `amr: ["magic_link"]` — marks the session's origin so the main site can
     treat it as lite and force a step-up before anything sensitive
-  - `entitlement` — coarse content tier / feature flags from the profile
+  - `entitlement` — `free` / `paid` (coarse tier / feature flags) from the profile
   - `entitlement_asof` — freshness stamp for the entitlement value
   - `aud` (main site), `iss` (this deployment), `exp` (long-lived, per §11)
   - additional profile claims from an **operator-configurable whitelist**
+- **Delivery**: minted per recipient, embedded in the **URL fragment** of
+  editorial links (§4.4), so it is client-side only and never hits the CDN,
+  origin, or logs.
 - **Claim minimisation**: only whitelisted, coarse values ride in the token —
   never private account detail — because the token travels in a URL.
 - **Statelessness**: tokens are reusable within their TTL; addressium keeps no
   redemption state, keeping the two systems decoupled. Safety comes from the
-  lite scope + bounded TTL, not from single-use tracking.
+  lite scope + bounded TTL + graceful fallback to the wall, not from single-use
+  tracking.
 - **Issued only to confirmed subscribers.**
 
-See §8 for the security model (why lite + forwardable is safe) and §12 for the
-main-site integration contract.
+See §8.1 for the security model (why lite + forwardable + soft-paywall is safe)
+and §12 for the main-site integration contract.
+
+### 4.10 Subscriber identity & preference center (`apps/subscriber-web` + Cognito)
+
+Every subscriber is a **Cognito user** in the pool **shared with the main
+website** — the single base identity everything associates to.
+
+- **Signup** creates the Cognito user, records the DynamoDB subscriber profile
+  (keyed by Cognito `sub`), and runs **double opt-in** confirmation.
+- **Preference center**: authenticated with the subscriber's own Cognito login,
+  to manage list subscriptions, attributes, and unsubscribe. (Tokenized no-login
+  links remain for one-click unsubscribe and email-driven confirmation.)
+- **Two session tiers for one account**: a **full** session (real Cognito login →
+  profile + preference management) versus a **lite** session (magic-link origin →
+  content read + reg/paywall bypass, no profile). The same person can upgrade
+  from lite to full by logging in normally.
+- Because the pool is shared, `entitlement` on the profile and the `sub` in the
+  magic-link token line up with the main site's own view of the user with no
+  mapping layer.
 
 ---
 
@@ -319,7 +367,7 @@ DynamoDB **single-table** design with targeted GSIs. Entities:
 
 | Entity | Purpose | Key notes |
 |---|---|---|
-| **Subscriber** | Durable person record | email (normalized), attributes, locale, source, consent {timestamp, ip, url}, global status, `entitlement` + `entitlement_asof` |
+| **Subscriber** | Durable person record | **keyed by Cognito `sub`** (shared pool); email (normalized), attributes, locale, source, consent {timestamp, ip, url}, global status, `entitlement` (free/paid) + `entitlement_asof` |
 | **List** | A named audience | opt-in policy, from-address, reply-to, compliance footer, physical address |
 | **Subscription** | Subscriber ↔ List join | per-list status: `pending`/`confirmed`/`unsubscribed`/`bounced`/`complained` |
 | **Segment** | Saved filter | predicate over attributes + engagement; resolved at send time |
@@ -421,16 +469,38 @@ link can ever grant, not from assuming it stays private:
   tiers, never account control, so a stale or forwarded entitlement cannot cause
   real harm; `entitlement_asof` lets the main site re-validate for anything
   high-value.
-- **Asymmetric signing.** Tokens are signed by a KMS-held private key; the main
-  site verifies via the JWKS endpoint. addressium never shares a secret, and the
-  signing key never leaves KMS.
-- **No tokens at rest in analytics.** The events processor redacts the token
-  query parameter before persisting click events (§4.5).
+- **Asymmetric signing, verified client-side.** Verification happens **in the
+  browser on a CloudFront-cached page**, so the verifying key is exposed to the
+  client. A symmetric/shared secret would therefore be extractable and forgeable
+  — disqualified. With asymmetric signing the page holds only the **public** key
+  (or fetches JWKS); it can verify but not forge. **The client must _verify_ the
+  signature, not merely decode the JWT** — an unverified decode is trivially
+  hand-forged.
+- **Soft / cosmetic paywall (deliberate).** The article content stays in the
+  page so Google can index it (flexible-sampling SEO). The reg/paywall is a
+  **client-side overlay**; a valid token removes it. Because the content is
+  intentionally in the page, forging a token to drop the overlay yields nothing
+  that isn't already in view-source — so **the wall itself is not a hard security
+  boundary**. Verification matters for what the *lite session* then authorizes
+  (personalization, ad-lite, any authenticated call), not for the overlay.
+- **Graceful degradation.** A missing / expired / invalid token simply leaves
+  the normal reg/paywall in place (rendered if the reader qualifies to see it).
+  There is no hard-fail path, which is what makes long TTLs and stale entitlement
+  safe: a churned or expired user just falls back to the wall.
+- **CDN safety.** The token rides in the **URL fragment**, so it never reaches
+  CloudFront/origin, never appears in access logs, and never leaks via `Referer`.
+  It must also be **excluded from the CloudFront cache key** so full-page caching
+  stays shared and a personalized response is never cached and served to another
+  reader. (Fallback: if the fragment can't survive the SES click-tracking
+  redirect, use a query param excluded from the cache key with logging redacted.)
+- **No tokens at rest in analytics.** The events processor strips the token
+  before persisting click events (§4.5).
 - **Claim minimisation + whitelist.** Only coarse, operator-whitelisted profile
   values ride in the URL-borne token.
 - **Confirmed subscribers only**, and tokens carry a bounded `exp`. Because the
-  scope is lite, a longer TTL is an acceptable UX/security trade (§11); an
-  operator who wants a tighter posture can shorten the TTL.
+  scope is lite and failure degrades to the wall, a longer TTL is an acceptable
+  UX/security trade (§11); an operator who wants a tighter posture can shorten
+  the TTL.
 
 ---
 
@@ -453,8 +523,9 @@ link can ever grant, not from assuming it stays private:
 ```
 addressium/
 ├── apps/
-│   ├── admin-web/         # React admin SPA
-│   └── public-web/        # signup / confirm / preference / unsubscribe
+│   ├── admin-web/         # React admin SPA (operator console)
+│   ├── subscriber-web/    # subscriber signup + Cognito login + preference center
+│   └── public-web/        # embeddable signup snippet + hosted / confirm / unsubscribe pages
 ├── packages/
 │   ├── core/             # shared domain types + zod schemas
 │   └── segment/          # segment engine (GSI/tags impl; OpenSearch drop-in)
@@ -512,29 +583,38 @@ addressium's responsibility ends at **minting a signed token and publishing the
 keys to verify it**. The operator's main website implements the other half. This
 section defines the boundary so both sides can be built independently.
 
+The two systems **share a Cognito user pool**, so the token references an
+**existing** user — no JIT provisioning.
+
 **addressium provides:**
-- Newsletter links containing a magic-link JWT (per §4.9), signed by a KMS
-  asymmetric key.
-- A **JWKS endpoint** for offline verification, with key rotation.
-- A published **claim contract**: `sub`, `scope: "content:read"`,
-  `amr: ["magic_link"]`, `entitlement`, `entitlement_asof`, `aud`, `iss`, `exp`,
-  plus whitelisted profile claims.
+- Editorial newsletter links containing a per-recipient magic-link JWT (per
+  §4.9) in the **URL fragment**, signed by a KMS asymmetric key.
+- A **JWKS endpoint** for offline (in-browser) verification, with key rotation.
+- A published **claim contract**: `sub` (shared Cognito subject),
+  `scope: "content:read"`, `amr: ["magic_link"]`, `entitlement` (`free`/`paid`),
+  `entitlement_asof`, `aud`, `iss`, `exp`, plus whitelisted profile claims.
 
 **The main website implements (out of scope here):**
-1. Read the token from the inbound URL client-side.
-2. Verify signature/`exp`/`aud`/`iss` against the JWKS.
-3. Establish a session — e.g. a **Cognito custom-auth (`CUSTOM_AUTH`) challenge**
-   whose Define/Verify Auth Challenge Lambdas validate the token — mapping `sub`
-   to the site's own user (JIT-provisioning if needed).
-4. **Enforce lite scope**: grant content/paywall read only; gate profile and
-   private-account pages behind a **step-up to full authentication**; never
-   elevate a `magic_link`-origin session.
-5. Optionally **re-validate `entitlement`** against its own source of truth for
-   high-value actions, using `entitlement_asof` to decide when.
+1. Read the token from the inbound URL **fragment** client-side (the page itself
+   is CloudFront-cached; the token must be **excluded from the cache key**).
+2. **Verify** the signature and `exp`/`aud`/`iss` against the JWKS — a bare
+   decode is forgeable and must not be trusted.
+3. Establish a **lite** session for the existing shared-pool user — e.g. a
+   **Cognito custom-auth (`CUSTOM_AUTH`) challenge** whose Define/Verify Auth
+   Challenge Lambdas validate the token against `sub`.
+4. **Apply entitlement to the soft paywall**: remove the reg/paywall overlay when
+   the token is valid and `entitlement` qualifies; otherwise leave the wall in
+   place (**graceful fallback**). The content itself stays in the page for SEO.
+5. **Enforce lite scope**: content read only; gate profile / private-account
+   pages behind a **step-up to full authentication**; never elevate a
+   `magic_link`-origin session.
+6. Optionally **re-validate `entitlement`** against its own source of truth for
+   anything beyond the cosmetic wall, using `entitlement_asof` to decide when.
 
 This contract is the reason a forwarded newsletter is safe: the token can only
-ever mint a lite content session, and the private profile page is unreachable
-without a real login the forwardee does not have.
+ever mint a lite content session, the private profile page is unreachable
+without a real login the forwardee does not have, and any token failure simply
+degrades to the normal wall.
 
 ---
 
