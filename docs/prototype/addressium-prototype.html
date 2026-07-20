@@ -107,6 +107,7 @@
     font-weight:700;padding:10px 14px;border-bottom:1px solid var(--border)}
   td{padding:12px 14px;border-bottom:1px solid var(--border);vertical-align:middle}
   tbody tr:last-child td{border-bottom:0}
+  tfoot td{border-top:2px solid var(--border-strong);background:var(--surface-2)}
   tbody tr:hover{background:var(--surface-2)}
   .t-strong{font-weight:650}
   .rc{text-align:center;font-size:14px}
@@ -337,6 +338,24 @@
   .fbar i{display:block;height:100%;background:linear-gradient(90deg,var(--accent),color-mix(in srgb,var(--accent) 60%,var(--paid)));border-radius:8px}
   .fbar span{position:absolute;right:11px;top:50%;transform:translateY(-50%);font-size:12px;font-weight:700;color:var(--ink);font-variant-numeric:tabular-nums}
   .apane{display:none}.apane.on{display:flex;flex-direction:column;gap:16px}
+  /* visual builder */
+  .builder{display:grid;grid-template-columns:186px 1fr 224px;gap:14px;min-height:460px}
+  .palette,.inspector{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:13px;display:flex;flex-direction:column;gap:8px}
+  .palette .plab,.inspector .plab{font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-4);font-weight:700;margin-bottom:2px}
+  .blk{border:1px solid var(--border);border-radius:8px;padding:9px 11px;font-size:12.5px;font-weight:600;color:var(--ink-2);cursor:grab;display:flex;align-items:center;gap:9px;background:var(--surface-2)}
+  .blk:hover{border-color:var(--accent);color:var(--accent-ink)}
+  .canvas{background:var(--surface-2);border:1px solid var(--border);border-radius:10px;padding:18px;overflow:auto}
+  .canvasdoc{max-width:520px;margin:0 auto;background:#fff;border-radius:8px;box-shadow:var(--shadow);overflow:hidden;color:#1c2431}
+  :root[data-theme="dark"] .canvasdoc{background:#0f1725;color:#dfe6f1}
+  .cblk{padding:15px 18px;border:1.5px dashed transparent;position:relative;cursor:pointer;font-size:13.5px;line-height:1.6}
+  .cblk:hover{border-color:var(--accent-soft-2)}
+  .cblk.sel{border-color:var(--accent);background:var(--accent-soft)}
+  .cblk .tagname{position:absolute;top:-8px;left:10px;font-size:9.5px;background:var(--accent);color:#fff;padding:1px 6px;border-radius:20px;opacity:0;font-weight:700}
+  .cblk.sel .tagname,.cblk:hover .tagname{opacity:1}
+  .insp-field{display:flex;flex-direction:column;gap:5px}
+  .insp-field label{font-size:11.5px;font-weight:600;color:var(--ink-2)}
+  .insp-field input,.insp-field select{padding:7px 9px;font-size:12.5px}
+  @media(max-width:900px){.builder{grid-template-columns:1fr}}
   @media (prefers-reduced-motion:reduce){*{transition:none!important}}
 </style>
 
@@ -409,6 +428,7 @@
       <div class="navlab">Configure</div>
       <div class="navlink" data-screen="organizations" onclick="nav('organizations')"><span class="ic">◈</span> Organizations</div>
       <div class="navlink" data-screen="roles" onclick="nav('roles')"><span class="ic">⚑</span> Roles &amp; access</div>
+      <div class="navlink" data-screen="usage" onclick="nav('usage')"><span class="ic">◨</span> Usage &amp; cost</div>
       <div class="navlink" data-screen="settings" onclick="nav('settings')"><span class="ic">⚙</span> Settings</div>
       <div class="navlink" data-screen="audit" onclick="nav('audit')"><span class="ic">☷</span> Audit log</div>
       <div style="flex:1"></div>
@@ -633,7 +653,7 @@
         <section class="screen" data-screen="templates">
           <div class="pagehead"><div><h1>Templates</h1><p>Three authoring modes — pick the right one per team. All render through the same responsive pipeline and get the compliance footer + one-click unsubscribe injected automatically.</p></div><button class="btn btn-primary">＋ New template</button></div>
           <div class="kpis" style="grid-template-columns:repeat(3,1fr)">
-            <div class="card cardpad" style="display:flex;flex-direction:column;gap:7px"><div class="row" style="justify-content:space-between"><b style="font-size:14px">Visual builder</b><span class="pill p-good">no code</span></div><p class="muted" style="margin:0;font-size:12.5px">Drag-and-drop blocks (GrapesJS → MJML). For editors &amp; ad reps building polished sends without touching code.</p></div>
+            <div class="card cardpad" style="display:flex;flex-direction:column;gap:7px;cursor:pointer" onclick="nav('builder')" title="Open the visual builder"><div class="row" style="justify-content:space-between"><b style="font-size:14px">Visual builder</b><span class="pill p-good">no code</span></div><p class="muted" style="margin:0;font-size:12.5px">Drag-and-drop blocks (GrapesJS → MJML). For editors &amp; ad reps building polished sends without touching code. <span class="flink" style="color:var(--accent-ink);font-weight:600">Open →</span></p></div>
             <div class="card cardpad" style="display:flex;flex-direction:column;gap:7px"><div class="row" style="justify-content:space-between"><b style="font-size:14px">MJML</b><span class="pill p-accent">developers</span></div><p class="muted" style="margin:0;font-size:12.5px">Responsive markup + merge tags with live preview. Full control over layout.</p></div>
             <div class="card cardpad" style="display:flex;flex-direction:column;gap:7px"><div class="row" style="justify-content:space-between"><b style="font-size:14px">Raw HTML blast</b><span class="pill p-warn">one-off</span></div><p class="muted" style="margin:0;font-size:12.5px">Paste advertiser-supplied HTML as-is. Footer + unsubscribe injected; sanitized for safety.</p></div>
           </div>
@@ -1142,6 +1162,77 @@
           </table></div>
         </section>
 
+        <!-- USAGE & COST -->
+        <section class="screen" data-screen="usage">
+          <div class="pagehead"><div><h1>Usage &amp; cost</h1><p>addressium is free software — this is your <b>AWS</b> spend, attributed per organization for chargeback across publications.</p></div><div class="tabs"><button class="on">This month</button><button>Last 3 mo</button></div></div>
+          <div class="kpis">
+            <div class="kpi card"><span class="lab">Emails sent</span><span class="val num">412,000</span><span class="delta up">▲ 6.2%</span></div>
+            <div class="kpi card"><span class="lab">Est. SES cost</span><span class="val num">$41.20</span><span class="delta">$0.10 / 1k</span></div>
+            <div class="kpi card"><span class="lab">Subscribers</span><span class="val num">254,530</span><span class="delta up">▲ 2.9%</span></div>
+            <div class="kpi card"><span class="lab">Est. AWS total</span><span class="val num">$96.40</span><span class="delta">SES + IP + infra</span></div>
+          </div>
+          <div class="card"><div class="cardhead"><h3>By organization</h3><button class="btn btn-sm">Export CSV</button></div><table>
+            <thead><tr><th>Organization</th><th>Emails (mo)</th><th>SES cost</th><th>Dedicated IP</th><th>Storage</th><th>Est. total</th></tr></thead>
+            <tbody>
+              <tr><td class="t-strong">Summit Daily</td><td class="num">268,400</td><td class="num">$26.84</td><td class="muted">—</td><td class="num">1.2 GB</td><td class="num t-strong">$27.90</td></tr>
+              <tr><td class="t-strong">Vail Daily</td><td class="num">112,900</td><td class="num">$11.29</td><td><span class="pill p-paid"><span class="dot"></span>$24.95/mo</span></td><td class="num">0.6 GB</td><td class="num t-strong">$37.10</td></tr>
+              <tr><td class="t-strong">Aspen Times</td><td class="num">30,700</td><td class="num">$3.07</td><td class="muted">—</td><td class="num">0.3 GB</td><td class="num t-strong">$3.40</td></tr>
+            </tbody>
+            <tfoot><tr><td class="t-strong">Total</td><td class="num t-strong">412,000</td><td class="num t-strong">$41.20</td><td class="num">$24.95</td><td class="num">2.1 GB</td><td class="num t-strong">$96.40</td></tr></tfoot>
+          </table></div>
+          <div class="grid2">
+            <div class="card cardpad"><div class="eyebrow" style="margin-bottom:12px">Emails sent · 30 days</div>
+              <svg width="100%" height="90" viewBox="0 0 400 90" preserveAspectRatio="none"><defs><linearGradient id="ug" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="var(--accent)" stop-opacity=".26"/><stop offset="1" stop-color="var(--accent)" stop-opacity="0"/></linearGradient></defs><path d="M0,70 L40,64 L80,66 L120,52 L160,56 L200,44 L240,48 L280,36 L320,40 L360,28 L400,30 L400,90 L0,90 Z" fill="url(#ug)"/><path d="M0,70 L40,64 L80,66 L120,52 L160,56 L200,44 L240,48 L280,36 L320,40 L360,28 L400,30" fill="none" stroke="var(--accent)" stroke-width="2"/></svg>
+            </div>
+            <div class="card cardpad"><div class="eyebrow" style="margin-bottom:12px">Cost breakdown</div>
+              <div class="health">
+                <div class="hrow"><span style="width:96px;font-size:12.5px;font-weight:600">SES sending</span><span class="hbar"><i style="width:43%;background:var(--accent)"></i></span><span class="hv num">$41.20</span></div>
+                <div class="hrow"><span style="width:96px;font-size:12.5px;font-weight:600">Dedicated IP</span><span class="hbar"><i style="width:26%;background:var(--paid)"></i></span><span class="hv num">$24.95</span></div>
+                <div class="hrow"><span style="width:96px;font-size:12.5px;font-weight:600">DynamoDB</span><span class="hbar"><i style="width:12%;background:var(--good)"></i></span><span class="hv num">$11.80</span></div>
+                <div class="hrow"><span style="width:96px;font-size:12.5px;font-weight:600">Lambda + S3</span><span class="hbar"><i style="width:19%;background:var(--warn)"></i></span><span class="hv num">$18.45</span></div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- VISUAL BUILDER -->
+        <section class="screen" data-screen="builder">
+          <div class="pagehead"><div><h1>Visual builder</h1><p>Drag-and-drop email builder (GrapesJS → MJML). Outputs the same responsive MJML as hand-authored templates; the compliance footer is added on send.</p></div><div class="row"><button class="btn" onclick="nav('templates')">← Templates</button><button class="btn" onclick="openPreview()">◲ Preview</button><button class="btn btn-primary">Save template</button></div></div>
+          <div class="builder">
+            <div class="palette">
+              <div class="plab">Blocks · drag in</div>
+              <div class="blk">▤&nbsp; Heading</div>
+              <div class="blk">¶&nbsp; Text</div>
+              <div class="blk">▭&nbsp; Image</div>
+              <div class="blk">◼&nbsp; Button</div>
+              <div class="blk">▥&nbsp; Columns</div>
+              <div class="blk">—&nbsp; Divider</div>
+              <div class="blk">▱&nbsp; Ad slot</div>
+              <div class="blk">✦&nbsp; Article (feed)</div>
+              <div class="blk">␣&nbsp; Spacer</div>
+            </div>
+            <div class="canvas">
+              <div class="canvasdoc">
+                <div class="cblk" onclick="selBlock(this)" style="background:var(--accent);color:#fff"><span class="tagname">header</span><b>The Morning Ledger</b></div>
+                <div class="cblk sel" onclick="selBlock(this)"><span class="tagname">heading</span><h4 style="font-size:17px;margin:0">Good morning, {{first_name}}</h4></div>
+                <div class="cblk" onclick="selBlock(this)"><span class="tagname">text</span>The one chart that explains the market — and three things to watch before the open.</div>
+                <div class="cblk" onclick="selBlock(this)"><span class="tagname">button</span><span style="display:inline-block;background:var(--accent);color:#fff;padding:9px 16px;border-radius:7px;font-weight:600;font-size:13px">Read today’s lead</span></div>
+                <div class="cblk" onclick="selBlock(this)" style="text-align:center;color:var(--ink-3)"><span class="tagname">ad_top · LiveIntent</span><span class="mono" style="font-size:11px">{{ad_top}} — inserted on send, not tracked</span></div>
+                <div class="cblk" onclick="selBlock(this)" style="font-size:11px;color:var(--ink-3)"><span class="tagname">footer · auto</span>Summit Daily · 40 W Main St, Frisco CO · Unsubscribe</div>
+              </div>
+            </div>
+            <div class="inspector">
+              <div class="plab">Button · settings</div>
+              <div class="insp-field"><label>Label</label><input type="text" value="Read today’s lead"></div>
+              <div class="insp-field"><label>Link</label><select><option>{{editorial_url}}</option><option>Custom URL</option></select></div>
+              <div class="insp-field"><label>Background</label><input type="text" value="#2f56d4"></div>
+              <div class="insp-field"><label>Align</label><select><option>Left</option><option>Center</option><option>Right</option></select></div>
+              <hr class="divider" style="margin:6px 0">
+              <div class="muted" style="font-size:11.5px">Editorial links get each recipient’s magic-link token automatically.</div>
+            </div>
+          </div>
+        </section>
+
         <!-- ROLES & ACCESS -->
         <section class="screen" data-screen="roles">
           <div class="pagehead"><div><h1>Roles &amp; access</h1><p>What each admin role can do. Assign roles per member and scope them to specific organizations.</p></div><button class="btn btn-primary">＋ New role</button></div>
@@ -1354,9 +1445,11 @@
       <div class="field"><label>Primary sending domain</label><input class="mono" type="text" placeholder="steamboatpilot.com"></div>
       <div class="grid2" style="gap:12px">
         <div class="field"><label>Region</label><select><option>us-east-1</option><option>us-west-2</option></select></div>
-        <div class="field"><label>Subscriber pool</label><select><option>Create new pool</option><option>Link existing pool ID</option></select></div>
+        <div class="field"><label>Subscriber pool</label><select><option>Link existing pool (recommended)</option><option>Create a new pool</option></select></div>
       </div>
+      <div class="field"><label>Existing user pool ID</label><input class="mono" type="text" placeholder="us-west-2_XXXXXXXXX"></div>
       <div class="field"><label>Site domain (shared login / paywall)</label><input class="mono" type="text" placeholder="steamboatpilot.com"></div>
+      <div class="note info"><span class="ic">▹</span><div>Most publishers already have a Cognito pool behind their site — link it so magic-link <span class="mono">sub</span> matches your existing users. Pick “create” only if this site has no auth yet.</div></div>
       <hr class="divider">
       <div class="row" style="justify-content:space-between"><div><b style="font-size:13.5px">Dedicated IP pool</b><div class="muted" style="font-size:12px">Isolate this org’s sending reputation (added cost). Off = shared account IPs.</div></div><div class="toggle" onclick="this.classList.toggle('on')"><i></i></div></div>
       <div class="field"><label>Suppression scope</label><select><option>Hybrid — bounces/complaints global, unsubscribes per-org</option><option>Global shared list</option><option>Per-organization</option></select></div>
@@ -1389,7 +1482,7 @@
   function go(world,screen){setWorld(world);if(screen)nav(screen);}
 
   // admin nav
-  var crumbNames={dashboard:'Dashboard',analytics:'Analytics',newsletters:'Newsletters',subscribers:'Subscribers','subscriber-detail':'Subscriber',segments:'Segments',campaigns:'Campaigns',compose:'New campaign',templates:'Templates',automations:'Automations',feeds:'Feeds',tags:'Merge tags',adtags:'Ad tags',identity:'Identity & pools',data:'Data & exports',apikeys:'API & webhooks',suppression:'Suppression',organizations:'Organizations',roles:'Roles & access',audit:'Audit log',settings:'Settings'};
+  var crumbNames={dashboard:'Dashboard',analytics:'Analytics',newsletters:'Newsletters',subscribers:'Subscribers','subscriber-detail':'Subscriber',segments:'Segments',campaigns:'Campaigns',compose:'New campaign',templates:'Templates',automations:'Automations',feeds:'Feeds',tags:'Merge tags',adtags:'Ad tags',identity:'Identity & pools',data:'Data & exports',apikeys:'API & webhooks',suppression:'Suppression',organizations:'Organizations',roles:'Roles & access',usage:'Usage & cost',builder:'Visual builder',audit:'Audit log',settings:'Settings'};
   function nav(screen){
     document.querySelectorAll('#frame-admin .screen').forEach(function(s){s.classList.toggle('on',s.dataset.screen===screen)});
     document.querySelectorAll('#frame-admin .navlink').forEach(function(n){n.classList.toggle('on',n.dataset.screen===screen)});
@@ -1460,6 +1553,12 @@
       var b=item.querySelector('button');if(b)rowUnsub(b);
     });
     var s=document.getElementById('supState');if(s)s.innerHTML='<span class="pill p-crit"><span class="dot"></span>Suppressed · all lists</span>';
+  }
+
+  // visual builder — select a block
+  function selBlock(el){
+    document.querySelectorAll('#frame-admin .cblk').forEach(function(b){b.classList.remove('sel')});
+    el.classList.add('sel');
   }
 
   // sandbox / test mode

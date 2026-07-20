@@ -10,15 +10,18 @@
  * code paths, event sources, IAM) still needs to be filled in. Run
  * `npm install` before `cdk synth`.
  */
-import { Stack, type StackProps, RemovalPolicy, Duration } from "aws-cdk-lib";
+import { Stack, type StackProps, RemovalPolicy, Duration, CfnOutput } from "aws-cdk-lib";
 import type { Construct } from "constructs";
 import { AttributeType, BillingMode, Table } from "aws-cdk-lib/aws-dynamodb";
 import { Bucket, BlockPublicAccess } from "aws-cdk-lib/aws-s3";
 import { Queue } from "aws-cdk-lib/aws-sqs";
-import { UserPool } from "aws-cdk-lib/aws-cognito";
+import { Mfa, UserPool, UserPoolClient, CfnUserPoolUser } from "aws-cdk-lib/aws-cognito";
 
 export interface ControlPlaneStackProps extends StackProps {
   stage: string;
+  /** Seeded at deploy time so someone can sign in without manual pool setup. */
+  adminEmails: string[];
+  adminHostedUiDomainPrefix: string;
 }
 
 export class ControlPlaneStack extends Stack {
@@ -54,9 +57,38 @@ export class ControlPlaneStack extends Stack {
     });
 
     // Staff pool — SEPARATE from the per-org subscriber pools (§4.11, §4.12).
+    // Created here (control plane), NOT by hand: this is what makes first login
+    // possible. selfSignUp is off — admins are invited, seeded below.
     const adminPool = new UserPool(this, "AdminPool", {
       selfSignUpEnabled: false,
-      mfa: undefined, // TODO: require TOTP MFA
+      mfa: Mfa.REQUIRED,
+      mfaSecondFactor: { otp: true, sms: false },
+      signInAliases: { email: true },
+      removalPolicy: props.stage === "prod" ? RemovalPolicy.RETAIN : RemovalPolicy.DESTROY,
+    });
+
+    // Hosted UI domain + client for the admin console (Authorization Code + PKCE).
+    adminPool.addDomain("AdminHostedUi", {
+      cognitoDomain: { domainPrefix: `${props.adminHostedUiDomainPrefix}-${props.stage}` },
+    });
+    const adminClient = new UserPoolClient(this, "AdminClient", {
+      userPool: adminPool,
+      generateSecret: false,
+      authFlows: { userSrp: true },
+    });
+
+    // Seed the first admin user(s) from config so someone can actually sign in.
+    // Cognito emails each a temporary-password invite on create.
+    props.adminEmails.forEach((email, i) => {
+      new CfnUserPoolUser(this, `AdminSeed${i}`, {
+        userPoolId: adminPool.userPoolId,
+        username: email,
+        desiredDeliveryMediums: ["EMAIL"],
+        userAttributes: [
+          { name: "email", value: email },
+          { name: "email_verified", value: "true" },
+        ],
+      });
     });
 
     // TODO: API Gateway HTTP API + Lambda handlers (services/*), SES config
@@ -66,6 +98,8 @@ export class ControlPlaneStack extends Stack {
     void archiveBucket;
     void analyticsBucket;
     void sendQueue;
-    void adminPool;
+
+    new CfnOutput(this, "AdminPoolId", { value: adminPool.userPoolId });
+    new CfnOutput(this, "AdminClientId", { value: adminClient.userPoolClientId });
   }
 }

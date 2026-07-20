@@ -423,11 +423,17 @@ Daily), each an isolated silo, all operated by the same owner.
   Per-org **configuration sets** isolate metrics/events; an optional **per-org
   dedicated IP pool** isolates reputation (opt-in, added cost). Bounces/complaints
   additionally feed the shared account-protection path (§4.13).
-- **"Add organization" provisions a silo**, not just a row: it creates the
-  subscriber pool, KMS signing key, SES domain identity (DKIM/SPF/DMARC), JWKS
-  endpoint and config set — driven by the admin API via the AWS SDK (or a per-org
-  CDK stack). A per-org **setup checklist** tracks verification state; this is
-  what a fresh install walks through per org.
+- **"Add organization" provisions a silo**, not just a row: it always creates
+  the org's **KMS signing key, SES domain identity (DKIM/SPF/DMARC), JWKS
+  endpoint and config set** — driven by the admin API via the AWS SDK (or a
+  per-org CDK stack). A per-org **setup checklist** tracks verification state.
+- **Subscriber pool — link by default, create optionally.** The subscriber pool
+  is **shared with the org's main website**, so most operators already have one
+  (behind their site's paywall/login). The default is to **associate an existing
+  pool** by ID — this is what makes the magic-link `sub` match the site's
+  existing users. Creating a fresh pool is offered only for **greenfield** sites
+  with no auth yet (the operator then points their site at it). addressium
+  references a linked pool; it does not need to own it.
 
 ### 4.12 Roles & access (RBAC)
 
@@ -721,6 +727,30 @@ link can ever grant, not from assuming it stays private:
   always-on compute or DB). Dominant cost is SES (~$0.10 / 1,000 emails) plus
   egress. The optional OpenSearch mirror is the only component that adds a
   standing cost, and it is opt-in.
+
+### 9.1 Bootstrapping the admin pool & first login
+
+The console is authenticated by the **admin Cognito pool**, which creates a
+chicken-and-egg: you need to sign in to manage the system, but nobody exists to
+sign in until something creates the pool and a first user. addressium resolves
+this at deploy time, so no manual pool setup is ever required:
+
+- **The admin pool is control-plane infrastructure** created by `cdk deploy` —
+  not something the operator builds by hand and pastes in. It is singular and
+  shared across all organizations (§4.12).
+- **The first admin user is seeded from config.** The operator copies
+  `addressium.config.example.json` → `addressium.config.json` and lists one or
+  more `adminEmails`. The deploy creates those users in the pool; Cognito emails
+  each a **temporary-password invite**. They sign in, set a password + MFA, and
+  from there **invite the rest of the team through the console**.
+- **Only bootstrap values live in config** (admin email(s), stage, region,
+  hosted-UI prefix). Everything else is managed in-app afterward.
+
+This is deliberately different from the **per-org subscriber pools**, which are
+**not** in the bootstrap config: each is either **created** or **linked to an
+existing pool** (the one shared with that org's main website) during "Add
+organization" (§4.11). The admin pool is created once; subscriber pools come and
+go with organizations.
 
 ### Proposed repository layout
 
