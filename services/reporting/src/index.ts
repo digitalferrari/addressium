@@ -7,7 +7,7 @@
  * tier wired in infra; this endpoint is the low-latency dashboard read.
  */
 import { DynamoStores } from "@addressium/adapters-aws";
-import { buildCampaignReport } from "@addressium/domain";
+import { buildAbReport, buildCampaignReport } from "@addressium/domain";
 
 function env(name: string): string {
   const v = process.env[name];
@@ -30,10 +30,16 @@ export async function handler(event: ReportEvent) {
   if (!orgId || !campaignId) {
     return { statusCode: 400, headers: {}, body: JSON.stringify({ error: "org and campaign required" }) };
   }
-  const report = await buildCampaignReport(stores(), orgId, campaignId);
+  const s = stores();
+  const report = await buildCampaignReport(s, orgId, campaignId);
+  // If this campaign ran an A/B subject test, attach the per-variant scores.
+  const campaign = await s.campaigns.get(orgId, campaignId);
+  const abResults = campaign?.abTest
+    ? await buildAbReport(s, campaignId, orgId, campaign.abTest)
+    : undefined;
   return {
     statusCode: 200,
     headers: { "content-type": "application/json", "cache-control": "private, max-age=15" },
-    body: JSON.stringify(report),
+    body: JSON.stringify({ ...report, abResults }),
   };
 }
