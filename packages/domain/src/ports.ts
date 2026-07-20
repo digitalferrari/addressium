@@ -183,6 +183,17 @@ export interface ConfirmationTokenSigner {
   verify(token: string): ConfirmClaims;
 }
 
+/**
+ * Provisions a subscriber Cognito account in the org's pool (opt-in, #62). This
+ * is the one place addressium may WRITE to the pool, and only when explicitly
+ * enabled — a port so it's injectable and the default (no-op) path never touches
+ * Cognito.
+ */
+export interface SubscriberAccountProvisioner {
+  /** Ensure a user exists for `email` in `poolId`; return its Cognito `sub`. Idempotent. */
+  ensureAccount(poolId: string, email: string): Promise<{ externalId: string }>;
+}
+
 /** Mints the per-recipient magic-link JWT for editorial links (§4.9). */
 export interface MagicLinkSigner {
   /** Returns a signed ES256 JWT for the given subscriber. */
