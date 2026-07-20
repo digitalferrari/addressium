@@ -1,2 +1,2 @@
-# sespool
+# Addressium
 AWS Pinpoint Replacement
