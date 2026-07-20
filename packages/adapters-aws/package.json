@@ -1,17 +1,22 @@
 {
-  "name": "@addressium/svc-sender",
+  "name": "@addressium/adapters-aws",
   "version": "0.1.0",
   "private": true,
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "exports": {
+    ".": "./dist/index.js"
+  },
   "scripts": {
     "build": "tsc --build"
   },
   "dependencies": {
     "@addressium/core": "0.1.0",
-    "@addressium/rbac": "0.1.0",
     "@addressium/domain": "0.1.0",
-    "@addressium/adapters-aws": "0.1.0"
+    "@aws-sdk/client-dynamodb": "^3.600.0",
+    "@aws-sdk/lib-dynamodb": "^3.600.0",
+    "@aws-sdk/client-sesv2": "^3.600.0",
+    "@aws-sdk/client-kms": "^3.600.0"
   }
 }

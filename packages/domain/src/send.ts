@@ -71,6 +71,7 @@ export async function sendCampaign(
     const html = renderForRecipient(input.template, subscriber.attributes, token);
 
     await sender.send({
+      from: list.fromAddress,
       to: subscriber.email,
       subject: input.subject,
       html,

@@ -5,3 +5,6 @@ export * from "./render.js";
 export * from "./signup.js";
 export * from "./send.js";
 export * from "./events.js";
+export * from "./entitlement.js";
+export * from "./webhooks.js";
+export * from "./jws.js";

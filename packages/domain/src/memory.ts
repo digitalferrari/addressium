@@ -5,6 +5,7 @@
 import type {
   EmailArchive,
   EngagementEvent,
+  EntitlementSync,
   List,
   Subscriber,
   Subscription,
@@ -13,6 +14,7 @@ import type {
 import type {
   ArchiveStore,
   EmailSender,
+  EntitlementStore,
   EventStore,
   ListStore,
   SentMessage,
@@ -96,6 +98,16 @@ export class MemEvents implements EventStore {
   }
 }
 
+export class MemEntitlements implements EntitlementStore {
+  private map = new Map<string, EntitlementSync>();
+  async put(e: EntitlementSync) {
+    this.map.set(subKey(e.orgId, e.subscriberId), e);
+  }
+  async latest(orgId: string, subscriberId: string) {
+    return this.map.get(subKey(orgId, subscriberId));
+  }
+}
+
 /** Captures "sent" mail so tests can inspect exactly what would go out. */
 export class CaptureSender implements EmailSender {
   public sent: SentMessage[] = [];
@@ -112,5 +124,6 @@ export function memStores(): Stores {
     suppression: new MemSuppression(),
     archive: new MemArchive(),
     events: new MemEvents(),
+    entitlements: new MemEntitlements(),
   };
 }

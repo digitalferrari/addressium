@@ -7,6 +7,7 @@
 import type {
   EmailArchive,
   EngagementEvent,
+  EntitlementSync,
   List,
   Subscriber,
   Subscription,
@@ -46,8 +47,14 @@ export interface EventStore {
   all(orgId: string, campaignId: string): Promise<EngagementEvent[]>;
 }
 
+export interface EntitlementStore {
+  put(e: EntitlementSync): Promise<void>;
+  latest(orgId: string, subscriberId: string): Promise<EntitlementSync | undefined>;
+}
+
 /** What actually puts mail on the wire (SES in prod; capture in tests). */
 export interface SentMessage {
+  from: string;
   to: string;
   subject: string;
   html: string;
@@ -86,4 +93,5 @@ export interface Stores {
   suppression: SuppressionStore;
   archive: ArchiveStore;
   events: EventStore;
+  entitlements: EntitlementStore;
 }

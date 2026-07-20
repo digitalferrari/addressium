@@ -1,16 +1,27 @@
 /**
- * addressium service: sender
- * SQS consumers -> SES SendBulkEmail (token-bucket throttled), archive/link-map, ad-tag injection
+ * addressium service: sender — drives a campaign send over SES.
  *
- * See docs/ARCHITECTURE.md. This is a scaffold stub — the handler shape is in
- * place so infra can wire it; business logic is TODO.
+ * Builds DynamoDB stores + the SES sender + the KMS magic-link signer from env
+ * (once per cold start), then calls the pure sendCampaign() domain function.
+ * See docs/ARCHITECTURE.md §4.4.
  */
+import { depsFromEnv, type Deps } from "@addressium/adapters-aws";
+import { sendCampaign, type EmailTemplate } from "@addressium/domain";
 
-export interface HandlerEvent {
-  [key: string]: unknown;
+export interface SendEvent {
+  orgId: string;
+  campaignId: string;
+  listId: string;
+  subject: string;
+  template: EmailTemplate;
 }
 
-export async function handler(event: HandlerEvent): Promise<unknown> {
-  // TODO: implement — SQS consumers -> SES SendBulkEmail (token-bucket throttled), archive/link-map, ad-tag injection
-  return { ok: true, service: "sender", received: event };
+let _deps: Deps | undefined;
+const deps = () => (_deps ??= depsFromEnv());
+
+export async function handler(event: SendEvent) {
+  const d = deps();
+  // TODO: load subject/template from the campaign/series record instead of the
+  // event once the campaign store lands; token-bucket throttle across batches.
+  return sendCampaign(d.stores, d.sender, d.magic, d.clock, event);
 }
