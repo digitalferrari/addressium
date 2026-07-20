@@ -7,9 +7,10 @@ all serverless, at near-zero idle cost.
 
 ![addressium admin console](docs/images/screenshot.png)
 
-> **Live demo:** try the click-through UI at **<https://addressium.com/demo>**
-> (or open [`demo/index.html`](demo/index.html) locally). It's a static, no-backend
-> prototype with sample data.
+> **Live demo:** try the click-through UI at
+> **<https://digitalferrari.github.io/addressium/>** (or open
+> [`demo/index.html`](demo/index.html) locally). It's a static, no-backend
+> prototype with sample data, published straight from this repo via GitHub Pages.
 
 Pinpoint is being retired. addressium gives teams a path to keep running email
 lists on their own infrastructure: **you own the subscriber data** (DynamoDB in
@@ -50,7 +51,8 @@ owner's AWS account.
   mapping, and the hardened magic-link reference verifier.
 - [Security Policy](SECURITY.md) — how to report a vulnerability.
 - [Live demo / UI prototype](demo/index.html) — the admin console + subscriber
-  site design reference (hosted at <https://addressium.com/demo>).
+  site design reference (hosted via GitHub Pages at
+  <https://digitalferrari.github.io/addressium/>).
 
 ## Security
 

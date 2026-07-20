@@ -8,14 +8,14 @@ number and row is illustrative sample data for a fictional publisher
 ## Viewing it
 
 Open `demo/index.html` in any browser, or host it. It is a single file with all
-CSS/JS inlined, so it can be dropped onto any static host as-is:
+CSS/JS inlined, so it can be dropped onto any static host as-is.
 
-```
-addressium.com/demo  →  demo/index.html
-```
+It is published straight from this repo via **GitHub Pages** at
+**<https://digitalferrari.github.io/addressium/>** by
+[`.github/workflows/pages.yml`](../.github/workflows/pages.yml), which uploads
+this folder as the Pages site on every push to `main`.
 
-This is the copy intended to be published at **<https://addressium.com/demo>**
-and linked from the project README.
+One-time repo setup: **Settings → Pages → Source: "GitHub Actions"**.
 
 > It is a **design reference / prototype**, not the running application. The real
 > app is the React SPAs under `apps/` talking to the Lambda API in `services/`.
