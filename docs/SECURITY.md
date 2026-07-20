@@ -143,7 +143,7 @@ vector.
 - Signing keys **never leave KMS** (asymmetric). Application secrets live in
   **Secrets Manager / SSM**, never in the repo (`addressium.config.json` is
   gitignored).
-- **Verify inbound webhook signatures** (e.g. Stripe entitlement sync) and
+- **Verify inbound webhook signatures** (e.g. billing entitlement sync) and
   **HMAC-sign outbound** webhooks; always **timing-safe** comparison.
 - Scheduled key/secret rotation with a JWKS overlap window.
 

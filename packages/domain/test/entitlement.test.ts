@@ -79,7 +79,7 @@ test("entitlement sync flips a subscriber to paid and the token then says paid",
     orgId: ORG,
     subscriberEmail: "jordan@example.com",
     entitlement: "paid",
-    source: "stripe",
+    source: "billing",
     version: "evt_1",
   });
   assert.equal(updated.entitlement, "paid");
