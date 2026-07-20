@@ -1,9 +1,12 @@
 # @addressium/subscriber-web
 
-Subscriber signup + Cognito login + preference center (shared pool)
+Subscriber-facing site (React + Vite SPA): newsletter directory (themed by the
+org's **branding** #31, honoring per-list **presentation toggles** #33), double
+opt-in confirm landing, and one-click unsubscribe. Branding is applied as CSS
+variables at load. Builds to the public S3 + CloudFront distribution.
 
-Scaffold placeholder. Intended stack: React + Vite, built to static assets and
-served from S3 + CloudFront (see docs/ARCHITECTURE.md §4.1–4.2, §4.10).
-
-The clickable design reference for these screens lives at
-`docs/prototype/addressium-prototype.html`.
+## Dev
+```
+npm run dev -w apps/subscriber-web
+```
+Config: `VITE_API_BASE`, `VITE_ORG_ID` (and `VITE_COGNITO_*` for subscriber login).

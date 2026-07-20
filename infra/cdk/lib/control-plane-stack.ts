@@ -342,6 +342,78 @@ export class ControlPlaneStack extends Stack {
       integration: new HttpLambdaIntegration("EntitlementInt", entitlementFn),
     });
 
+    // ---- admin CRUD + branding + presentation + AI config (§4.1, #18/#31/#32/#33) ----
+    // Each handler is a small Lambda; admin routes sit behind the JWT authorizer,
+    // then the handler enforces role + org scope from the claims.
+    const adminRoute = (id: string, handler: string, method: HttpMethod, path: string, env = apiEnv) => {
+      const f = fn(id, apiEntry, handler, env);
+      table.grantReadWriteData(f);
+      api.addRoutes({
+        path,
+        methods: [method],
+        integration: new HttpLambdaIntegration(`${id}Int`, f),
+        authorizer: adminAuth,
+      });
+      return f;
+    };
+    adminRoute("ListsGetFn", "listsHandler", HttpMethod.GET, "/orgs/{org}/lists");
+    adminRoute("ListsPostFn", "listsHandler", HttpMethod.POST, "/lists");
+    adminRoute("ListVisFn", "listVisibilityHandler", HttpMethod.POST, "/lists/visibility");
+    adminRoute("CampaignsGetFn", "campaignsHandler", HttpMethod.GET, "/orgs/{org}/campaigns/{id}");
+    adminRoute("CampaignsPostFn", "campaignsHandler", HttpMethod.POST, "/campaigns");
+    adminRoute("SegmentsGetFn", "segmentsHandler", HttpMethod.GET, "/orgs/{org}/segments");
+    adminRoute("SegmentsPostFn", "segmentsHandler", HttpMethod.POST, "/segments");
+    adminRoute("SuppressFn", "subscriberSuppressHandler", HttpMethod.POST, "/subscribers/suppress");
+    adminRoute("SubUnsubFn", "subscriberUnsubscribeHandler", HttpMethod.POST, "/subscribers/unsubscribe");
+    adminRoute("BrandingPostFn", "brandingHandler", HttpMethod.POST, "/orgs/branding");
+    adminRoute("PresentationFn", "listPresentationHandler", HttpMethod.POST, "/lists/presentation");
+    // AI config writes the API key to Secrets Manager (create/put).
+    const aiConfigFn = adminRoute("AiConfigFn", "aiConfigHandler", HttpMethod.POST, "/orgs/ai-config");
+    aiConfigFn.addToRolePolicy(
+      new PolicyStatement({
+        actions: ["secretsmanager:CreateSecret", "secretsmanager:PutSecretValue"],
+        resources: ["*"],
+      }),
+    );
+
+    // Public (no auth): branding + list view the subscriber site reads.
+    const publicBrandingFn = fn("PublicBrandingFn", apiEntry, "brandingHandler", apiEnv);
+    table.grantReadData(publicBrandingFn);
+    api.addRoutes({
+      path: "/orgs/{org}/branding",
+      methods: [HttpMethod.GET],
+      integration: new HttpLambdaIntegration("PublicBrandingInt", publicBrandingFn),
+    });
+    const publicListFn = fn("PublicListFn", apiEntry, "publicListHandler", apiEnv);
+    table.grantReadData(publicListFn);
+    api.addRoutes({
+      path: "/orgs/{org}/lists/{list}/public",
+      methods: [HttpMethod.GET],
+      integration: new HttpLambdaIntegration("PublicListInt", publicListFn),
+    });
+
+    // ---- reporting (report, usage, AI analysis) — §4.8, #13/#26/#32 ----
+    const reportingEntry = svc("services/reporting/src/index.ts");
+    const reportFn = fn("ReportFn", reportingEntry, "handler", apiEnv);
+    table.grantReadData(reportFn);
+    api.addRoutes({
+      path: "/orgs/{org}/campaigns/{campaign}/report",
+      methods: [HttpMethod.GET],
+      integration: new HttpLambdaIntegration("ReportInt", reportFn),
+      authorizer: adminAuth,
+    });
+    const analyzeFn = fn("AnalyzeFn", reportingEntry, "analyzeHandler", apiEnv);
+    table.grantReadData(analyzeFn);
+    analyzeFn.addToRolePolicy(
+      new PolicyStatement({ actions: ["secretsmanager:GetSecretValue"], resources: ["*"] }),
+    );
+    api.addRoutes({
+      path: "/reports/analyze",
+      methods: [HttpMethod.POST],
+      integration: new HttpLambdaIntegration("AnalyzeInt", analyzeFn),
+      authorizer: adminAuth,
+    });
+
     senderFn.addEventSource(new SqsEventSource(sendQueue));
     sesEvents.addSubscription(new LambdaSubscription(eventsFn));
 

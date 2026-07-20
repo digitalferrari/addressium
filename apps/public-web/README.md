@@ -1,9 +1,12 @@
 # @addressium/public-web
 
-Embeddable signup snippet + hosted signup / confirm / unsubscribe pages
+Public signup: a hosted signup page **and** an embeddable widget (`embed.js`)
+operators drop into their own site with a copy-paste snippet. Both post double
+opt-in signups to the API. Builds to the public S3 + CloudFront distribution.
 
-Scaffold placeholder. Intended stack: React + Vite, built to static assets and
-served from S3 + CloudFront (see docs/ARCHITECTURE.md §4.1–4.2, §4.10).
-
-The clickable design reference for these screens lives at
-`docs/prototype/addressium-prototype.html`.
+## Dev
+```
+npm run dev -w apps/public-web
+```
+Config: `VITE_API_BASE`, `VITE_ORG_ID`. The embed snippet is shown in the app's
+"Embed" tab; `public/embed.js` is the self-contained widget.
