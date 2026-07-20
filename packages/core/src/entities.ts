@@ -85,7 +85,20 @@ export interface Organization {
   aiConfig?: AiConfig;
   /** Subscriber-site branding/theme (§4.10, #31). */
   branding?: Branding;
+  /** Public-signup bot protection + optional post-verify account provisioning (#62). */
+  signupProtection?: SignupProtection;
   setupComplete: boolean;
+}
+
+export interface SignupProtection {
+  /** reCAPTCHA secret ARN for server-side verification. The site key lives in the embed snippet. */
+  recaptchaSecretArn?: string;
+  /**
+   * When true, provision a subscriber Cognito account in the org's pool AFTER the
+   * subscriber clicks their double opt-in link. Off by default — addressium
+   * normally never writes to your user pool; this is an explicit opt-in.
+   */
+  createAccountsOnConfirm?: boolean;
 }
 
 export type AiVendor = "anthropic" | "openai" | "gemini";

@@ -183,7 +183,17 @@ export class ControlPlaneStack extends Stack {
     signupBatchFn.addToRolePolicy(
       new PolicyStatement({ actions: ["ses:SendEmail"], resources: ["*"] }),
     );
+    // The embed widget's reCAPTCHA secret is org-configured at runtime (#62).
+    signupBatchFn.addToRolePolicy(
+      new PolicyStatement({ actions: ["secretsmanager:GetSecretValue"], resources: ["*"] }),
+    );
     const confirmFn = fn("ConfirmFn", apiEntry, "confirmHandler", apiEnv);
+    // Opt-in post-verify subscriber-account provisioning (#62). Per-org pools are
+    // created at runtime, so we can't enumerate ARNs; the handler only calls this
+    // when the org explicitly enables createAccountsOnConfirm.
+    confirmFn.addToRolePolicy(
+      new PolicyStatement({ actions: ["cognito-idp:AdminCreateUser", "cognito-idp:AdminGetUser"], resources: ["*"] }),
+    );
     const unsubscribeFn = fn("UnsubscribeFn", apiEntry, "unsubscribeHandler", apiEnv);
     const entitlementFn = fn("EntitlementFn", apiEntry, "entitlementSyncHandler", apiEnv);
     const identityFn = fn("IdentityFn", apiEntry, "identitySyncHandler", apiEnv);

@@ -6,8 +6,10 @@
  * lives here. See docs/ARCHITECTURE.md §4.2–4.3, §4.12.
  */
 import {
+  CognitoSubscriberAccounts,
   DynamoStores,
   EventBridgeScheduler,
+  GoogleRecaptchaVerifier,
   SesEmailSender,
   getSecret,
   upsertSecret,
@@ -22,6 +24,8 @@ import {
   buildBatchConfirmationEmail,
   confirmOptInAny,
   effectiveOneOffTime,
+  isHoneypotTripped,
+  provisionSubscriberAccount,
   manualSuppress,
   publicListView,
   setAiConfig,
@@ -129,8 +133,23 @@ export async function signupHandler(event: HttpEvent): Promise<HttpResult> {
  */
 export async function signupBatchHandler(event: HttpEvent): Promise<HttpResult> {
   try {
-    const input = JSON.parse(event.body ?? "{}") as unknown;
-    const res = await signupMany(stores(), await confirmSigner(), clock, input);
+    const raw = JSON.parse(event.body ?? "{}") as Record<string, unknown>;
+
+    // Honeypot: a filled hidden field means bot. Accept silently so scrapers
+    // can't distinguish success from rejection — but do nothing.
+    if (isHoneypotTripped(raw)) return json(202, { status: "pending", lists: [] });
+
+    // reCAPTCHA: verify only if this org configured a secret (opt-in).
+    const orgId = typeof raw.orgId === "string" ? raw.orgId : "";
+    const org = orgId ? await stores().organizations.get(orgId) : undefined;
+    const secretArn = org?.signupProtection?.recaptchaSecretArn;
+    if (secretArn) {
+      const verifier = new GoogleRecaptchaVerifier(await getSecret(secretArn));
+      const ok = await verifier.verify(typeof raw.recaptchaToken === "string" ? raw.recaptchaToken : "");
+      if (!ok) return json(400, { error: "captcha verification failed" });
+    }
+
+    const res = await signupMany(stores(), await confirmSigner(), clock, raw);
     if (res.lists.length > 0) {
       const org = await stores().organizations.get(res.subscriber.orgId);
       const confirmUrl = `${env("CONFIRM_URL_BASE")}?token=${encodeURIComponent(res.confirmationToken)}`;
@@ -148,7 +167,29 @@ export async function confirmHandler(event: HttpEvent): Promise<HttpResult> {
   try {
     const token = event.queryStringParameters?.token ?? "";
     const subs = await confirmOptInAny(stores(), await confirmSigner(), clock, token);
-    return json(200, { status: subs[0]?.status ?? "confirmed", confirmed: subs.length });
+
+    // Opt-in (#62): after the double opt-in is verified, provision a subscriber
+    // Cognito account IF this org enabled it. Off by default — addressium
+    // normally never writes to your pool. Best-effort: a provisioning hiccup
+    // must not fail the confirmation the subscriber just completed.
+    const first = subs[0];
+    if (first) {
+      const org = await stores().organizations.get(first.orgId);
+      if (org?.signupProtection?.createAccountsOnConfirm && org.subscriberPoolId) {
+        try {
+          await provisionSubscriberAccount(
+            stores(),
+            new CognitoSubscriberAccounts(),
+            first.orgId,
+            org.subscriberPoolId,
+            first.subscriberId,
+          );
+        } catch {
+          // swallow — confirmation already succeeded; account sync can be retried
+        }
+      }
+    }
+    return json(200, { status: first?.status ?? "confirmed", confirmed: subs.length });
   } catch (e) {
     return fail(e);
   }

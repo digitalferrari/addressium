@@ -16,7 +16,7 @@
 import { schemas } from "@addressium/core";
 import type { Subscriber } from "@addressium/core";
 import { randomUUID } from "node:crypto";
-import type { Clock, Stores } from "./ports.js";
+import type { Clock, Stores, SubscriberAccountProvisioner } from "./ports.js";
 import { eraseSubscriber } from "./privacy.js";
 
 export type IdentityAction = "created" | "linked" | "updated" | "deleted" | "noop";
@@ -75,4 +75,25 @@ export async function applyIdentitySync(
 
   await stores.subscribers.put(next);
   return { action, subscriberId: next.sub, email };
+}
+
+/**
+ * Provision a subscriber Cognito account (opt-in, #62) AFTER double opt-in, and
+ * stamp the returned Cognito `sub` as the subscriber's externalId so the two
+ * systems are linked. No-op if the subscriber is unknown or already linked.
+ */
+export async function provisionSubscriberAccount(
+  stores: Stores,
+  provisioner: SubscriberAccountProvisioner,
+  orgId: string,
+  poolId: string,
+  subscriberId: string,
+): Promise<Subscriber | undefined> {
+  const subscriber = await stores.subscribers.get(orgId, subscriberId);
+  if (!subscriber) return undefined;
+  if (subscriber.externalId) return subscriber; // already linked to the pool
+  const { externalId } = await provisioner.ensureAccount(poolId, subscriber.email);
+  const updated: Subscriber = { ...subscriber, externalId };
+  await stores.subscribers.put(updated);
+  return updated;
 }
