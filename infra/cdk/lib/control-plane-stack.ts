@@ -18,7 +18,7 @@ import { dirname, resolve } from "node:path";
 import { Stack, type StackProps, RemovalPolicy, Duration, CfnOutput } from "aws-cdk-lib";
 import type { Construct } from "constructs";
 import { AttributeType, BillingMode, Table } from "aws-cdk-lib/aws-dynamodb";
-import { Bucket, BlockPublicAccess } from "aws-cdk-lib/aws-s3";
+import { Bucket, BlockPublicAccess, ObjectLockRetention } from "aws-cdk-lib/aws-s3";
 import { Queue } from "aws-cdk-lib/aws-sqs";
 import { Mfa, UserPool, UserPoolClient, CfnUserPoolUser } from "aws-cdk-lib/aws-cognito";
 import { Runtime } from "aws-cdk-lib/aws-lambda";
@@ -89,6 +89,21 @@ export class ControlPlaneStack extends Stack {
       blockPublicAccess: BlockPublicAccess.BLOCK_ALL,
       enforceSSL: true,
     });
+    // Audit log backed by S3 Object Lock (WORM) — history can't be rewritten
+    // even by an admin (§4.19, docs/SECURITY.md §4.3, #29). COMPLIANCE mode +
+    // a default retention makes every written object immutable for the window.
+    const auditRetentionYears = Number(
+      (this.node.tryGetContext("auditRetentionYears") as string | undefined) ?? 7,
+    );
+    const auditBucket = new Bucket(this, "AuditBucket", {
+      blockPublicAccess: BlockPublicAccess.BLOCK_ALL,
+      enforceSSL: true,
+      objectLockEnabled: true,
+      objectLockDefaultRetention: ObjectLockRetention.compliance(
+        Duration.days(365 * auditRetentionYears),
+      ),
+      removalPolicy: RemovalPolicy.RETAIN,
+    });
     const sendQueue = new Queue(this, "SendQueue", { visibilityTimeout: Duration.minutes(5) });
     const sesEvents = new Topic(this, "SesEventsTopic");
 
@@ -140,6 +155,7 @@ export class ControlPlaneStack extends Stack {
     const apiEnv = {
       CONFIRM_SECRET_ARN: confirmSecret.secretArn,
       WEBHOOK_SECRET_ARN: webhookSecret.secretArn,
+      AUDIT_BUCKET: auditBucket.bucketName, // WORM audit sink (#29)
     };
     const signupFn = fn("SignupFn", apiEntry, "signupHandler", {
       ...apiEnv,
@@ -252,6 +268,9 @@ export class ControlPlaneStack extends Stack {
     scheduleFn.addToRolePolicy(
       new PolicyStatement({ actions: ["iam:PassRole"], resources: [schedulerRole.roleArn] }),
     );
+    // Admin actions append to the WORM audit log (put-only; Object Lock blocks
+    // overwrite/delete). grantPut avoids handing out s3:DeleteObject.
+    for (const f of [scheduleFn, cancelFn]) auditBucket.grantPut(f);
 
     // ---- permissions ----
     for (const f of [
@@ -350,6 +369,7 @@ export class ControlPlaneStack extends Stack {
     new CfnOutput(this, "AdminSiteBucket", { value: adminSite.bucket.bucketName });
     new CfnOutput(this, "PublicSiteUrl", { value: publicSite.distribution.domainName });
     new CfnOutput(this, "PublicSiteBucket", { value: publicSite.bucket.bucketName });
+    new CfnOutput(this, "AuditBucketName", { value: auditBucket.bucketName });
     void analyticsBucket;
   }
 }

@@ -12,6 +12,7 @@ export { getSecret } from "./secrets.js";
 export { KmsJwksProvider, spkiDerToJwk, type Jwk } from "./jwks.js";
 export { SnsAlertPublisher } from "./sns.js";
 export { AwsProvisioningProviders } from "./provisioning.js";
+export { S3AuditLog } from "./s3audit.js";
 
 import { DynamoStores } from "./dynamo.js";
 import { SesEmailSender } from "./ses.js";

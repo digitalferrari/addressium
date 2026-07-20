@@ -24,3 +24,4 @@ export * from "./ssrf.js";
 export * from "./provisioning.js";
 export * from "./admin.js";
 export * from "./drip.js";
+export * from "./audit.js";
