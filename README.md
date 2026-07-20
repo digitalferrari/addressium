@@ -1,0 +1,2 @@
+# sespool
+AWS Pinpoint Replacement
