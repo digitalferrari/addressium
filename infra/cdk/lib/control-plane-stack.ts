@@ -44,7 +44,9 @@ import {
   WaitTime,
 } from "aws-cdk-lib/aws-stepfunctions";
 import { LambdaInvoke } from "aws-cdk-lib/aws-stepfunctions-tasks";
+import { CfnWebACLAssociation } from "aws-cdk-lib/aws-wafv2";
 import { StaticSite } from "./static-site.js";
+import { makeCloudFrontWebAcl, makeRegionalWebAcl } from "./waf.js";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../../..");
 const svc = (rel: string) => resolve(REPO_ROOT, rel);
@@ -316,10 +318,27 @@ export class ControlPlaneStack extends Stack {
     senderFn.addEventSource(new SqsEventSource(sendQueue));
     sesEvents.addSubscription(new LambdaSubscription(eventsFn));
 
+    // ---- WAF (managed rule sets + per-IP rate limit + signup CAPTCHA, §5, #20) ----
+    // REGIONAL ACL on the HTTP API stage; CLOUDFRONT ACL on the SPA distributions.
+    const apiWebAcl = makeRegionalWebAcl(this, "ApiWebAcl");
+    const stage = api.defaultStage;
+    if (stage) {
+      const assoc = new CfnWebACLAssociation(this, "ApiWebAclAssoc", {
+        resourceArn: Stack.of(this).formatArn({
+          service: "apigateway",
+          resource: `/apis/${api.apiId}/stages/${stage.stageName}`,
+          account: "",
+        }),
+        webAclArn: apiWebAcl.attrArn,
+      });
+      assoc.node.addDependency(stage);
+    }
+    const cfWebAcl = makeCloudFrontWebAcl(this, "CfWebAcl");
+
     // ---- frontends (static SPAs on S3 + CloudFront, §4.1–4.2) ----
     const prod = props.stage === "prod";
-    const adminSite = new StaticSite(this, "AdminSite", { prod }); // apps/admin-web
-    const publicSite = new StaticSite(this, "PublicSite", { prod }); // apps/subscriber-web + public-web
+    const adminSite = new StaticSite(this, "AdminSite", { prod, webAclId: cfWebAcl.attrArn }); // apps/admin-web
+    const publicSite = new StaticSite(this, "PublicSite", { prod, webAclId: cfWebAcl.attrArn }); // apps/subscriber-web + public-web
 
     // ---- outputs ----
     new CfnOutput(this, "AdminPoolId", { value: adminPool.userPoolId });

@@ -14,6 +14,8 @@ import { S3BucketOrigin } from "aws-cdk-lib/aws-cloudfront-origins";
 
 export interface StaticSiteProps {
   prod: boolean;
+  /** CLOUDFRONT-scope WAF WebACL ARN to attach to the distribution (§5, #20). */
+  webAclId?: string;
 }
 
 export class StaticSite extends Construct {
@@ -32,6 +34,7 @@ export class StaticSite extends Construct {
 
     this.distribution = new Distribution(this, "Dist", {
       defaultRootObject: "index.html",
+      webAclId: props.webAclId,
       defaultBehavior: {
         origin: S3BucketOrigin.withOriginAccessControl(this.bucket),
         viewerProtocolPolicy: ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
