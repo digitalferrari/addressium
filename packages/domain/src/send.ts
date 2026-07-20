@@ -7,17 +7,66 @@
  * "sent" event per recipient.
  */
 import type { EmailArchive, EngagementEvent, List } from "@addressium/core";
-import type { Clock, EmailSender, MagicLinkSigner, SendDescriptor, Stores } from "./ports.js";
+import type {
+  Clock,
+  EmailSender,
+  MagicLinkSigner,
+  SendDescriptor,
+  SendQueue,
+  SendThrottle,
+  Stores,
+} from "./ports.js";
 import { buildLinkMap, renderForRecipient } from "./render.js";
 
 /** Alias kept for readability; a campaign send takes a SendDescriptor. */
 export type SendCampaignInput = SendDescriptor;
 
+export interface SendOptions {
+  /** Paces per-recipient sends to the SES rate (§4.4). */
+  throttle?: SendThrottle;
+}
+
 export interface SendResult {
   sent: number;
   suppressed: number;
-  /** True if this campaign was already dispatched and was skipped (idempotency). */
+  /** True if this campaign (or slice) was already dispatched and was skipped. */
   skipped?: boolean;
+}
+
+/** Idempotency claim key — per-slice when fanned out, else whole-campaign. */
+function claimKey(input: SendDescriptor): string {
+  return input.slice ? `${input.campaignId}#${input.slice.offset}` : input.campaignId;
+}
+
+/** Split a confirmed-recipient count into offset/limit windows of `chunkSize`. */
+export function planFanOut(total: number, chunkSize: number): Array<{ offset: number; limit: number }> {
+  if (chunkSize <= 0) throw new Error("chunkSize must be > 0");
+  const slices: Array<{ offset: number; limit: number }> = [];
+  for (let offset = 0; offset < total; offset += chunkSize) {
+    slices.push({ offset, limit: Math.min(chunkSize, total - offset) });
+  }
+  return slices;
+}
+
+/**
+ * Fan a large campaign out across the queue: count confirmed recipients and, if
+ * they exceed `chunkSize`, enqueue one sliced descriptor per window so the
+ * sender processes them in parallel. Returns the slices enqueued (empty when
+ * the list fits in one message and no fan-out was needed).
+ */
+export async function fanOutCampaign(
+  stores: Stores,
+  queue: SendQueue,
+  descriptor: SendDescriptor,
+  chunkSize: number,
+): Promise<Array<{ offset: number; limit: number }>> {
+  const confirmed = await stores.subscriptions.listConfirmed(descriptor.orgId, descriptor.listId);
+  if (confirmed.length <= chunkSize) return [];
+  const slices = planFanOut(confirmed.length, chunkSize);
+  for (const slice of slices) {
+    await queue.enqueue({ ...descriptor, slice });
+  }
+  return slices;
 }
 
 function listUnsubscribeHeader(list: List, sub: string): string {
@@ -31,16 +80,19 @@ export async function sendCampaign(
   magic: MagicLinkSigner,
   clock: Clock,
   input: SendCampaignInput,
+  opts: SendOptions = {},
 ): Promise<SendResult> {
   const list = await stores.lists.get(input.orgId, input.listId);
   if (!list) throw new Error("unknown list");
 
-  // Idempotency: SQS is at-least-once, so claim the campaign exactly once (#21).
-  if (!(await stores.sendClaims.claim(input.orgId, input.campaignId))) {
+  // Idempotency: SQS is at-least-once, so claim each unit (campaign or slice)
+  // exactly once (#21). Fanned-out slices claim independently (#9).
+  if (!(await stores.sendClaims.claim(input.orgId, claimKey(input)))) {
     return { sent: 0, suppressed: 0, skipped: true };
   }
 
-  // Archive the generic body once (§4.8) — powers the click overlay.
+  // Archive the generic body (§4.8) — powers the click overlay. Deterministic
+  // put keyed by campaignId, so repeating it across slices is harmless.
   const linkMap = buildLinkMap(input.template);
   const archive: EmailArchive = {
     orgId: input.orgId,
@@ -50,7 +102,11 @@ export async function sendCampaign(
   };
   await stores.archive.put(archive);
 
-  const confirmed = await stores.subscriptions.listConfirmed(input.orgId, input.listId);
+  const all = await stores.subscriptions.listConfirmed(input.orgId, input.listId);
+  // A slice sends only its window of the confirmed set; no slice → the whole list.
+  const confirmed = input.slice
+    ? all.slice(input.slice.offset, input.slice.offset + input.slice.limit)
+    : all;
   let sent = 0;
   let suppressed = 0;
 
@@ -63,6 +119,9 @@ export async function sendCampaign(
       suppressed++;
       continue;
     }
+
+    // Throttle only actual sends so skipped/suppressed rows don't burn tokens.
+    if (opts.throttle) await opts.throttle.acquire();
 
     const token = await magic.mint({
       orgId: subscriber.orgId,

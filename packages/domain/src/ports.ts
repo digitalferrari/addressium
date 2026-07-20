@@ -26,6 +26,20 @@ export interface SendDescriptor {
   listId: string;
   subject: string;
   template: EmailTemplate;
+  /**
+   * Recipient window for SQS fan-out of large lists. Absent → the whole list is
+   * a candidate for fan-out; present → send only this slice of confirmed
+   * recipients (offset/limit over the confirmed set).
+   */
+  slice?: { offset: number; limit: number };
+}
+
+/**
+ * Paces sends to respect the SES account/org rate. `acquire` resolves once a
+ * send token is available (TokenBucket in prod; immediate in tests).
+ */
+export interface SendThrottle {
+  acquire(n?: number): Promise<void>;
 }
 
 export interface OrganizationStore {

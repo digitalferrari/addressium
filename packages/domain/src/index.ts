@@ -16,3 +16,4 @@ export * from "./privacy.js";
 export * from "./importer.js";
 export * from "./reporting.js";
 export * from "./alerts.js";
+export * from "./throttle.js";
