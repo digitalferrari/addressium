@@ -1497,7 +1497,7 @@
     <div class="modal-b">
       <div class="note info"><span class="ic">▹</span><div>This provisions an isolated silo: a dedicated subscriber Cognito pool, KMS signing key, SES identity and JWKS — nothing is shared with your other publications.</div></div>
       <div class="field"><label>Organization name</label><input type="text" placeholder="e.g. Steamboat Pilot"></div>
-      <div class="field"><label>Primary sending domain</label><input class="mono" type="text" placeholder="steamboatpilot.com"></div>
+      <div class="field"><label>Primary sending domain</label><input class="mono" type="text" placeholder="northwindtimes.example"></div>
       <div class="grid2" style="gap:12px">
         <div class="field"><label>Region</label><select><option>us-east-1</option><option>us-west-2</option></select></div>
         <div class="field"><label>Default time zone</label><select><option>America/Denver</option><option>America/New_York</option><option>America/Chicago</option><option>America/Los_Angeles</option><option>UTC</option></select></div>
@@ -1507,7 +1507,7 @@
         <div class="field"><label>Subscriber pool</label><select><option>Link existing pool (recommended)</option><option>Create a new pool</option></select></div>
         <div class="field"><label>Existing user pool ID</label><input class="mono" type="text" placeholder="us-west-2_XXXXXXXXX"></div>
       </div>
-      <div class="field"><label>Site domain (shared login / paywall)</label><input class="mono" type="text" placeholder="steamboatpilot.com"></div>
+      <div class="field"><label>Site domain (shared login / paywall)</label><input class="mono" type="text" placeholder="northwindtimes.example"></div>
       <div class="note info"><span class="ic">▹</span><div>Most publishers already have a Cognito pool behind their site — link it so magic-link <span class="mono">sub</span> matches your existing users. Pick “create” only if this site has no auth yet.</div></div>
       <hr class="divider">
       <div class="row" style="justify-content:space-between"><div><b style="font-size:13.5px">Dedicated IP pool</b><div class="muted" style="font-size:12px">Isolate this org’s sending reputation (added cost). Off = shared account IPs.</div></div><div class="toggle" onclick="this.classList.toggle('on')"><i></i></div></div>
