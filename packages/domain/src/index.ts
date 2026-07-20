@@ -6,6 +6,7 @@ export * from "./signup.js";
 export * from "./send.js";
 export * from "./events.js";
 export * from "./entitlement.js";
+export * from "./identity.js";
 export * from "./webhooks.js";
 export * from "./jws.js";
 export * from "./unsubscribe.js";

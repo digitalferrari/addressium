@@ -54,6 +54,8 @@ export interface OrganizationStore {
 export interface SubscriberStore {
   get(orgId: string, sub: string): Promise<Subscriber | undefined>;
   findByEmail(orgId: string, email: string): Promise<Subscriber | undefined>;
+  /** Resolve by the external pool's Cognito `sub` (the stable identity join key). */
+  findByExternalId(orgId: string, externalId: string): Promise<Subscriber | undefined>;
   put(sub: Subscriber): Promise<void>;
 }
 

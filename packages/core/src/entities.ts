@@ -119,9 +119,16 @@ export interface ListPresentation {
 
 export interface Subscriber {
   orgId: OrgId;
-  /** Cognito subject — the base identity everything hangs off. */
+  /** addressium's own durable id for this person (immutable primary key). */
   sub: SubscriberId;
-  email: string; // normalized (lowercased, trimmed)
+  /**
+   * The main pool's Cognito `sub`, once known (linked via identity sync / login).
+   * This — not email — is the stable join key to the external user pool, so an
+   * email change is just an attribute update on the record found by this id.
+   */
+  externalId?: string;
+  email: string; // normalized (lowercased, trimmed) — MUTABLE attribute, not identity
+
   attributes: Record<string, string>;
   locale?: string;
   source?: string;

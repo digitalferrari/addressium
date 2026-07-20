@@ -86,6 +86,27 @@ export const entitlementSyncSchema = z.object({
 });
 export type EntitlementSyncInput = z.infer<typeof entitlementSyncSchema>;
 
+/**
+ * Inbound identity sync from the main user pool / system of record (§4.3).
+ * One-directional (pool → addressium); addressium never writes back to the pool.
+ * `externalId` is the immutable Cognito `sub`; email is a mutable attribute, so
+ * an email change is an `upsert` with the same externalId and a new email.
+ */
+export const identitySyncSchema = z
+  .object({
+    orgId: z.string().min(1),
+    externalId: z.string().min(1),
+    action: z.enum(["upsert", "delete"]).default("upsert"),
+    email: z.string().email().optional(),
+    attributes: z.record(z.string()).optional(),
+    source: z.string().min(1).default("user-pool"),
+  })
+  .refine((d) => d.action === "delete" || !!d.email, {
+    message: "email is required for an upsert",
+    path: ["email"],
+  });
+export type IdentitySyncInput = z.infer<typeof identitySyncSchema>;
+
 /** Add-organization / provision-silo payload (§4.11). */
 export const createOrgSchema = z.object({
   name: z.string().min(1),

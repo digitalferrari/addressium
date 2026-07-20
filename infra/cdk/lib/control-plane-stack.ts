@@ -177,6 +177,7 @@ export class ControlPlaneStack extends Stack {
     const confirmFn = fn("ConfirmFn", apiEntry, "confirmHandler", apiEnv);
     const unsubscribeFn = fn("UnsubscribeFn", apiEntry, "unsubscribeHandler", apiEnv);
     const entitlementFn = fn("EntitlementFn", apiEntry, "entitlementSyncHandler", apiEnv);
+    const identityFn = fn("IdentityFn", apiEntry, "identitySyncHandler", apiEnv);
 
     // The sender resolves each org's KMS key + SES config from the org record at
     // send time (§4.11), so no per-org env here.
@@ -286,6 +287,7 @@ export class ControlPlaneStack extends Stack {
       confirmFn,
       unsubscribeFn,
       entitlementFn,
+      identityFn,
       scheduleFn,
       cancelFn,
       senderFn,
@@ -298,6 +300,7 @@ export class ControlPlaneStack extends Stack {
     confirmSecret.grantRead(confirmFn);
     confirmSecret.grantRead(unsubscribeFn);
     webhookSecret.grantRead(entitlementFn);
+    webhookSecret.grantRead(identityFn);
     archiveBucket.grantReadWrite(senderFn);
     // TODO: grant senderFn kms:Sign on the per-org signing keys (resolved at
     // runtime); grant SES send. Not scoped here since keys are per-org (§4.11).
@@ -340,6 +343,11 @@ export class ControlPlaneStack extends Stack {
       path: "/webhooks/entitlement",
       methods: [HttpMethod.POST],
       integration: new HttpLambdaIntegration("EntitlementInt", entitlementFn),
+    });
+    api.addRoutes({
+      path: "/webhooks/identity",
+      methods: [HttpMethod.POST],
+      integration: new HttpLambdaIntegration("IdentityInt", identityFn),
     });
 
     // ---- admin CRUD + branding + presentation + AI config (§4.1, #18/#31/#32/#33) ----

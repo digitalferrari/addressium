@@ -136,14 +136,25 @@ export class DynamoStores implements Stores {
       const item = res.Items?.[0] as Item<Subscriber> | undefined;
       return item?.data;
     },
-    put: (s) =>
-      this.put({
+    // externalId (Cognito sub) is stable, so a small pointer item resolves it in
+    // one extra get — no new GSI. Written by put() whenever externalId is set.
+    findByExternalId: async (orgId, externalId) => {
+      const ptr = await this.get<{ sub: string }>(`${org(orgId)}#EXTID`, `EXTID#${externalId}`);
+      if (!ptr) return undefined;
+      return this.get<Subscriber>(org(orgId), `SUBSCRIBER#${ptr.sub}`);
+    },
+    put: async (s) => {
+      await this.put({
         pk: org(s.orgId),
         sk: `SUBSCRIBER#${s.sub}`,
         gsi1pk: `${org(s.orgId)}#EMAIL`,
         gsi1sk: s.email.toLowerCase(),
         data: s,
-      }),
+      });
+      if (s.externalId) {
+        await this.put({ pk: `${org(s.orgId)}#EXTID`, sk: `EXTID#${s.externalId}`, data: { sub: s.sub } });
+      }
+    },
   };
 
   subscriptions: SubscriptionStore = {

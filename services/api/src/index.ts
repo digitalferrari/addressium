@@ -17,6 +17,7 @@ import {
   HmacConfirmationSigner,
   SystemClock,
   applyEntitlementSync,
+  applyIdentitySync,
   buildConfirmationEmail,
   confirmOptIn,
   effectiveOneOffTime,
@@ -409,6 +410,26 @@ export async function entitlementSyncHandler(event: HttpEvent): Promise<HttpResu
     }
     const updated = await applyEntitlementSync(stores(), clock, JSON.parse(raw) as unknown);
     return json(200, { entitlement: updated.entitlement });
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+/**
+ * POST /webhooks/identity — signed webhook from the main user pool / SoR (§4.3).
+ * Applies add / email-change / delete keyed by the immutable Cognito `sub`.
+ * One-directional: addressium never writes back to the pool.
+ */
+export async function identitySyncHandler(event: HttpEvent): Promise<HttpResult> {
+  try {
+    const raw = event.body ?? "";
+    const sig = event.headers?.["x-addressium-signature"] ?? "";
+    const secret = await getSecret(env("WEBHOOK_SECRET_ARN"));
+    if (!verifyWebhookSignature(secret, raw, sig)) {
+      return json(401, { error: "bad signature" });
+    }
+    const result = await applyIdentitySync(stores(), clock, JSON.parse(raw) as unknown);
+    return json(200, result);
   } catch (e) {
     return fail(e);
   }
