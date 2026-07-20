@@ -30,6 +30,16 @@ export const signupSchema = z.object({
 });
 export type SignupInput = z.infer<typeof signupSchema>;
 
+/** Multi-list signup from the "All newsletters" page — one double opt-in covers all (§4.2). */
+export const signupManySchema = z.object({
+  orgId: z.string().min(1),
+  email: z.string().email(),
+  listIds: z.array(z.string().min(1)).min(1),
+  attributes: z.record(z.string()).optional(),
+  sourceUrl: z.string().url().optional(),
+});
+export type SignupManyInput = z.infer<typeof signupManySchema>;
+
 /** Create-newsletter payload (admin). */
 export const createListSchema = z.object({
   orgId: z.string().min(1),

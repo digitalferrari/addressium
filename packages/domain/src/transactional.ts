@@ -28,3 +28,27 @@ export function buildConfirmationEmail(
     listUnsubscribe: `<mailto:${list.fromAddress}>`,
   };
 }
+
+/** One confirmation email covering several lists (the "All newsletters" page, #61). */
+export function buildBatchConfirmationEmail(
+  lists: List[],
+  toEmail: string,
+  confirmUrl: string,
+): SentMessage {
+  const first = lists[0];
+  if (!first) throw new Error("no lists to confirm");
+  const items = lists.map((l) => `<li>${escapeHtml(l.name)}</li>`).join("");
+  const html = [
+    `<p>Please confirm your subscription to:</p>`,
+    `<ul>${items}</ul>`,
+    `<p><a href="${escapeHtml(confirmUrl)}">Confirm all subscriptions</a></p>`,
+    `<p style="font-size:12px;color:#777">${escapeHtml(first.complianceFooter)}<br>${escapeHtml(first.physicalAddress)}</p>`,
+  ].join("\n");
+  return {
+    from: first.fromAddress,
+    to: toEmail,
+    subject: `Confirm your subscriptions (${lists.length})`,
+    html,
+    listUnsubscribe: `<mailto:${first.fromAddress}>`,
+  };
+}

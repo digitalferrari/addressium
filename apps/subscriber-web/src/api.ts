@@ -38,7 +38,9 @@ export const api = {
   lists: () => j<Array<{ listId: string }>>("GET", `/orgs/${ORG}/lists`),
   publicList: (listId: string) => j<PublicList>("GET", `/orgs/${ORG}/lists/${listId}/public`),
   signup: (email: string, listId: string) => j<{ status: string }>("POST", `/signup`, { orgId: ORG, email, listId }),
-  confirm: (token: string) => j<{ status: string }>("GET", `/confirm?token=${encodeURIComponent(token)}`),
+  signupMany: (email: string, listIds: string[]) =>
+    j<{ status: string; lists: string[] }>("POST", `/signup/batch`, { orgId: ORG, email, listIds }),
+  confirm: (token: string) => j<{ status: string; confirmed?: number }>("GET", `/confirm?token=${encodeURIComponent(token)}`),
   unsubscribe: (token: string) => j<{ status: string }>("POST", `/unsubscribe`, { token }),
 };
 

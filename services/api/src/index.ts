@@ -19,7 +19,8 @@ import {
   applyEntitlementSync,
   applyIdentitySync,
   buildConfirmationEmail,
-  confirmOptIn,
+  buildBatchConfirmationEmail,
+  confirmOptInAny,
   effectiveOneOffTime,
   manualSuppress,
   publicListView,
@@ -31,6 +32,7 @@ import {
   saveSegment,
   setListVisibility,
   signup,
+  signupMany,
   unsubscribeAll,
   unsubscribeFromList,
   verifyWebhookSignature,
@@ -121,12 +123,32 @@ export async function signupHandler(event: HttpEvent): Promise<HttpResult> {
   }
 }
 
-/** GET /confirm?token=... — double opt-in landing (§4.2). */
+/**
+ * POST /signup/batch — opt into several lists at once (the "All newsletters"
+ * page, #61). Unauthenticated like /signup; one double opt-in email covers all.
+ */
+export async function signupBatchHandler(event: HttpEvent): Promise<HttpResult> {
+  try {
+    const input = JSON.parse(event.body ?? "{}") as unknown;
+    const res = await signupMany(stores(), await confirmSigner(), clock, input);
+    if (res.lists.length > 0) {
+      const org = await stores().organizations.get(res.subscriber.orgId);
+      const confirmUrl = `${env("CONFIRM_URL_BASE")}?token=${encodeURIComponent(res.confirmationToken)}`;
+      const ses = new SesEmailSender(org?.sesConfigSet);
+      await ses.send(buildBatchConfirmationEmail(res.lists, res.subscriber.email, confirmUrl));
+    }
+    return json(202, { subscriberId: res.subscriber.sub, status: "pending", lists: res.lists.map((l) => l.listId) });
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+/** GET /confirm?token=... — double opt-in landing; confirms every list in the token (§4.2). */
 export async function confirmHandler(event: HttpEvent): Promise<HttpResult> {
   try {
     const token = event.queryStringParameters?.token ?? "";
-    const sub = await confirmOptIn(stores(), await confirmSigner(), clock, token);
-    return json(200, { status: sub.status });
+    const subs = await confirmOptInAny(stores(), await confirmSigner(), clock, token);
+    return json(200, { status: subs[0]?.status ?? "confirmed", confirmed: subs.length });
   } catch (e) {
     return fail(e);
   }
@@ -209,6 +231,7 @@ export async function unsubscribeHandler(event: HttpEvent): Promise<HttpResult> 
       new URLSearchParams(event.body ?? "").get("token") ??
       "";
     const { orgId, sub, listId } = (await confirmSigner()).verify(token);
+    if (!listId) throw new Error("token has no list");
     await unsubscribeFromList(stores(), clock, { orgId, subscriberId: sub, listId });
     return json(200, { status: "unsubscribed" });
   } catch (e) {
