@@ -132,15 +132,21 @@ export class ControlPlaneStack extends Stack {
     const unsubscribeFn = fn("UnsubscribeFn", apiEntry, "unsubscribeHandler", apiEnv);
     const entitlementFn = fn("EntitlementFn", apiEntry, "entitlementSyncHandler", apiEnv);
 
-    const senderFn = fn("SenderFn", svc("services/sender/src/index.ts"), "handler", {
-      SEND_QUEUE_URL: sendQueue.queueUrl,
-      // Per-org KMS key + JWKS are resolved from the org record at send time
-      // (§4.11); these are deployment defaults / placeholders.
-      MAGIC_ISSUER: "https://addressium.example",
-      MAGIC_AUDIENCE: "example.com",
-      MAGIC_KID: "default",
-      MAGIC_KMS_KEY_ID: "TODO-per-org",
-    });
+    // The sender resolves each org's KMS key + SES config from the org record at
+    // send time (§4.11), so no per-org env here.
+    const senderFn = fn("SenderFn", svc("services/sender/src/index.ts"), "handler");
+    // Per-org signing keys are created by provisioning at runtime, so we can't
+    // enumerate their ARNs here; scope by an addressium key-tag condition + SES.
+    senderFn.addToRolePolicy(
+      new PolicyStatement({
+        actions: ["kms:Sign"],
+        resources: ["*"],
+        conditions: { StringEquals: { "aws:ResourceTag/app": "addressium" } },
+      }),
+    );
+    senderFn.addToRolePolicy(
+      new PolicyStatement({ actions: ["ses:SendEmail"], resources: ["*"] }),
+    );
     const eventsFn = fn("EventsFn", svc("services/events/src/index.ts"), "handler");
 
     // Launch handler for recurring series (EventBridge Scheduler target, §4.16).

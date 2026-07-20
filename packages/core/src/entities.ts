@@ -58,8 +58,17 @@ export interface Organization {
   domains: string[];
   /** Cognito user pool, shared with this org's main website. */
   subscriberPoolId: string;
-  /** KMS asymmetric key ARN used to sign this org's magic-link tokens. */
-  kmsKeyArn: string;
+  /** Per-org magic-link signing config (resolved by the sender at send time). */
+  magicLink: {
+    /** KMS asymmetric key ARN — the key never leaves KMS. */
+    kmsKeyArn: string;
+    /** JWKS key id published for this key. */
+    kid: string;
+    /** Token issuer (`iss`). */
+    issuer: string;
+    /** Token audience (`aud`) — the org's main-site domain. */
+    audience: string;
+  };
   sesConfigSet: string;
   ipMode: IpMode;
   suppressionScope: DeploymentSuppressionScope;

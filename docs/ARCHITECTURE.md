@@ -588,7 +588,7 @@ Entities:
 
 | Entity | Purpose | Key notes |
 |---|---|---|
-| **Organization** | A silo | name, domain(s), subscriber pool ID, KMS key ARN, SES config set, IP mode (shared/dedicated), suppression scope, **defaultTimezone** (IANA), setup state |
+| **Organization** | A silo | name, domain(s), subscriber pool ID, `magicLink` {kmsKeyArn, kid, issuer, audience}, SES config set, IP mode (shared/dedicated), suppression scope, **defaultTimezone** (IANA), setup state |
 | **AdminMember** | Staff ↔ role ↔ orgs | admin-pool `sub`, role, org-scope list, MFA state (in admin pool) |
 | **Role** | Capability set | named set of capabilities (built-in + custom) |
 | **Subscriber** | Durable person record | **keyed by (`orgId`, Cognito `sub`)**; email (normalized), attributes, locale, source, consent {timestamp, ip, url}, global status, `entitlement` (free/paid) + `entitlement_asof` |

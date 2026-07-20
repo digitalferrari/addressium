@@ -124,7 +124,12 @@ test("signup → confirm → send → click → click map, then unsubscribe (on 
     name: "Summit Daily",
     domains: ["summitdaily.com"],
     subscriberPoolId: "us-east-1_Smt",
-    kmsKeyArn: "arn:aws:kms:...:key/1",
+    magicLink: {
+      kmsKeyArn: "arn:aws:kms:...:key/1",
+      kid: "k1",
+      issuer: "https://addressium/summit",
+      audience: "summitdaily.com",
+    },
     sesConfigSet: "summit-cs",
     ipMode: "shared",
     suppressionScope: "hybrid",
