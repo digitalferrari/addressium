@@ -5,7 +5,13 @@
  * aggregates by link-id (docs/ARCHITECTURE.md §4.5, docs/SECURITY.md §4.7).
  */
 import { DynamoStores } from "@addressium/adapters-aws";
-import { SystemClock, recordClick, recordOpen } from "@addressium/domain";
+import {
+  SystemClock,
+  recordBounce,
+  recordClick,
+  recordComplaint,
+  recordOpen,
+} from "@addressium/domain";
 
 export interface Notification {
   eventType: "Open" | "Click" | "Bounce" | "Complaint";
@@ -14,6 +20,9 @@ export interface Notification {
   subscriberId: string;
   /** Full clicked URL (token in fragment) for Click events. */
   link?: string;
+  /** Present for Bounce/Complaint. */
+  email?: string;
+  listId?: string;
 }
 
 function env(name: string): string {
@@ -39,7 +48,20 @@ export async function handler(notif: Notification) {
   }
   if (notif.eventType === "Open") {
     await recordOpen(s, clock, notif.orgId, notif.campaignId, notif.subscriberId);
+    return { ok: true };
   }
-  // TODO: Bounce/Complaint -> suppression + alerts (§4.5, §4.18).
+  if ((notif.eventType === "Bounce" || notif.eventType === "Complaint") && notif.email) {
+    const input = {
+      orgId: notif.orgId,
+      subscriberId: notif.subscriberId,
+      email: notif.email,
+      campaignId: notif.campaignId,
+      listId: notif.listId,
+    };
+    if (notif.eventType === "Bounce") await recordBounce(s, clock, input);
+    else await recordComplaint(s, clock, input);
+    // TODO: publish a deliverability alert to SNS when rates cross thresholds (§4.18).
+    return { ok: true };
+  }
   return { ok: true };
 }

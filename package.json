@@ -17,7 +17,7 @@
     "build": "tsc --build",
     "typecheck": "tsc --build --dry",
     "clean": "tsc --build --clean",
-    "test": "echo \"(no tests yet)\" && exit 0",
+    "test": "tsc --build && node --test packages/domain/dist/test/*.test.js packages/integration-tests/dist/test/*.test.js",
     "deploy": "npm --workspace @addressium/infra-cdk run deploy"
   },
   "devDependencies": {

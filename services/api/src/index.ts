@@ -12,6 +12,7 @@ import {
   applyEntitlementSync,
   confirmOptIn,
   signup,
+  unsubscribeFromList,
   verifyWebhookSignature,
 } from "@addressium/domain";
 
@@ -61,6 +62,21 @@ export async function confirmHandler(event: HttpEvent): Promise<HttpResult> {
     const token = event.queryStringParameters?.token ?? "";
     const sub = await confirmOptIn(stores(), confirmSigner(), clock, token);
     return json(200, { status: sub.status });
+  } catch (e) {
+    return json(400, { error: (e as Error).message });
+  }
+}
+
+/** POST /unsubscribe?token=... — RFC 8058 one-click, no login (§4.2). */
+export async function unsubscribeHandler(event: HttpEvent): Promise<HttpResult> {
+  try {
+    const token =
+      event.queryStringParameters?.token ??
+      new URLSearchParams(event.body ?? "").get("token") ??
+      "";
+    const { orgId, sub, listId } = confirmSigner().verify(token);
+    await unsubscribeFromList(stores(), clock, { orgId, subscriberId: sub, listId });
+    return json(200, { status: "unsubscribed" });
   } catch (e) {
     return json(400, { error: (e as Error).message });
   }

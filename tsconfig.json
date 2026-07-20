@@ -7,6 +7,7 @@
     { "path": "packages/magiclink-verify" },
     { "path": "packages/domain" },
     { "path": "packages/adapters-aws" },
+    { "path": "packages/integration-tests" },
     { "path": "services/api" },
     { "path": "services/sender" },
     { "path": "services/events" },

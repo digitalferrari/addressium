@@ -66,18 +66,24 @@ npm run build     # tsc --build across packages/services
 npm run deploy    # cdk deploy (from infra/cdk) — needs AWS creds
 ```
 
-### First vertical slice
+### Vertical slice (implemented + tested)
 
-`packages/domain` implements the first end-to-end flow — **signup → double
-opt-in → send → open/click → click map** — against in-memory adapters, so it runs
-with no AWS. Its tests also exercise the security controls (magic-link ES256
-verification and algorithm-confusion rejection, token redaction, suppression, and
-the SSRF guard):
+`packages/domain` implements the end-to-end flow — **signup → double opt-in →
+send → open/click → click map**, plus **entitlement sync**, **unsubscribe**, and
+**bounce/complaint auto-suppression** — as pure functions behind ports, so it runs
+with no AWS. The security controls are proven by tests (magic-link ES256
+verification and algorithm-confusion rejection, KMS-style DER→JOSE signing, token
+redaction, webhook signatures, suppression, and the SSRF guard).
+
+The AWS adapters (`packages/adapters-aws`: DynamoDB / SES / KMS) satisfy the same
+ports, and `packages/integration-tests` runs the whole journey against a **real
+DynamoDB API** (via `dynalite` — no Java/Docker). The Lambda handlers in
+`services/*` are thin wrappers that call the domain, and `infra/cdk` wires them to
+an HTTP API, the SQS send queue, and the SES-events SNS topic.
 
 ```bash
-npm install -w packages/core -w packages/rbac -w packages/magiclink-verify \
-            -w services/feeds -w packages/domain
-npm test -w @addressium/domain
+npm install       # all workspaces
+npm test          # build + unit (in-memory) + DynamoDB integration tests
 ```
 
 > **Status:** Early scaffold. The architecture document is the source of truth;

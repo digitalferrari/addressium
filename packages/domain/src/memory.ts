@@ -56,6 +56,11 @@ export class MemSubscriptions implements SubscriptionStore {
       (s) => s.orgId === orgId && s.listId === listId && s.status === "confirmed",
     );
   }
+  async listBySubscriber(orgId: string, subscriberId: string) {
+    return [...this.map.values()].filter(
+      (s) => s.orgId === orgId && s.subscriberId === subscriberId,
+    );
+  }
 }
 
 export class MemLists implements ListStore {

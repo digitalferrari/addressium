@@ -40,6 +40,10 @@ interface Item<T> {
   sk: string;
   gsi1pk?: string;
   gsi1sk?: string;
+  gsi2pk?: string;
+  gsi2sk?: string;
+  /** Denormalized top-level attribute for filtering/indexing (e.g. subscription status). */
+  status?: string;
   data: T;
 }
 
@@ -50,7 +54,10 @@ export class DynamoStores implements Stores {
     private readonly tableName: string,
     client?: DynamoDBClient,
   ) {
-    this.doc = DynamoDBDocumentClient.from(client ?? new DynamoDBClient({}));
+    this.doc = DynamoDBDocumentClient.from(client ?? new DynamoDBClient({}), {
+      // Optional entity fields (consent, entitlementAsof, …) may be undefined.
+      marshallOptions: { removeUndefinedValues: true },
+    });
   }
 
   private async put(item: Item<unknown>): Promise<void> {
@@ -99,6 +106,9 @@ export class DynamoStores implements Stores {
       this.put({
         pk: `${org(s.orgId)}#LIST#${s.listId}`,
         sk: `SUBSCRIPTION#${s.subscriberId}`,
+        gsi2pk: `${org(s.orgId)}#SUB#${s.subscriberId}`,
+        gsi2sk: `LIST#${s.listId}`,
+        status: s.status, // denormalized for the confirmed filter
         data: s,
       }),
     listConfirmed: async (orgId, listId) => {
@@ -106,13 +116,24 @@ export class DynamoStores implements Stores {
         new QueryCommand({
           TableName: this.tableName,
           KeyConditionExpression: "pk = :pk AND begins_with(sk, :s)",
-          FilterExpression: "#d.#st = :c",
-          ExpressionAttributeNames: { "#d": "data", "#st": "status" },
+          FilterExpression: "#st = :c",
+          ExpressionAttributeNames: { "#st": "status" },
           ExpressionAttributeValues: {
             ":pk": `${org(orgId)}#LIST#${listId}`,
             ":s": "SUBSCRIPTION#",
             ":c": "confirmed",
           },
+        }),
+      );
+      return (res.Items ?? []).map((i) => (i as Item<Subscription>).data);
+    },
+    listBySubscriber: async (orgId, subscriberId) => {
+      const res = await this.doc.send(
+        new QueryCommand({
+          TableName: this.tableName,
+          IndexName: "gsi2",
+          KeyConditionExpression: "gsi2pk = :p",
+          ExpressionAttributeValues: { ":p": `${org(orgId)}#SUB#${subscriberId}` },
         }),
       );
       return (res.Items ?? []).map((i) => (i as Item<Subscription>).data);

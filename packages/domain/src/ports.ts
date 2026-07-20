@@ -24,6 +24,8 @@ export interface SubscriptionStore {
   get(orgId: string, sub: string, listId: string): Promise<Subscription | undefined>;
   put(s: Subscription): Promise<void>;
   listConfirmed(orgId: string, listId: string): Promise<Subscription[]>;
+  /** All of a subscriber's subscriptions across lists (preference center, unsub-all). */
+  listBySubscriber(orgId: string, subscriberId: string): Promise<Subscription[]>;
 }
 
 export interface ListStore {
