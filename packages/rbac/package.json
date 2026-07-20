@@ -10,5 +10,8 @@
   },
   "scripts": {
     "build": "tsc --build"
+  },
+  "dependencies": {
+    "@cedar-policy/cedar-wasm": "^4.11.2"
   }
 }

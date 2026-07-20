@@ -227,7 +227,9 @@ A living checklist mapped to our controls (full ASVS tracked separately):
 
 ## 10. Open items (tracked)
 
-- Central policy engine (Cedar) for authorization as rules grow.
+- ~~Central policy engine (Cedar) for authorization as rules grow.~~ **Done** —
+  enforcement runs through the Cedar engine; the policy set is generated from the
+  ROLES matrix and evaluated server-side in `authorize()` (#30).
 - ~~WORM/Object-Lock wiring for the audit log.~~ **Done** — audit log backed by
   S3 Object Lock (COMPLIANCE mode) in the CDK stack (#29).
 - ~~CI: pin all actions to SHAs, wire OIDC-to-AWS deploy role.~~ **Done** —
