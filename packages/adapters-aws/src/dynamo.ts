@@ -11,6 +11,7 @@ import {
   GetCommand,
   PutCommand,
   QueryCommand,
+  type QueryCommandInput,
 } from "@aws-sdk/lib-dynamodb";
 import type {
   EmailArchive,
@@ -28,6 +29,7 @@ import type {
   EventStore,
   ListStore,
   OrganizationStore,
+  SendClaimStore,
   Stores,
   SubscriberStore,
   SubscriptionStore,
@@ -73,6 +75,18 @@ export class DynamoStores implements Stores {
     return (res.Item as Item<T> | undefined)?.data;
   }
 
+  /** Query following LastEvaluatedKey so large result sets aren't truncated. */
+  private async queryAll<T>(params: QueryCommandInput): Promise<T[]> {
+    const items: T[] = [];
+    let ExclusiveStartKey: Record<string, unknown> | undefined;
+    do {
+      const res = await this.doc.send(new QueryCommand({ ...params, ExclusiveStartKey }));
+      for (const it of res.Items ?? []) items.push((it as Item<T>).data);
+      ExclusiveStartKey = res.LastEvaluatedKey as Record<string, unknown> | undefined;
+    } while (ExclusiveStartKey);
+    return items;
+  }
+
   organizations: OrganizationStore = {
     get: (orgId) => this.get<Organization>(org(orgId), "#META"),
     put: (o) =>
@@ -83,17 +97,13 @@ export class DynamoStores implements Stores {
         gsi1sk: o.orgId,
         data: o,
       }),
-    list: async () => {
-      const res = await this.doc.send(
-        new QueryCommand({
-          TableName: this.tableName,
-          IndexName: "gsi1",
-          KeyConditionExpression: "gsi1pk = :p",
-          ExpressionAttributeValues: { ":p": "ORGS" },
-        }),
-      );
-      return (res.Items ?? []).map((i) => (i as Item<Organization>).data);
-    },
+    list: () =>
+      this.queryAll<Organization>({
+        TableName: this.tableName,
+        IndexName: "gsi1",
+        KeyConditionExpression: "gsi1pk = :p",
+        ExpressionAttributeValues: { ":p": "ORGS" },
+      }),
   };
 
   subscribers: SubscriberStore = {
@@ -136,33 +146,25 @@ export class DynamoStores implements Stores {
         status: s.status, // denormalized for the confirmed filter
         data: s,
       }),
-    listConfirmed: async (orgId, listId) => {
-      const res = await this.doc.send(
-        new QueryCommand({
-          TableName: this.tableName,
-          KeyConditionExpression: "pk = :pk AND begins_with(sk, :s)",
-          FilterExpression: "#st = :c",
-          ExpressionAttributeNames: { "#st": "status" },
-          ExpressionAttributeValues: {
-            ":pk": `${org(orgId)}#LIST#${listId}`,
-            ":s": "SUBSCRIPTION#",
-            ":c": "confirmed",
-          },
-        }),
-      );
-      return (res.Items ?? []).map((i) => (i as Item<Subscription>).data);
-    },
-    listBySubscriber: async (orgId, subscriberId) => {
-      const res = await this.doc.send(
-        new QueryCommand({
-          TableName: this.tableName,
-          IndexName: "gsi2",
-          KeyConditionExpression: "gsi2pk = :p",
-          ExpressionAttributeValues: { ":p": `${org(orgId)}#SUB#${subscriberId}` },
-        }),
-      );
-      return (res.Items ?? []).map((i) => (i as Item<Subscription>).data);
-    },
+    listConfirmed: (orgId, listId) =>
+      this.queryAll<Subscription>({
+        TableName: this.tableName,
+        KeyConditionExpression: "pk = :pk AND begins_with(sk, :s)",
+        FilterExpression: "#st = :c",
+        ExpressionAttributeNames: { "#st": "status" },
+        ExpressionAttributeValues: {
+          ":pk": `${org(orgId)}#LIST#${listId}`,
+          ":s": "SUBSCRIPTION#",
+          ":c": "confirmed",
+        },
+      }),
+    listBySubscriber: (orgId, subscriberId) =>
+      this.queryAll<Subscription>({
+        TableName: this.tableName,
+        IndexName: "gsi2",
+        KeyConditionExpression: "gsi2pk = :p",
+        ExpressionAttributeValues: { ":p": `${org(orgId)}#SUB#${subscriberId}` },
+      }),
   };
 
   lists: ListStore = {
@@ -200,19 +202,15 @@ export class DynamoStores implements Stores {
         sk: `EVENT#${e.at}#${randomUUID()}`,
         data: e,
       }),
-    all: async (orgId, campaignId) => {
-      const res = await this.doc.send(
-        new QueryCommand({
-          TableName: this.tableName,
-          KeyConditionExpression: "pk = :pk AND begins_with(sk, :s)",
-          ExpressionAttributeValues: {
-            ":pk": `${org(orgId)}#CAMPAIGN#${campaignId}`,
-            ":s": "EVENT#",
-          },
-        }),
-      );
-      return (res.Items ?? []).map((i) => (i as Item<EngagementEvent>).data);
-    },
+    all: (orgId, campaignId) =>
+      this.queryAll<EngagementEvent>({
+        TableName: this.tableName,
+        KeyConditionExpression: "pk = :pk AND begins_with(sk, :s)",
+        ExpressionAttributeValues: {
+          ":pk": `${org(orgId)}#CAMPAIGN#${campaignId}`,
+          ":s": "EVENT#",
+        },
+      }),
   };
 
   entitlements: EntitlementStore = {
@@ -220,5 +218,23 @@ export class DynamoStores implements Stores {
       this.put({ pk: org(e.orgId), sk: `ENTITLEMENT#${e.subscriberId}`, data: e }),
     latest: (orgId, subscriberId) =>
       this.get<EntitlementSync>(org(orgId), `ENTITLEMENT#${subscriberId}`),
+  };
+
+  sendClaims: SendClaimStore = {
+    claim: async (orgId, campaignId) => {
+      try {
+        await this.doc.send(
+          new PutCommand({
+            TableName: this.tableName,
+            Item: { pk: `${org(orgId)}#CAMPAIGN#${campaignId}`, sk: "SENDCLAIM", data: { claimed: true } },
+            ConditionExpression: "attribute_not_exists(pk)",
+          }),
+        );
+        return true;
+      } catch (e) {
+        if ((e as { name?: string }).name === "ConditionalCheckFailedException") return false;
+        throw e;
+      }
+    },
   };
 }

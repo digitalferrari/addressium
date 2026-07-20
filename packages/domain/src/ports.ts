@@ -71,6 +71,12 @@ export interface EntitlementStore {
   latest(orgId: string, subscriberId: string): Promise<EntitlementSync | undefined>;
 }
 
+/** Idempotency guard: claim a campaign send exactly once (SQS is at-least-once). */
+export interface SendClaimStore {
+  /** True if newly claimed (dispatch it); false if already dispatched. */
+  claim(orgId: string, campaignId: string): Promise<boolean>;
+}
+
 /** What actually puts mail on the wire (SES in prod; capture in tests). */
 export interface SentMessage {
   from: string;
@@ -136,4 +142,5 @@ export interface Stores {
   archive: ArchiveStore;
   events: EventStore;
   entitlements: EntitlementStore;
+  sendClaims: SendClaimStore;
 }

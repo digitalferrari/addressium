@@ -11,6 +11,7 @@ import {
   HmacConfirmationSigner,
   SystemClock,
   JoseMagicLinkSigner,
+  buildConfirmationEmail,
   signup,
   confirmOptIn,
   sendCampaign,
@@ -106,6 +107,26 @@ test("complaint auto-suppresses and the suppression gate drops future sends", as
   const updated = await h.stores.subscribers.get(ORG, s.sub);
   assert.equal(updated?.status, "suppressed");
   assert.equal((await send(h, "c2")).suppressed, 1);
+});
+
+test("confirmation email carries the confirm link, from-address and footer", async () => {
+  const h = await harness();
+  const list = await h.stores.lists.get(ORG, LIST);
+  assert.ok(list);
+  const msg = buildConfirmationEmail(list!, "jordan@example.com", "https://s.example/confirm?token=abc");
+  assert.equal(msg.to, "jordan@example.com");
+  assert.equal(msg.from, "l@summitdaily.com");
+  assert.match(msg.html, /confirm\?token=abc/);
+  assert.match(msg.subject, /Confirm your subscription/);
+});
+
+test("idempotent: the same campaign id is not dispatched twice", async () => {
+  const h = await harness();
+  await confirmedSubscriber(h, "jordan@example.com");
+  assert.equal((await send(h, "dup1")).sent, 1);
+  const second = await send(h, "dup1");
+  assert.equal(second.sent, 0);
+  assert.equal(second.skipped, true);
 });
 
 test("bounce marks the subscription bounced and suppresses", async () => {

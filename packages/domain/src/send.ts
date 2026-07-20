@@ -16,6 +16,8 @@ export type SendCampaignInput = SendDescriptor;
 export interface SendResult {
   sent: number;
   suppressed: number;
+  /** True if this campaign was already dispatched and was skipped (idempotency). */
+  skipped?: boolean;
 }
 
 function listUnsubscribeHeader(list: List, sub: string): string {
@@ -32,6 +34,11 @@ export async function sendCampaign(
 ): Promise<SendResult> {
   const list = await stores.lists.get(input.orgId, input.listId);
   if (!list) throw new Error("unknown list");
+
+  // Idempotency: SQS is at-least-once, so claim the campaign exactly once (#21).
+  if (!(await stores.sendClaims.claim(input.orgId, input.campaignId))) {
+    return { sent: 0, suppressed: 0, skipped: true };
+  }
 
   // Archive the generic body once (§4.8) — powers the click overlay.
   const linkMap = buildLinkMap(input.template);

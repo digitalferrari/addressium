@@ -5,11 +5,17 @@
  * against DynamoDB-backed stores (@addressium/adapters-aws). No business logic
  * lives here. See docs/ARCHITECTURE.md §4.2–4.3, §4.12.
  */
-import { DynamoStores, EventBridgeScheduler, getSecret } from "@addressium/adapters-aws";
+import {
+  DynamoStores,
+  EventBridgeScheduler,
+  SesEmailSender,
+  getSecret,
+} from "@addressium/adapters-aws";
 import {
   HmacConfirmationSigner,
   SystemClock,
   applyEntitlementSync,
+  buildConfirmationEmail,
   confirmOptIn,
   effectiveOneOffTime,
   signup,
@@ -83,7 +89,15 @@ export async function signupHandler(event: HttpEvent): Promise<HttpResult> {
   try {
     const input = JSON.parse(event.body ?? "{}") as unknown;
     const res = await signup(stores(), await confirmSigner(), clock, input);
-    // TODO: enqueue the confirmation email carrying res.confirmationToken (#7).
+
+    // Send the double opt-in confirmation email (transactional, §4.2).
+    const list = await stores().lists.get(res.subscription.orgId, res.subscription.listId);
+    if (list) {
+      const org = await stores().organizations.get(res.subscription.orgId);
+      const confirmUrl = `${env("CONFIRM_URL_BASE")}?token=${encodeURIComponent(res.confirmationToken)}`;
+      const ses = new SesEmailSender(org?.sesConfigSet);
+      await ses.send(buildConfirmationEmail(list, res.subscriber.email, confirmUrl));
+    }
     return json(202, { subscriberId: res.subscriber.sub, status: res.subscription.status });
   } catch (e) {
     return fail(e);

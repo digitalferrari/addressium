@@ -11,3 +11,4 @@ export * from "./jws.js";
 export * from "./unsubscribe.js";
 export * from "./suppress.js";
 export * from "./scheduling.js";
+export * from "./transactional.js";

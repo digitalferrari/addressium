@@ -20,6 +20,7 @@ import type {
   EventStore,
   ListStore,
   OrganizationStore,
+  SendClaimStore,
   SendDescriptor,
   SendQueue,
   SentMessage,
@@ -131,6 +132,16 @@ export class MemEntitlements implements EntitlementStore {
   }
 }
 
+export class MemSendClaims implements SendClaimStore {
+  private set = new Set<string>();
+  async claim(orgId: string, campaignId: string) {
+    const k = `${orgId}#${campaignId}`;
+    if (this.set.has(k)) return false;
+    this.set.add(k);
+    return true;
+  }
+}
+
 /** Captures "sent" mail so tests can inspect exactly what would go out. */
 export class CaptureSender implements EmailSender {
   public sent: SentMessage[] = [];
@@ -172,5 +183,6 @@ export function memStores(): Stores {
     archive: new MemArchive(),
     events: new MemEvents(),
     entitlements: new MemEntitlements(),
+    sendClaims: new MemSendClaims(),
   };
 }

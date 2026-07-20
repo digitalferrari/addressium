@@ -127,7 +127,15 @@ export class ControlPlaneStack extends Stack {
       CONFIRM_SECRET_ARN: confirmSecret.secretArn,
       WEBHOOK_SECRET_ARN: webhookSecret.secretArn,
     };
-    const signupFn = fn("SignupFn", apiEntry, "signupHandler", apiEnv);
+    const signupFn = fn("SignupFn", apiEntry, "signupHandler", {
+      ...apiEnv,
+      CONFIRM_URL_BASE:
+        (this.node.tryGetContext("confirmUrlBase") as string | undefined) ??
+        "https://your-site.example/confirm",
+    });
+    signupFn.addToRolePolicy(
+      new PolicyStatement({ actions: ["ses:SendEmail"], resources: ["*"] }),
+    );
     const confirmFn = fn("ConfirmFn", apiEntry, "confirmHandler", apiEnv);
     const unsubscribeFn = fn("UnsubscribeFn", apiEntry, "unsubscribeHandler", apiEnv);
     const entitlementFn = fn("EntitlementFn", apiEntry, "entitlementSyncHandler", apiEnv);
