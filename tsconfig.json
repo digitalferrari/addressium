@@ -5,6 +5,7 @@
     { "path": "packages/rbac" },
     { "path": "packages/segment" },
     { "path": "packages/magiclink-verify" },
+    { "path": "packages/domain" },
     { "path": "services/api" },
     { "path": "services/sender" },
     { "path": "services/events" },

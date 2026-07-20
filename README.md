@@ -66,5 +66,19 @@ npm run build     # tsc --build across packages/services
 npm run deploy    # cdk deploy (from infra/cdk) — needs AWS creds
 ```
 
+### First vertical slice
+
+`packages/domain` implements the first end-to-end flow — **signup → double
+opt-in → send → open/click → click map** — against in-memory adapters, so it runs
+with no AWS. Its tests also exercise the security controls (magic-link ES256
+verification and algorithm-confusion rejection, token redaction, suppression, and
+the SSRF guard):
+
+```bash
+npm install -w packages/core -w packages/rbac -w packages/magiclink-verify \
+            -w services/feeds -w packages/domain
+npm test -w @addressium/domain
+```
+
 > **Status:** Early scaffold. The architecture document is the source of truth;
 > package/service stubs are in place and being filled in.

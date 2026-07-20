@@ -14,7 +14,13 @@
  * token header choose the algorithm or key type. `jose` enforces this when we
  * pass `algorithms: ["ES256"]` — do not remove it.
  */
-import { createRemoteJWKSet, jwtVerify, type JWTPayload } from "jose";
+import {
+  createRemoteJWKSet,
+  createLocalJWKSet,
+  jwtVerify,
+  type JWTPayload,
+  type JSONWebKeySet,
+} from "jose";
 
 export interface MagicLinkClaims extends JWTPayload {
   /** The subscriber's Cognito subject in the shared pool. */
@@ -30,14 +36,19 @@ export interface MagicLinkClaims extends JWTPayload {
 }
 
 export interface VerifyOptions {
-  /** The org's JWKS endpoint (per-org signing key). */
-  jwksUri: string;
   /** Expected issuer (this addressium deployment / org). */
   issuer: string;
   /** Expected audience (your site). */
   audience: string;
   /** Allowed clock skew, seconds. Default 30. */
   clockToleranceSec?: number;
+  /**
+   * Key source — exactly one of:
+   *  - `jwksUri`: the org's remote JWKS endpoint (server-side / production).
+   *  - `jwks`: an inline public JWK set (browser-embedded key, or tests).
+   */
+  jwksUri?: string;
+  jwks?: JSONWebKeySet;
 }
 
 export class MagicLinkError extends Error {
@@ -47,14 +58,33 @@ export class MagicLinkError extends Error {
   }
 }
 
-const jwksCache = new Map<string, ReturnType<typeof createRemoteJWKSet>>();
-function jwksFor(uri: string): ReturnType<typeof createRemoteJWKSet> {
-  let set = jwksCache.get(uri);
-  if (!set) {
-    set = createRemoteJWKSet(new URL(uri));
-    jwksCache.set(uri, set);
+type KeyResolver = ReturnType<typeof createRemoteJWKSet> | ReturnType<typeof createLocalJWKSet>;
+
+const remoteCache = new Map<string, KeyResolver>();
+const localCache = new Map<string, KeyResolver>();
+
+function resolveKeySet(opts: VerifyOptions): KeyResolver {
+  if (opts.jwksUri && opts.jwks) {
+    throw new MagicLinkError("provide either jwksUri or jwks, not both");
   }
-  return set;
+  if (opts.jwksUri) {
+    let set = remoteCache.get(opts.jwksUri);
+    if (!set) {
+      set = createRemoteJWKSet(new URL(opts.jwksUri));
+      remoteCache.set(opts.jwksUri, set);
+    }
+    return set;
+  }
+  if (opts.jwks) {
+    const key = JSON.stringify(opts.jwks);
+    let set = localCache.get(key);
+    if (!set) {
+      set = createLocalJWKSet(opts.jwks);
+      localCache.set(key, set);
+    }
+    return set;
+  }
+  throw new MagicLinkError("no key source: set jwksUri or jwks");
 }
 
 /**
@@ -69,18 +99,21 @@ export async function verifyMagicLinkToken(
 ): Promise<MagicLinkClaims> {
   let payload: JWTPayload;
   try {
-    ({ payload } = await jwtVerify(token, jwksFor(opts.jwksUri), {
+    ({ payload } = await jwtVerify(token, resolveKeySet(opts), {
       // RFC 8725: pin the algorithm; reject alg:none and all symmetric algs.
       algorithms: ["ES256"],
       issuer: opts.issuer,
       audience: opts.audience,
       clockTolerance: opts.clockToleranceSec ?? 30,
-      requiredClaims: ["sub", "scope", "amr", "entitlement", "exp"],
     }));
   } catch (err) {
     throw new MagicLinkError(`token verification failed: ${(err as Error).message}`);
   }
 
+  // Required claims (checked explicitly for cross-version robustness).
+  if (typeof payload.exp !== "number") {
+    throw new MagicLinkError("missing exp");
+  }
   const claims = payload as MagicLinkClaims;
 
   // Defense in depth: a magic-link session is LITE and must never be elevated.
@@ -91,12 +124,18 @@ export async function verifyMagicLinkToken(
   if (!Array.isArray(claims.amr) || !claims.amr.includes("magic_link")) {
     throw new MagicLinkError("missing amr: magic_link");
   }
+  if (claims.entitlement !== "free" && claims.entitlement !== "paid") {
+    throw new MagicLinkError("missing/invalid entitlement");
+  }
+  if (typeof claims.sub !== "string" || claims.sub.length === 0) {
+    throw new MagicLinkError("missing sub");
+  }
   return claims;
 }
 
 /**
- * Convenience: `true`/`false` instead of throwing, when you only need to decide
- * whether to drop the reg/paywall overlay (graceful fallback to the wall).
+ * Convenience: `null` instead of throwing, when you only need to decide whether
+ * to drop the reg/paywall overlay (graceful fallback to the wall).
  */
 export async function tryVerifyMagicLinkToken(
   token: string,

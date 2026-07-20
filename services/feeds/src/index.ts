@@ -7,6 +7,8 @@
  */
 import { assertPublicHttpsUrl } from "./guard.js";
 
+export { assertPublicHttpsUrl, SsrfBlockedError } from "./guard.js";
+
 export interface HandlerEvent {
   feedUrl?: string;
   [key: string]: unknown;
