@@ -1,0 +1,27 @@
+{
+  "name": "addressium",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Open-source, self-hostable replacement for the email capabilities of Amazon Pinpoint.",
+  "license": "MIT",
+  "workspaces": [
+    "packages/*",
+    "services/*",
+    "apps/*",
+    "infra/*"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc --build",
+    "typecheck": "tsc --build --dry",
+    "clean": "tsc --build --clean",
+    "test": "echo \"(no tests yet)\" && exit 0",
+    "deploy": "npm --workspace @addressium/infra-cdk run deploy"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "typescript": "^5.5.4"
+  }
+}

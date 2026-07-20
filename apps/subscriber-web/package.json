@@ -1,0 +1,13 @@
+{
+  "name": "@addressium/subscriber-web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "echo \"(scaffold) wire Vite + React here\" && exit 0",
+    "build": "echo \"(scaffold) build subscriber-web\" && exit 0"
+  },
+  "dependencies": {
+    "@addressium/core": "0.1.0"
+  }
+}
