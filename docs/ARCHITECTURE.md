@@ -546,6 +546,31 @@ addressium picks the **winner** by open or click rate after a configurable windo
 and auto-sends it to the remainder. Variant rates and the winner surface in the
 campaign report.
 
+### 4.21 Time zones
+
+**Storage and compute are UTC everywhere.** Every persisted timestamp is
+ISO-8601 `Z` and all logic runs in UTC. A time zone is an interpretation /
+presentation layer, set as the organization's **`defaultTimezone`** (an IANA
+zone, e.g. `America/Denver`) in org config, with an optional **per-recurring-
+campaign override**. Where it applies:
+
+- **Recurring send times (a real behavior, not display).** "Daily 6am ET" is a
+  recurring *wall-clock* intent and **cannot** be stored as a fixed UTC offset,
+  because DST shifts the actual instant twice a year. It is stored as
+  **timezone + cron** and evaluated by EventBridge Scheduler in that zone
+  (`ScheduleExpressionTimezone`), so it stays correct across DST. The recurring
+  schedule's zone is the **campaign override ?? org `defaultTimezone`**.
+- **One-off sends need no zone.** An instant is an instant: the API takes an
+  absolute time (with offset/`Z`), converts to UTC, and schedules `at(...)` in
+  UTC. No ambiguity.
+- **Reporting is presentation only.** Stored UTC is converted to the org zone
+  (or a per-admin preference) for display, and day-bucketing (e.g. opens/day)
+  uses that zone's local midnight. No local times are ever stored.
+
+Distinct future feature: **per-subscriber send-time optimization** (deliver in
+each *recipient's* local zone) — that keys off the subscriber's zone, not the
+org's, and is separate from this setting.
+
 ---
 
 ## 5. Data model
@@ -556,7 +581,7 @@ Entities:
 
 | Entity | Purpose | Key notes |
 |---|---|---|
-| **Organization** | A silo | name, domain(s), subscriber pool ID, KMS key ARN, SES config set, IP mode (shared/dedicated), suppression scope, setup state |
+| **Organization** | A silo | name, domain(s), subscriber pool ID, KMS key ARN, SES config set, IP mode (shared/dedicated), suppression scope, **defaultTimezone** (IANA), setup state |
 | **AdminMember** | Staff ↔ role ↔ orgs | admin-pool `sub`, role, org-scope list, MFA state (in admin pool) |
 | **Role** | Capability set | named set of capabilities (built-in + custom) |
 | **Subscriber** | Durable person record | **keyed by (`orgId`, Cognito `sub`)**; email (normalized), attributes, locale, source, consent {timestamp, ip, url}, global status, `entitlement` (free/paid) + `entitlement_asof` |

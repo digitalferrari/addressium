@@ -58,6 +58,8 @@ export const createOrgSchema = z.object({
   primaryDomain: z.string().min(1),
   siteDomain: z.string().min(1),
   region: z.string().default("us-east-1"),
+  /** IANA time zone for recurring send scheduling + reporting (§4.16, §4.21). */
+  defaultTimezone: z.string().default("UTC"),
   subscriberPool: z.union([
     z.object({ mode: z.literal("create") }),
     z.object({ mode: z.literal("link"), poolId: z.string().min(1) }),

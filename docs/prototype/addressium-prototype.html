@@ -1116,11 +1116,11 @@
         <section class="screen" data-screen="organizations">
           <div class="pagehead"><div><h1>Organizations</h1><p>Each organization is an isolated silo. Manage the subscriber-pool ↔ org ↔ domain links and per-org setup here.</p></div><button class="btn btn-primary" onclick="openModal('addorg')">＋ Add organization</button></div>
           <div class="card"><table>
-            <thead><tr><th>Organization</th><th>Domain</th><th>Subscriber pool ID</th><th>Sending IP</th><th>Suppression</th><th>Setup</th></tr></thead>
+            <thead><tr><th>Organization</th><th>Domain</th><th>Subscriber pool ID</th><th>Time zone</th><th>Sending IP</th><th>Suppression</th><th>Setup</th></tr></thead>
             <tbody>
-              <tr><td class="t-strong">Summit Daily</td><td class="mono muted">summitdaily.com</td><td class="mono muted">us-east-1_Smt7Rp4Wq</td><td><span class="pill p-neutral">Shared</span></td><td><span class="pill p-neutral">Hybrid</span></td><td><span class="pill p-good"><span class="dot"></span>Verified</span></td></tr>
-              <tr><td class="t-strong">Vail Daily</td><td class="mono muted">vaildaily.com</td><td class="mono muted">us-east-1_Vail3Kp9x</td><td><span class="pill p-paid"><span class="dot"></span>Dedicated</span></td><td><span class="pill p-neutral">Hybrid</span></td><td><span class="pill p-good"><span class="dot"></span>Verified</span></td></tr>
-              <tr><td class="t-strong">Aspen Times</td><td class="mono muted">aspentimes.com</td><td class="mono muted">us-east-1_Asp2Qw8v</td><td><span class="pill p-neutral">Shared</span></td><td><span class="pill p-neutral">Per-org</span></td><td><span class="pill p-warn"><span class="dot"></span>DMARC pending</span></td></tr>
+              <tr><td class="t-strong">Summit Daily</td><td class="mono muted">summitdaily.com</td><td class="mono muted">us-east-1_Smt7Rp4Wq</td><td class="muted">America/Denver</td><td><span class="pill p-neutral">Shared</span></td><td><span class="pill p-neutral">Hybrid</span></td><td><span class="pill p-good"><span class="dot"></span>Verified</span></td></tr>
+              <tr><td class="t-strong">Vail Daily</td><td class="mono muted">vaildaily.com</td><td class="mono muted">us-east-1_Vail3Kp9x</td><td class="muted">America/Denver</td><td><span class="pill p-paid"><span class="dot"></span>Dedicated</span></td><td><span class="pill p-neutral">Hybrid</span></td><td><span class="pill p-good"><span class="dot"></span>Verified</span></td></tr>
+              <tr><td class="t-strong">Aspen Times</td><td class="mono muted">aspentimes.com</td><td class="mono muted">us-east-1_Asp2Qw8v</td><td class="muted">America/Denver</td><td><span class="pill p-neutral">Shared</span></td><td><span class="pill p-neutral">Per-org</span></td><td><span class="pill p-warn"><span class="dot"></span>DMARC pending</span></td></tr>
             </tbody>
           </table></div>
           <div class="grid2">
@@ -1445,9 +1445,13 @@
       <div class="field"><label>Primary sending domain</label><input class="mono" type="text" placeholder="steamboatpilot.com"></div>
       <div class="grid2" style="gap:12px">
         <div class="field"><label>Region</label><select><option>us-east-1</option><option>us-west-2</option></select></div>
-        <div class="field"><label>Subscriber pool</label><select><option>Link existing pool (recommended)</option><option>Create a new pool</option></select></div>
+        <div class="field"><label>Default time zone</label><select><option>America/Denver</option><option>America/New_York</option><option>America/Chicago</option><option>America/Los_Angeles</option><option>UTC</option></select></div>
       </div>
-      <div class="field"><label>Existing user pool ID</label><input class="mono" type="text" placeholder="us-west-2_XXXXXXXXX"></div>
+      <div class="muted" style="font-size:11px;margin-top:-6px">Time zone drives recurring send schedules (DST-aware) and report bucketing — storage stays UTC.</div>
+      <div class="grid2" style="gap:12px">
+        <div class="field"><label>Subscriber pool</label><select><option>Link existing pool (recommended)</option><option>Create a new pool</option></select></div>
+        <div class="field"><label>Existing user pool ID</label><input class="mono" type="text" placeholder="us-west-2_XXXXXXXXX"></div>
+      </div>
       <div class="field"><label>Site domain (shared login / paywall)</label><input class="mono" type="text" placeholder="steamboatpilot.com"></div>
       <div class="note info"><span class="ic">▹</span><div>Most publishers already have a Cognito pool behind their site — link it so magic-link <span class="mono">sub</span> matches your existing users. Pick “create” only if this site has no auth yet.</div></div>
       <hr class="divider">

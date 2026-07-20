@@ -81,8 +81,8 @@ export async function confirmHandler(event: HttpEvent): Promise<HttpResult> {
 export interface ScheduleBody extends SendDescriptor {
   when:
     | { type: "now" }
-    | { type: "at"; at: string }
-    | { type: "recurring"; cron: string; timezone: string };
+    | { type: "at"; at: string } // absolute instant (offset/Z) — no zone needed
+    | { type: "recurring"; cron: string; timezone?: string };
 }
 
 /** POST /campaigns/schedule — send now, at a time, or recurring (§4.6, §4.16). */
@@ -107,14 +107,19 @@ export async function scheduleCampaignHandler(event: HttpEvent): Promise<HttpRes
           descriptor,
         });
         return json(202, { status: "scheduled" });
-      case "recurring":
+      case "recurring": {
+        // Zone: per-campaign override ?? org defaultTimezone (§4.21).
+        // TODO: resolve the org's defaultTimezone via an OrganizationStore when
+        // no override is given; env default is the interim fallback.
+        const timezone = body.when.timezone ?? process.env.DEFAULT_TIMEZONE ?? "UTC";
         await scheduler().scheduleRecurring({
           name: `series-${body.orgId}-${body.campaignId}`,
           cron: body.when.cron,
-          timezone: body.when.timezone,
+          timezone,
           payload: descriptor,
         });
-        return json(202, { status: "recurring" });
+        return json(202, { status: "recurring", timezone });
+      }
       default:
         return json(400, { error: "unknown schedule type" });
     }

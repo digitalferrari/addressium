@@ -63,6 +63,12 @@ export interface Organization {
   sesConfigSet: string;
   ipMode: IpMode;
   suppressionScope: DeploymentSuppressionScope;
+  /**
+   * IANA time zone (e.g. "America/Denver"). Storage stays UTC; this is the zone
+   * used to interpret RECURRING wall-clock send schedules (DST-aware) and to
+   * bucket/display reporting. A recurring campaign may override it.
+   */
+  defaultTimezone: string;
   setupComplete: boolean;
 }
 
