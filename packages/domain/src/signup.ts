@@ -29,9 +29,17 @@ export async function signup(
   const list = await stores.lists.get(input.orgId, input.listId);
   if (!list) throw new Error("unknown list");
   if (list.visibility === "closed") throw new Error("list is closed to signups");
-  // Respect suppression (hard bounce / complaint / erasure tombstone).
-  if (await stores.suppression.isSuppressed(input.orgId, email)) {
-    throw new Error("address is suppressed");
+
+  // Re-opt-in policy (#58): a suppressed address is normally rejected, but a
+  // prior *user unsubscribe* (org scope) is self-clearable — a fresh double
+  // opt-in re-establishes consent, so we drop that entry and let the confirm
+  // email send. Bounce, complaint, and manual/erasure suppression stay blocked
+  // (sender reputation + admin/legal intent).
+  const suppressions = await stores.suppression.entriesFor(input.orgId, email);
+  if (suppressions.length > 0) {
+    const clearable = suppressions.every((s) => s.source === "unsubscribe" && s.scope === "org");
+    if (!clearable) throw new Error("address is suppressed");
+    for (const s of suppressions) await stores.suppression.remove(s.orgId, s.email, s.scope);
   }
 
   // Reuse an existing subscriber (same person, keyed by Cognito sub) or create.

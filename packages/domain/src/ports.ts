@@ -18,6 +18,7 @@ import type {
   Subscriber,
   Subscription,
   SuppressionEntry,
+  SuppressionScope,
   UsageRecord,
 } from "@addressium/core";
 import type { EmailTemplate } from "./render.js";
@@ -83,6 +84,10 @@ export interface SuppressionStore {
   /** Suppressed for this org given the deployment scope (§4.13). */
   isSuppressed(orgId: string, email: string): Promise<boolean>;
   add(e: SuppressionEntry): Promise<void>;
+  /** The matching suppression entries (org + global) for an email — to inspect source/scope (#58). */
+  entriesFor(orgId: string, email: string): Promise<SuppressionEntry[]>;
+  /** Remove a suppression entry (e.g. self-clear a prior unsubscribe on genuine re-opt-in). */
+  remove(orgId: string, email: string, scope: SuppressionScope): Promise<void>;
 }
 
 export interface ArchiveStore {

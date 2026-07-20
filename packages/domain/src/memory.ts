@@ -129,8 +129,8 @@ export class MemSegments implements SegmentStore {
 }
 
 export class MemSuppression implements SuppressionStore {
-  private orgScoped = new Set<string>();
-  private global = new Set<string>();
+  private orgScoped = new Map<string, SuppressionEntry>();
+  private global = new Map<string, SuppressionEntry>();
   async isSuppressed(orgId: string, email: string) {
     const e = email.toLowerCase();
     // Global entries (hard bounces / complaints) suppress across every org.
@@ -138,8 +138,23 @@ export class MemSuppression implements SuppressionStore {
   }
   async add(e: SuppressionEntry) {
     const email = e.email.toLowerCase();
-    if (e.scope === "global") this.global.add(email);
-    else this.orgScoped.add(subKey(e.orgId, email));
+    const entry = { ...e, email };
+    if (e.scope === "global") this.global.set(email, entry);
+    else this.orgScoped.set(subKey(e.orgId, email), entry);
+  }
+  async entriesFor(orgId: string, email: string) {
+    const e = email.toLowerCase();
+    const out: SuppressionEntry[] = [];
+    const o = this.orgScoped.get(subKey(orgId, e));
+    if (o) out.push(o);
+    const g = this.global.get(e);
+    if (g) out.push(g);
+    return out;
+  }
+  async remove(orgId: string, email: string, scope: SuppressionEntry["scope"]) {
+    const e = email.toLowerCase();
+    if (scope === "global") this.global.delete(e);
+    else this.orgScoped.delete(subKey(orgId, e));
   }
 }
 
