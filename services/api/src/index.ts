@@ -11,6 +11,7 @@ import {
   SesEmailSender,
   getSecret,
 } from "@addressium/adapters-aws";
+import { schemas } from "@addressium/core";
 import {
   HmacConfirmationSigner,
   SystemClock,
@@ -18,7 +19,13 @@ import {
   buildConfirmationEmail,
   confirmOptIn,
   effectiveOneOffTime,
+  manualSuppress,
+  saveCampaignDraft,
+  saveList,
+  saveSegment,
+  setListVisibility,
   signup,
+  unsubscribeAll,
   unsubscribeFromList,
   verifyWebhookSignature,
   type SendDescriptor,
@@ -33,8 +40,12 @@ import {
 export interface HttpEvent {
   body?: string | null;
   headers?: Record<string, string | undefined>;
+  pathParameters?: Record<string, string | undefined> | null;
   queryStringParameters?: Record<string, string | undefined> | null;
-  requestContext?: { authorizer?: { jwt?: { claims?: Record<string, string | undefined> } } };
+  requestContext?: {
+    http?: { method?: string };
+    authorizer?: { jwt?: { claims?: Record<string, string | undefined> } };
+  };
 }
 export interface HttpResult {
   statusCode: number;
@@ -194,6 +205,111 @@ export async function unsubscribeHandler(event: HttpEvent): Promise<HttpResult> 
     const { orgId, sub, listId } = (await confirmSigner()).verify(token);
     await unsubscribeFromList(stores(), clock, { orgId, subscriberId: sub, listId });
     return json(200, { status: "unsubscribed" });
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+// ---- Admin CRUD (authenticated, org-scoped, RBAC-gated) — §4.1, §4.12, #18 ----
+
+/** GET /orgs/{org}/lists — list newsletters. POST — create/edit one. */
+export async function listsHandler(event: HttpEvent): Promise<HttpResult> {
+  try {
+    const method = event.requestContext?.http?.method ?? (event.body ? "POST" : "GET");
+    if (method === "POST") {
+      const input = schemas.createListSchema.parse(JSON.parse(event.body ?? "{}"));
+      requireGrant(event, "campaigns:manage", input.orgId);
+      return json(200, await saveList(stores(), input));
+    }
+    const orgId = event.pathParameters?.org ?? "";
+    requireGrant(event, "reports:view", orgId);
+    return json(200, await stores().lists.list(orgId));
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+/** POST /lists/visibility — open (reopen) or close a newsletter (destructive). */
+export async function listVisibilityHandler(event: HttpEvent): Promise<HttpResult> {
+  try {
+    const { orgId, listId, visibility } = JSON.parse(event.body ?? "{}") as {
+      orgId: string;
+      listId: string;
+      visibility: "open" | "closed";
+    };
+    if (!orgId || !listId || !visibility) return json(400, { error: "orgId, listId, visibility required" });
+    requireGrant(event, "newsletters:close", orgId);
+    return json(200, await setListVisibility(stores(), orgId, listId, visibility));
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+/** GET /orgs/{org}/campaigns/{id} — read draft. POST /campaigns — save draft. */
+export async function campaignsHandler(event: HttpEvent): Promise<HttpResult> {
+  try {
+    const method = event.requestContext?.http?.method ?? (event.body ? "POST" : "GET");
+    if (method === "POST") {
+      const input = schemas.saveCampaignSchema.parse(JSON.parse(event.body ?? "{}"));
+      requireGrant(event, "campaigns:manage", input.orgId);
+      return json(200, await saveCampaignDraft(stores(), input));
+    }
+    const orgId = event.pathParameters?.org ?? "";
+    const campaignId = event.pathParameters?.id ?? "";
+    requireGrant(event, "reports:view", orgId);
+    const campaign = await stores().campaigns.get(orgId, campaignId);
+    return campaign ? json(200, campaign) : json(404, { error: "not found" });
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+/** GET /orgs/{org}/segments — list. POST /segments — create/edit one. */
+export async function segmentsHandler(event: HttpEvent): Promise<HttpResult> {
+  try {
+    const method = event.requestContext?.http?.method ?? (event.body ? "POST" : "GET");
+    if (method === "POST") {
+      const input = schemas.saveSegmentSchema.parse(JSON.parse(event.body ?? "{}"));
+      requireGrant(event, "segments:manage", input.orgId);
+      return json(200, await saveSegment(stores(), input));
+    }
+    const orgId = event.pathParameters?.org ?? "";
+    requireGrant(event, "reports:view", orgId);
+    return json(200, await stores().segments.list(orgId));
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+/** POST /subscribers/suppress — manual suppression (admin). */
+export async function subscriberSuppressHandler(event: HttpEvent): Promise<HttpResult> {
+  try {
+    const input = schemas.manualSuppressSchema.parse(JSON.parse(event.body ?? "{}"));
+    requireGrant(event, "suppression:manage", input.orgId);
+    return json(200, await manualSuppress(stores(), clock, input));
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+/** POST /subscribers/unsubscribe — admin-initiated unsubscribe (one list or all). */
+export async function subscriberUnsubscribeHandler(event: HttpEvent): Promise<HttpResult> {
+  try {
+    const { orgId, subscriberId, listId, email } = JSON.parse(event.body ?? "{}") as {
+      orgId: string;
+      subscriberId: string;
+      listId?: string;
+      email?: string;
+    };
+    if (!orgId || !subscriberId) return json(400, { error: "orgId and subscriberId required" });
+    requireGrant(event, "subscribers:manage", orgId);
+    if (listId) {
+      await unsubscribeFromList(stores(), clock, { orgId, subscriberId, listId });
+      return json(200, { status: "unsubscribed", scope: "list" });
+    }
+    if (!email) return json(400, { error: "email required for unsubscribe-all" });
+    const n = await unsubscribeAll(stores(), clock, { orgId, subscriberId, email });
+    return json(200, { status: "unsubscribed", scope: "all", lists: n });
   } catch (e) {
     return fail(e);
   }

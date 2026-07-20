@@ -32,6 +32,8 @@ export type SignupInput = z.infer<typeof signupSchema>;
 
 /** Create-newsletter payload (admin). */
 export const createListSchema = z.object({
+  orgId: z.string().min(1),
+  listId: z.string().min(1),
   name: z.string().min(1),
   description: z.string().optional(),
   optInPolicy,
@@ -39,8 +41,40 @@ export const createListSchema = z.object({
   replyTo: z.string().email().optional(),
   access: listAccess.default("free"),
   visibility: listVisibility.default("open"),
+  // CAN-SPAM: every list carries its compliance footer + physical address (§6).
+  complianceFooter: z.string().min(1),
+  physicalAddress: z.string().min(1),
 });
 export type CreateListInput = z.infer<typeof createListSchema>;
+
+/** Save-campaign-draft payload (admin). */
+export const saveCampaignSchema = z.object({
+  orgId: z.string().min(1),
+  campaignId: z.string().min(1),
+  type: z.enum(["one_off", "series_edition"]),
+  seriesId: z.string().optional(),
+  subject: z.string().min(1),
+  previewText: z.string().optional(),
+  templateId: z.string().min(1),
+  audience: z.object({ listId: z.string().optional(), segmentId: z.string().optional() }),
+});
+export type SaveCampaignInput = z.infer<typeof saveCampaignSchema>;
+
+/** Create/update-segment payload (admin). */
+export const saveSegmentSchema = z.object({
+  orgId: z.string().min(1),
+  segmentId: z.string().min(1),
+  name: z.string().min(1),
+  predicate: z.unknown(),
+});
+export type SaveSegmentInput = z.infer<typeof saveSegmentSchema>;
+
+/** Manual suppression payload (admin). */
+export const manualSuppressSchema = z.object({
+  orgId: z.string().min(1),
+  email: z.string().email(),
+});
+export type ManualSuppressInput = z.infer<typeof manualSuppressSchema>;
 
 /** Inbound entitlement sync from the billing system of record (§4.3). */
 export const entitlementSyncSchema = z.object({

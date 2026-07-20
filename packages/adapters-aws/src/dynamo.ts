@@ -22,6 +22,7 @@ import type {
   EntitlementSync,
   List,
   Organization,
+  Segment,
   Subscriber,
   Subscription,
   SuppressionEntry,
@@ -36,6 +37,7 @@ import type {
   EventStore,
   ListStore,
   OrganizationStore,
+  SegmentStore,
   SendClaimStore,
   Stores,
   SubscriberStore,
@@ -178,6 +180,23 @@ export class DynamoStores implements Stores {
   lists: ListStore = {
     get: (orgId, listId) => this.get<List>(org(orgId), `LIST#${listId}`),
     put: (l) => this.put({ pk: org(l.orgId), sk: `LIST#${l.listId}`, data: l }),
+    list: (orgId) =>
+      this.queryAll<List>({
+        TableName: this.tableName,
+        KeyConditionExpression: "pk = :pk AND begins_with(sk, :s)",
+        ExpressionAttributeValues: { ":pk": org(orgId), ":s": "LIST#" },
+      }),
+  };
+
+  segments: SegmentStore = {
+    get: (orgId, segmentId) => this.get<Segment>(org(orgId), `SEGMENT#${segmentId}`),
+    put: (s) => this.put({ pk: org(s.orgId), sk: `SEGMENT#${s.segmentId}`, data: s }),
+    list: (orgId) =>
+      this.queryAll<Segment>({
+        TableName: this.tableName,
+        KeyConditionExpression: "pk = :pk AND begins_with(sk, :s)",
+        ExpressionAttributeValues: { ":pk": org(orgId), ":s": "SEGMENT#" },
+      }),
   };
 
   suppression: SuppressionStore = {

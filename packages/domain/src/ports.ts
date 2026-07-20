@@ -13,6 +13,7 @@ import type {
   EntitlementSync,
   List,
   Organization,
+  Segment,
   Subscriber,
   Subscription,
   SuppressionEntry,
@@ -66,6 +67,13 @@ export interface SubscriptionStore {
 export interface ListStore {
   get(orgId: string, listId: string): Promise<List | undefined>;
   put(l: List): Promise<void>;
+  list(orgId: string): Promise<List[]>;
+}
+
+export interface SegmentStore {
+  get(orgId: string, segmentId: string): Promise<Segment | undefined>;
+  put(s: Segment): Promise<void>;
+  list(orgId: string): Promise<Segment[]>;
 }
 
 export interface SuppressionStore {
@@ -202,4 +210,5 @@ export interface Stores {
   series: CampaignSeriesStore;
   alerts: AlertConfigStore;
   usage: UsageStore;
+  segments: SegmentStore;
 }

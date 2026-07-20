@@ -11,6 +11,7 @@ import type {
   EntitlementSync,
   List,
   Organization,
+  Segment,
   Subscriber,
   Subscription,
   SuppressionEntry,
@@ -29,6 +30,7 @@ import type {
   EventStore,
   ListStore,
   OrganizationStore,
+  SegmentStore,
   SendClaimStore,
   SendDescriptor,
   SendQueue,
@@ -99,6 +101,22 @@ export class MemLists implements ListStore {
   }
   async put(l: List) {
     this.map.set(subKey(l.orgId, l.listId), l);
+  }
+  async list(orgId: string) {
+    return [...this.map.values()].filter((l) => l.orgId === orgId);
+  }
+}
+
+export class MemSegments implements SegmentStore {
+  private map = new Map<string, Segment>();
+  async get(orgId: string, segmentId: string) {
+    return this.map.get(subKey(orgId, segmentId));
+  }
+  async put(s: Segment) {
+    this.map.set(subKey(s.orgId, s.segmentId), s);
+  }
+  async list(orgId: string) {
+    return [...this.map.values()].filter((s) => s.orgId === orgId);
   }
 }
 
@@ -255,5 +273,6 @@ export function memStores(): Stores {
     series: new MemCampaignSeries(),
     alerts: new MemAlertConfigs(),
     usage: new MemUsage(),
+    segments: new MemSegments(),
   };
 }
