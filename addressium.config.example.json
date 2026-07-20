@@ -1,0 +1,9 @@
+{
+  "$comment": "Copy to addressium.config.json (gitignored) before `cdk deploy`. These bootstrap the SHARED control plane. `cdk deploy` creates the admin Cognito pool and seeds each adminEmail as a user — Cognito emails them a temporary-password invite so someone can actually sign in. After first login, invite the rest of the team from the console. Per-org subscriber pools are NOT set here; they're created (or linked to an existing pool) when you Add an organization.",
+  "stage": "prod",
+  "region": "us-east-1",
+  "adminEmails": [
+    "you@example.com"
+  ],
+  "adminHostedUiDomainPrefix": "addressium-admin"
+}

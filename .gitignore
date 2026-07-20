@@ -1,0 +1,11 @@
+node_modules/
+dist/
+build/
+*.tsbuildinfo
+cdk.out/
+.env
+.env.*
+addressium.config.json
+coverage/
+.DS_Store
+*.log

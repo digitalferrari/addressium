@@ -1,0 +1,1584 @@
+<title>addressium — clickable prototype</title>
+<style>
+  :root{
+    --bg:#f4f6fa; --surface:#ffffff; --surface-2:#eef1f7; --surface-3:#e7ebf3;
+    --border:#d7dde8; --border-strong:#c2cbdb;
+    --ink:#151d2b; --ink-2:#48566b; --ink-3:#77839a; --ink-4:#9aa4b8;
+    --accent:#2f56d4; --accent-ink:#213f9e; --accent-soft:#e6ecfb; --accent-soft-2:#d3ddf8;
+    --good:#12855a; --good-soft:#dcf2e6;
+    --warn:#a56a12; --warn-soft:#f8eed8;
+    --crit:#c3372f; --crit-soft:#fae1df;
+    --paid:#6d3fc4; --paid-soft:#ece2fb;
+    --radius:10px; --radius-sm:7px;
+    --shadow:0 1px 2px rgba(20,29,43,.06),0 4px 16px rgba(20,29,43,.06);
+    --shadow-lg:0 8px 40px rgba(20,29,43,.16);
+    --mono:ui-monospace,"SF Mono",SFMono-Regular,Menlo,Consolas,monospace;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,Roboto,Helvetica,Arial,sans-serif;
+  }
+  @media (prefers-color-scheme:dark){
+    :root{
+      --bg:#0c1220; --surface:#121a2a; --surface-2:#182234; --surface-3:#1f2c42;
+      --border:#28344c; --border-strong:#37475f;
+      --ink:#e8edf6; --ink-2:#a6b3c9; --ink-3:#7382a0; --ink-4:#5a6884;
+      --accent:#6b8bf5; --accent-ink:#a9bdfb; --accent-soft:#1a2745; --accent-soft-2:#233257;
+      --good:#3ec98a; --good-soft:#123024;
+      --warn:#e0a94a; --warn-soft:#33280f;
+      --crit:#f0756c; --crit-soft:#341614;
+      --paid:#b18cf0; --paid-soft:#241a3c;
+      --shadow:0 1px 2px rgba(0,0,0,.4),0 4px 16px rgba(0,0,0,.35);
+      --shadow-lg:0 8px 40px rgba(0,0,0,.55);
+    }
+  }
+  :root[data-theme="dark"]{
+    --bg:#0c1220; --surface:#121a2a; --surface-2:#182234; --surface-3:#1f2c42;
+    --border:#28344c; --border-strong:#37475f;
+    --ink:#e8edf6; --ink-2:#a6b3c9; --ink-3:#7382a0; --ink-4:#5a6884;
+    --accent:#6b8bf5; --accent-ink:#a9bdfb; --accent-soft:#1a2745; --accent-soft-2:#233257;
+    --good:#3ec98a; --good-soft:#123024; --warn:#e0a94a; --warn-soft:#33280f;
+    --crit:#f0756c; --crit-soft:#341614; --paid:#b18cf0; --paid-soft:#241a3c;
+    --shadow:0 1px 2px rgba(0,0,0,.4),0 4px 16px rgba(0,0,0,.35);
+    --shadow-lg:0 8px 40px rgba(0,0,0,.55);
+  }
+  :root[data-theme="light"]{
+    --bg:#f4f6fa; --surface:#ffffff; --surface-2:#eef1f7; --surface-3:#e7ebf3;
+    --border:#d7dde8; --border-strong:#c2cbdb;
+    --ink:#151d2b; --ink-2:#48566b; --ink-3:#77839a; --ink-4:#9aa4b8;
+    --accent:#2f56d4; --accent-ink:#213f9e; --accent-soft:#e6ecfb; --accent-soft-2:#d3ddf8;
+    --good:#12855a; --good-soft:#dcf2e6; --warn:#a56a12; --warn-soft:#f8eed8;
+    --crit:#c3372f; --crit-soft:#fae1df; --paid:#6d3fc4; --paid-soft:#ece2fb;
+    --shadow:0 1px 2px rgba(20,29,43,.06),0 4px 16px rgba(20,29,43,.06);
+    --shadow-lg:0 8px 40px rgba(20,29,43,.16);
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);
+    font-size:14px;line-height:1.5;-webkit-font-smoothing:antialiased}
+  h1,h2,h3,h4{margin:0;text-wrap:balance;line-height:1.2}
+  a{color:inherit;text-decoration:none}
+  button{font-family:inherit}
+  .mono{font-family:var(--mono)}
+  .num{font-variant-numeric:tabular-nums}
+  ::selection{background:var(--accent-soft-2)}
+
+  /* ---------- prototype chrome ---------- */
+  .protobar{position:sticky;top:0;z-index:60;display:flex;align-items:center;gap:14px;
+    padding:8px 16px;background:color-mix(in srgb,var(--surface) 88%,transparent);
+    backdrop-filter:blur(10px);border-bottom:1px solid var(--border)}
+  .protobar .brand{display:flex;align-items:center;gap:9px;font-weight:700;letter-spacing:-.01em}
+  .stamp{width:22px;height:22px;border-radius:6px;background:var(--accent);position:relative;
+    box-shadow:inset 0 0 0 1.5px color-mix(in srgb,#fff 22%,transparent)}
+  .stamp::before{content:"";position:absolute;inset:4px;border:1.6px dashed rgba(255,255,255,.85);border-radius:2px}
+  .proto-tag{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-3);
+    border:1px solid var(--border);padding:2px 7px;border-radius:20px}
+  .seg{display:flex;background:var(--surface-2);border:1px solid var(--border);border-radius:8px;padding:3px;gap:2px}
+  .seg button{border:0;background:transparent;color:var(--ink-2);font-size:12.5px;font-weight:600;
+    padding:6px 12px;border-radius:6px;cursor:pointer}
+  .seg button.on{background:var(--surface);color:var(--ink);box-shadow:var(--shadow)}
+  .protobar .spacer{flex:1}
+  .iconbtn{border:1px solid var(--border);background:var(--surface);color:var(--ink-2);
+    width:34px;height:34px;border-radius:8px;cursor:pointer;font-size:15px;display:grid;place-items:center}
+  .iconbtn:hover{color:var(--ink);border-color:var(--border-strong)}
+
+  /* ---------- generic components ---------- */
+  .btn{display:inline-flex;align-items:center;gap:7px;border:1px solid var(--border-strong);
+    background:var(--surface);color:var(--ink);font-weight:600;font-size:13px;padding:8px 14px;
+    border-radius:8px;cursor:pointer;white-space:nowrap}
+  .btn:hover{border-color:var(--ink-3)}
+  .btn-primary{background:var(--accent);border-color:var(--accent);color:#fff}
+  .btn-primary:hover{background:var(--accent-ink);border-color:var(--accent-ink)}
+  .btn-ghost{background:transparent;border-color:transparent;color:var(--ink-2)}
+  .btn-ghost:hover{background:var(--surface-2);color:var(--ink)}
+  .btn-sm{padding:5px 10px;font-size:12px}
+  .pill{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;font-weight:650;
+    padding:3px 9px;border-radius:20px;line-height:1.4;white-space:nowrap}
+  .pill .dot{width:6px;height:6px;border-radius:50%;background:currentColor}
+  .p-good{background:var(--good-soft);color:var(--good)}
+  .p-warn{background:var(--warn-soft);color:var(--warn)}
+  .p-crit{background:var(--crit-soft);color:var(--crit)}
+  .p-accent{background:var(--accent-soft);color:var(--accent-ink)}
+  .p-paid{background:var(--paid-soft);color:var(--paid)}
+  .p-neutral{background:var(--surface-3);color:var(--ink-2)}
+  .card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow)}
+  .muted{color:var(--ink-3)}
+  .eyebrow{font-size:11px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:var(--ink-3)}
+  .divider{height:1px;background:var(--border);border:0;margin:0}
+
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th{text-align:left;font-size:11px;letter-spacing:.05em;text-transform:uppercase;color:var(--ink-3);
+    font-weight:700;padding:10px 14px;border-bottom:1px solid var(--border)}
+  td{padding:12px 14px;border-bottom:1px solid var(--border);vertical-align:middle}
+  tbody tr:last-child td{border-bottom:0}
+  tfoot td{border-top:2px solid var(--border-strong);background:var(--surface-2)}
+  tbody tr:hover{background:var(--surface-2)}
+  .t-strong{font-weight:650}
+  .rc{text-align:center;font-size:14px}
+  .rc.y{color:var(--good);font-weight:700}
+  .rc.n{color:var(--ink-4)}
+
+  .field{display:flex;flex-direction:column;gap:6px}
+  .field label{font-size:12.5px;font-weight:600;color:var(--ink-2)}
+  .input,input[type=text],input[type=email],input[type=password],select,textarea{
+    width:100%;padding:9px 12px;border:1px solid var(--border-strong);border-radius:8px;
+    background:var(--surface);color:var(--ink);font-family:inherit;font-size:13.5px}
+  .input:focus,input:focus,select:focus,textarea:focus{outline:2px solid var(--accent);outline-offset:0;border-color:var(--accent)}
+  .checkline{display:flex;gap:10px;align-items:flex-start;padding:12px 0}
+  .checkline input{margin-top:3px;width:16px;height:16px;accent-color:var(--accent)}
+
+  /* ---------- frames ---------- */
+  .frame{display:none}
+  .frame.on{display:block}
+
+  /* ---------- admin shell ---------- */
+  .shell{display:grid;grid-template-columns:236px 1fr;min-height:calc(100vh - 51px)}
+  .side{background:var(--surface);border-right:1px solid var(--border);padding:16px 12px;display:flex;flex-direction:column;gap:3px}
+  .side .org{display:flex;align-items:center;gap:10px;padding:6px 8px 14px}
+  .side .org .stamp{width:28px;height:28px;border-radius:7px}
+  .side .org b{font-size:14px;letter-spacing:-.01em}
+  .side .org small{color:var(--ink-3);font-size:11.5px}
+  .navlab{font-size:10.5px;letter-spacing:.09em;text-transform:uppercase;color:var(--ink-4);
+    padding:14px 10px 5px;font-weight:700}
+  .navlink{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:8px;color:var(--ink-2);
+    font-weight:550;cursor:pointer;font-size:13.5px}
+  .navlink:hover{background:var(--surface-2);color:var(--ink)}
+  .navlink.on{background:var(--accent-soft);color:var(--accent-ink);font-weight:650}
+  .navlink .ic{width:17px;text-align:center;opacity:.9}
+  .navlink .tag{margin-left:auto;font-size:10.5px;background:var(--surface-3);color:var(--ink-3);padding:1px 7px;border-radius:20px;font-weight:650}
+
+  .main{min-width:0;display:flex;flex-direction:column}
+  .topbar{display:flex;align-items:center;gap:14px;padding:11px 26px;border-bottom:1px solid var(--border);background:var(--surface)}
+  .crumbs{font-size:12.5px;color:var(--ink-3)}
+  .crumbs b{color:var(--ink-2);font-weight:600}
+  .searchbox{flex:1;max-width:340px;display:flex;align-items:center;gap:8px;background:var(--surface-2);
+    border:1px solid var(--border);border-radius:8px;padding:7px 11px;color:var(--ink-3);font-size:13px}
+  .searchbox input{border:0;background:transparent;padding:0;font-size:13px}
+  .searchbox input:focus{outline:0}
+  .envchip{display:flex;align-items:center;gap:7px;font-size:12px;font-weight:600;color:var(--ink-2);
+    border:1px solid var(--border);border-radius:8px;padding:6px 10px}
+  .avatar{width:30px;height:30px;border-radius:50%;background:linear-gradient(135deg,var(--accent),var(--paid));
+    color:#fff;display:grid;place-items:center;font-size:12px;font-weight:700}
+  .content{padding:26px;display:flex;flex-direction:column;gap:20px;max-width:1180px}
+  .screen{display:none;flex-direction:column;gap:20px}
+  .screen.on{display:flex}
+
+  .pagehead{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;flex-wrap:wrap}
+  .pagehead h1{font-size:23px;letter-spacing:-.02em}
+  .pagehead p{margin:5px 0 0;color:var(--ink-3);font-size:13.5px}
+  .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+
+  .kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}
+  .kpi{padding:15px 16px;display:flex;flex-direction:column;gap:3px}
+  .kpi .lab{font-size:12px;color:var(--ink-3);font-weight:600;display:flex;align-items:center;gap:6px}
+  .kpi .val{font-size:26px;font-weight:730;letter-spacing:-.02em}
+  .kpi .delta{font-size:11.5px;font-weight:650}
+  .up{color:var(--good)} .down{color:var(--crit)}
+  .grid2{display:grid;grid-template-columns:1.55fr 1fr;gap:16px}
+  .cardpad{padding:18px}
+  .cardhead{display:flex;align-items:center;justify-content:space-between;padding:14px 18px;border-bottom:1px solid var(--border)}
+  .cardhead h3{font-size:14.5px}
+
+  .health{display:flex;flex-direction:column;gap:12px;padding:16px 18px}
+  .hrow{display:flex;align-items:center;gap:12px}
+  .hbar{flex:1;height:7px;border-radius:20px;background:var(--surface-3);overflow:hidden}
+  .hbar i{display:block;height:100%;border-radius:20px}
+  .hrow .hv{font-size:12.5px;font-weight:700;width:52px;text-align:right}
+
+  .list-clean li{list-style:none}
+  .actlist{display:flex;flex-direction:column}
+  .actitem{display:flex;gap:12px;align-items:center;padding:12px 18px;border-bottom:1px solid var(--border)}
+  .actitem:last-child{border-bottom:0}
+  .actitem .ci{width:34px;height:34px;border-radius:8px;background:var(--accent-soft);color:var(--accent-ink);
+    display:grid;place-items:center;font-size:15px;flex:none}
+  .actitem .meta{flex:1;min-width:0}
+  .actitem .meta b{font-size:13.5px}
+  .actitem .meta div{font-size:12px;color:var(--ink-3)}
+
+  .toolbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  .filterchip{border:1px solid var(--border);background:var(--surface);border-radius:20px;padding:6px 12px;
+    font-size:12.5px;color:var(--ink-2);cursor:pointer;font-weight:550}
+  .filterchip.on{background:var(--accent-soft);border-color:transparent;color:var(--accent-ink);font-weight:650}
+
+  .avatar-sm{width:26px;height:26px;border-radius:50%;background:var(--surface-3);color:var(--ink-2);
+    display:inline-grid;place-items:center;font-size:10.5px;font-weight:700;flex:none}
+  .cellwho{display:flex;align-items:center;gap:9px}
+  .spark{display:block}
+
+  /* segmented tabs inside a card / page */
+  .tabs{display:flex;gap:2px;background:var(--surface-2);border:1px solid var(--border);border-radius:9px;padding:3px;width:max-content}
+  .tabs button{border:0;background:transparent;color:var(--ink-2);font-weight:600;font-size:12.5px;padding:7px 13px;border-radius:6px;cursor:pointer}
+  .tabs button.on{background:var(--surface);color:var(--ink);box-shadow:var(--shadow)}
+  .tabpane{display:none}.tabpane.on{display:block}
+
+  /* ---------- cognito hosted UI ---------- */
+  .cog-wrap{min-height:calc(100vh - 51px);display:grid;place-items:center;padding:40px 20px}
+  .cog-wrap.admin{background:
+     radial-gradient(1200px 500px at 50% -10%,var(--accent-soft),transparent),var(--bg)}
+  .cog-wrap.sub{background:
+     radial-gradient(1000px 460px at 50% -10%,#f6ede1,transparent),var(--bg)}
+  :root[data-theme="dark"] .cog-wrap.sub{background:radial-gradient(1000px 460px at 50% -10%,#2a2113,transparent),var(--bg)}
+  @media(prefers-color-scheme:dark){:root:not([data-theme="light"]) .cog-wrap.sub{background:radial-gradient(1000px 460px at 50% -10%,#2a2113,transparent),var(--bg)}}
+  .cog{width:100%;max-width:392px;display:flex;flex-direction:column;gap:14px}
+  .cog-card{background:var(--surface);border:1px solid var(--border);border-radius:14px;box-shadow:var(--shadow-lg);padding:30px 30px 26px}
+  .cog-logo{display:flex;align-items:center;gap:10px;justify-content:center;margin-bottom:6px}
+  .cog-logo .stamp{width:30px;height:30px}
+  .cog-logo b{font-size:18px;letter-spacing:-.01em}
+  .cog h2{text-align:center;font-size:17px;margin:8px 0 2px}
+  .cog .sub{text-align:center;color:var(--ink-3);font-size:12.5px;margin-bottom:18px}
+  .cog form{display:flex;flex-direction:column;gap:13px}
+  .cog .flink{color:var(--accent-ink);font-size:12.5px;font-weight:600}
+  .cog .or{display:flex;align-items:center;gap:12px;color:var(--ink-4);font-size:11.5px;margin:4px 0}
+  .cog .or::before,.cog .or::after{content:"";flex:1;height:1px;background:var(--border)}
+  .cog .foot{text-align:center;font-size:11px;color:var(--ink-4);margin-top:6px}
+  .cog .foot .mfa{display:inline-flex;gap:6px;align-items:center;color:var(--ink-3);
+    background:var(--surface-2);border:1px solid var(--border);padding:4px 10px;border-radius:20px;font-weight:600}
+  .poolchip{align-self:center;font-size:11px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;
+    padding:4px 11px;border-radius:20px}
+  .poolchip.admin{background:var(--accent-soft);color:var(--accent-ink)}
+  .poolchip.sub{background:#f4e7d4;color:#8a5a1c}
+  :root[data-theme="dark"] .poolchip.sub{background:#33280f;color:#e0a94a}
+
+  /* ---------- subscriber site ---------- */
+  .pub{max-width:960px;margin:0 auto;padding:30px 22px 70px}
+  .pubnav{display:flex;align-items:center;gap:14px;padding:14px 22px;border-bottom:1px solid var(--border);background:var(--surface)}
+  .pubnav .plogo{display:flex;align-items:center;gap:9px;font-weight:750;font-size:15px;letter-spacing:-.01em}
+  .pubnav .plogo .mark{width:24px;height:24px;border-radius:6px;background:linear-gradient(135deg,#c98a3a,#9a5a20);color:#fff;display:grid;place-items:center;font-size:12px;font-weight:800}
+  .pub h1{font-size:28px;letter-spacing:-.02em}
+  .pub .lede{color:var(--ink-3);font-size:15px;margin-top:8px;max-width:60ch}
+  .nl-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:14px;margin-top:24px}
+  .nl{padding:18px;display:flex;flex-direction:column;gap:10px}
+  .nl .top{display:flex;align-items:flex-start;justify-content:space-between;gap:10px}
+  .nl h3{font-size:16px;letter-spacing:-.01em}
+  .nl .freq{font-size:12px;color:var(--ink-3);margin-top:2px}
+  .nl p{font-size:13px;color:var(--ink-2);margin:0;line-height:1.5}
+  .nl .foot{display:flex;align-items:center;justify-content:space-between;margin-top:auto;padding-top:6px}
+  .nl .cnt{font-size:12px;color:var(--ink-3)}
+  .toggle{position:relative;width:42px;height:24px;border-radius:20px;background:var(--surface-3);border:1px solid var(--border-strong);cursor:pointer;flex:none;transition:.15s}
+  .toggle i{position:absolute;top:2px;left:2px;width:18px;height:18px;border-radius:50%;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.3);transition:.15s}
+  .toggle.on{background:var(--accent);border-color:var(--accent)}
+  .toggle.on i{left:20px}
+  .centercard{max-width:460px;margin:40px auto 0}
+  .bigcheck{width:56px;height:56px;border-radius:50%;background:var(--good-soft);color:var(--good);display:grid;place-items:center;font-size:26px;margin:0 auto 6px}
+  .prefrow{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:16px 0;border-bottom:1px solid var(--border)}
+  .prefrow:last-child{border-bottom:0}
+  .prefrow .info b{font-size:14px}
+  .prefrow .info div{font-size:12.5px;color:var(--ink-3);margin-top:2px}
+
+  .note{display:flex;gap:10px;padding:12px 14px;border-radius:9px;font-size:12.5px;line-height:1.5}
+  .note.info{background:var(--accent-soft);color:var(--accent-ink)}
+  .note.warn{background:var(--warn-soft);color:var(--warn)}
+  .note .ic{flex:none}
+
+  .kv{display:grid;grid-template-columns:auto 1fr;gap:6px 18px;font-size:13px}
+  .kv dt{color:var(--ink-3)} .kv dd{margin:0;font-weight:600}
+
+  /* click-map email */
+  .emailview{background:var(--surface-2);border:1px solid var(--border);border-radius:12px;padding:22px;display:flex;justify-content:center}
+  .email{width:100%;max-width:520px;background:#fff;color:#1c2431;border-radius:8px;overflow:hidden;box-shadow:var(--shadow);position:relative}
+  :root[data-theme="dark"] .email{background:#0f1725;color:#dfe6f1}
+  .email .ehead{padding:16px 22px;border-bottom:1px solid rgba(0,0,0,.08);display:flex;align-items:center;gap:9px;font-weight:750}
+  :root[data-theme="dark"] .email .ehead{border-color:rgba(255,255,255,.08)}
+  .email .ebody{padding:20px 22px;display:flex;flex-direction:column;gap:13px;font-size:13.5px;line-height:1.6}
+  .email h4{font-size:17px;letter-spacing:-.01em}
+  .elink{position:relative;color:var(--accent-ink);font-weight:650;text-decoration:underline;text-underline-offset:2px}
+  :root[data-theme="dark"] .elink{color:#8fa9fb}
+  .badge{position:absolute;top:-10px;right:-14px;background:var(--accent);color:#fff;font-size:10.5px;font-weight:750;
+    padding:2px 7px;border-radius:20px;box-shadow:0 2px 6px rgba(47,86,212,.5);white-space:nowrap}
+  .badge.hot{background:var(--crit);box-shadow:0 2px 6px rgba(195,55,47,.5)}
+  .adslot{border:1px dashed var(--border-strong);border-radius:8px;padding:14px;text-align:center;color:var(--ink-3);font-size:12px;position:relative}
+  .adtag{position:absolute;top:-9px;left:12px;background:var(--surface);font-size:10px;padding:1px 7px;border-radius:20px;border:1px solid var(--border);color:var(--ink-3);font-weight:700}
+  .legend{display:flex;gap:16px;flex-wrap:wrap;font-size:12px;color:var(--ink-2);margin-top:2px}
+  .legend span{display:inline-flex;align-items:center;gap:6px}
+  .sw{width:11px;height:11px;border-radius:3px;display:inline-block}
+
+  .steps{display:flex;gap:8px;align-items:center;font-size:12.5px;font-weight:650;color:var(--ink-3)}
+  .steps .s{display:flex;align-items:center;gap:7px}
+  .steps .n{width:22px;height:22px;border-radius:50%;background:var(--surface-3);display:grid;place-items:center;font-size:11px;color:var(--ink-3)}
+  .steps .s.on{color:var(--ink)} .steps .s.on .n{background:var(--accent);color:#fff}
+  .steps .s.done .n{background:var(--good);color:#fff}
+  .steps .bar{width:26px;height:1.5px;background:var(--border)}
+
+  .flowmap{display:flex;flex-direction:column;gap:0}
+  .fnode{border:1px solid var(--border);border-radius:10px;padding:13px 15px;background:var(--surface);display:flex;gap:12px;align-items:center}
+  .fnode .fi{width:34px;height:34px;border-radius:8px;display:grid;place-items:center;font-size:15px;flex:none}
+  .fnode b{font-size:13.5px} .fnode div small{color:var(--ink-3);font-size:12px}
+  .fconn{width:2px;height:20px;background:var(--border);margin-left:31px}
+  .fwait{align-self:flex-start;margin-left:22px;font-size:11.5px;color:var(--ink-3);background:var(--surface-2);border:1px solid var(--border);padding:2px 9px;border-radius:20px;font-weight:600}
+
+  .menubtn{display:none}
+  .scrim{display:none}
+  @media(max-width:900px){
+    .shell{grid-template-columns:1fr}
+    .side{position:fixed;top:50px;left:0;bottom:0;width:250px;z-index:70;transform:translateX(-100%);
+      transition:transform .2s ease;box-shadow:var(--shadow-lg);overflow-y:auto}
+    .side.open{transform:none}
+    .scrim{position:fixed;inset:50px 0 0 0;background:rgba(0,0,0,.42);z-index:65}
+    .scrim.on{display:block}
+    .menubtn{display:grid}
+    .content{padding:18px}
+    .kpis{grid-template-columns:repeat(2,1fr)}.grid2{grid-template-columns:1fr}.nl-grid{grid-template-columns:1fr}
+    .pubnav{flex-wrap:wrap}
+  }
+  @media(max-width:560px){.kpis{grid-template-columns:1fr}}
+  /* modal */
+  .modal-bk{position:fixed;inset:0;background:rgba(9,14,24,.55);backdrop-filter:blur(3px);z-index:100;
+    display:none;align-items:flex-start;justify-content:center;padding:5vh 18px;overflow:auto}
+  .modal-bk.on{display:flex}
+  .modal{background:var(--surface);border:1px solid var(--border);border-radius:14px;box-shadow:var(--shadow-lg);
+    width:100%;max-width:560px;display:flex;flex-direction:column;max-height:90vh}
+  .modal.wide{max-width:600px}
+  .modal-h{display:flex;align-items:center;justify-content:space-between;padding:15px 20px;border-bottom:1px solid var(--border)}
+  .modal-h h3{font-size:15px}
+  .modal-b{padding:20px;overflow:auto;display:flex;flex-direction:column;gap:14px}
+  .modal-f{display:flex;gap:8px;justify-content:flex-end;padding:14px 20px;border-top:1px solid var(--border)}
+  .xbtn{border:0;background:transparent;color:var(--ink-3);font-size:20px;line-height:1;cursor:pointer;width:30px;height:30px;border-radius:7px}
+  .xbtn:hover{background:var(--surface-2);color:var(--ink)}
+  /* funnel */
+  .funnel{display:flex;flex-direction:column;gap:11px;padding:6px 2px}
+  .frow{display:flex;align-items:center;gap:12px}
+  .frow .fl{width:130px;font-size:13px;font-weight:600}
+  .fbar{flex:1;height:32px;border-radius:8px;background:var(--surface-3);overflow:hidden;position:relative}
+  .fbar i{display:block;height:100%;background:linear-gradient(90deg,var(--accent),color-mix(in srgb,var(--accent) 60%,var(--paid)));border-radius:8px}
+  .fbar span{position:absolute;right:11px;top:50%;transform:translateY(-50%);font-size:12px;font-weight:700;color:var(--ink);font-variant-numeric:tabular-nums}
+  .apane{display:none}.apane.on{display:flex;flex-direction:column;gap:16px}
+  /* visual builder */
+  .builder{display:grid;grid-template-columns:186px 1fr 224px;gap:14px;min-height:460px}
+  .palette,.inspector{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:13px;display:flex;flex-direction:column;gap:8px}
+  .palette .plab,.inspector .plab{font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-4);font-weight:700;margin-bottom:2px}
+  .blk{border:1px solid var(--border);border-radius:8px;padding:9px 11px;font-size:12.5px;font-weight:600;color:var(--ink-2);cursor:grab;display:flex;align-items:center;gap:9px;background:var(--surface-2)}
+  .blk:hover{border-color:var(--accent);color:var(--accent-ink)}
+  .canvas{background:var(--surface-2);border:1px solid var(--border);border-radius:10px;padding:18px;overflow:auto}
+  .canvasdoc{max-width:520px;margin:0 auto;background:#fff;border-radius:8px;box-shadow:var(--shadow);overflow:hidden;color:#1c2431}
+  :root[data-theme="dark"] .canvasdoc{background:#0f1725;color:#dfe6f1}
+  .cblk{padding:15px 18px;border:1.5px dashed transparent;position:relative;cursor:pointer;font-size:13.5px;line-height:1.6}
+  .cblk:hover{border-color:var(--accent-soft-2)}
+  .cblk.sel{border-color:var(--accent);background:var(--accent-soft)}
+  .cblk .tagname{position:absolute;top:-8px;left:10px;font-size:9.5px;background:var(--accent);color:#fff;padding:1px 6px;border-radius:20px;opacity:0;font-weight:700}
+  .cblk.sel .tagname,.cblk:hover .tagname{opacity:1}
+  .insp-field{display:flex;flex-direction:column;gap:5px}
+  .insp-field label{font-size:11.5px;font-weight:600;color:var(--ink-2)}
+  .insp-field input,.insp-field select{padding:7px 9px;font-size:12.5px}
+  @media(max-width:900px){.builder{grid-template-columns:1fr}}
+  @media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+
+<!-- ============ PROTOTYPE TOP BAR ============ -->
+<div class="protobar">
+  <div class="brand"><span class="stamp"></span> addressium</div>
+  <span class="proto-tag">Prototype</span>
+  <div class="spacer"></div>
+  <div class="seg" id="worldseg">
+    <button data-world="adminlogin">Admin login</button>
+    <button class="on" data-world="admin">Admin console</button>
+    <button data-world="subscriber">Subscriber site</button>
+  </div>
+  <button class="iconbtn" id="themebtn" title="Toggle theme">◑</button>
+</div>
+
+<!-- ============ ADMIN LOGIN (Cognito hosted UI — admin pool) ============ -->
+<div class="frame" id="frame-adminlogin">
+  <div class="cog-wrap admin">
+    <div class="cog">
+      <span class="poolchip admin">Admin user pool · staff only</span>
+      <div class="cog-card">
+        <div class="cog-logo"><span class="stamp"></span><b>addressium</b></div>
+        <h2>Sign in to the console</h2>
+        <div class="sub">Newsletter operators &amp; administrators</div>
+        <form onsubmit="go('admin','dashboard');return false">
+          <div class="field"><label>Email</label><input type="email" value="dana@summitdaily.com" autocomplete="username"></div>
+          <div class="field"><label>Password</label><input type="password" value="••••••••••••"></div>
+          <a class="flink" href="#" onclick="return false">Forgot your password?</a>
+          <button class="btn btn-primary" style="justify-content:center;padding:11px" type="submit">Sign in</button>
+          <div class="or">Single sign-on</div>
+          <button class="btn" style="justify-content:center" type="button" onclick="go('admin','dashboard')">Continue with Google Workspace</button>
+        </form>
+        <div class="foot" style="margin-top:16px"><span class="mfa">🔐 MFA required · TOTP</span></div>
+      </div>
+      <div class="cog foot" style="text-align:center">Hosted UI secured by <b>Amazon Cognito</b> · <span class="mono">admin.addressium.summitdaily.com</span></div>
+    </div>
+  </div>
+</div>
+
+<!-- ============ ADMIN CONSOLE ============ -->
+<div class="frame on" id="frame-admin">
+  <div class="shell">
+    <!-- sidebar -->
+    <aside class="side">
+      <div class="org" onclick="openModal('org')" style="cursor:pointer" title="Switch organization">
+        <span class="stamp"></span>
+        <div style="flex:1;min-width:0"><b id="orgName">Summit Daily</b><br><small id="orgDomain">summitdaily.com · prod</small></div>
+        <span style="color:var(--ink-3);font-size:14px">⇅</span>
+      </div>
+      <div class="navlab">Overview</div>
+      <div class="navlink on" data-screen="dashboard" onclick="nav('dashboard')"><span class="ic">▤</span> Dashboard</div>
+      <div class="navlink" data-screen="analytics" onclick="nav('analytics')"><span class="ic">◔</span> Analytics <span class="tag">click map</span></div>
+      <div class="navlab">Audience</div>
+      <div class="navlink" data-screen="newsletters" onclick="nav('newsletters')"><span class="ic">✉</span> Newsletters</div>
+      <div class="navlink" data-screen="subscribers" onclick="nav('subscribers')"><span class="ic">◎</span> Subscribers</div>
+      <div class="navlink" data-screen="segments" onclick="nav('segments')"><span class="ic">⧉</span> Segments</div>
+      <div class="navlink" data-screen="suppression" onclick="nav('suppression')"><span class="ic">⊘</span> Suppression</div>
+      <div class="navlab">Messaging</div>
+      <div class="navlink" data-screen="campaigns" onclick="nav('campaigns')"><span class="ic">➤</span> Campaigns</div>
+      <div class="navlink" data-screen="templates" onclick="nav('templates')"><span class="ic">▦</span> Templates</div>
+      <div class="navlink" data-screen="automations" onclick="nav('automations')"><span class="ic">⟳</span> Automations</div>
+      <div class="navlab">Developer</div>
+      <div class="navlink" data-screen="feeds" onclick="nav('feeds')"><span class="ic">⌁</span> Feeds</div>
+      <div class="navlink" data-screen="tags" onclick="nav('tags')"><span class="ic">❴❵</span> Merge tags</div>
+      <div class="navlink" data-screen="adtags" onclick="nav('adtags')"><span class="ic">▱</span> Ad tags</div>
+      <div class="navlink" data-screen="identity" onclick="nav('identity')"><span class="ic">⚿</span> Identity &amp; pools</div>
+      <div class="navlink" data-screen="data" onclick="nav('data')"><span class="ic">⇅</span> Data &amp; exports</div>
+      <div class="navlink" data-screen="apikeys" onclick="nav('apikeys')"><span class="ic">⚷</span> API &amp; webhooks</div>
+      <div class="navlab">Configure</div>
+      <div class="navlink" data-screen="organizations" onclick="nav('organizations')"><span class="ic">◈</span> Organizations</div>
+      <div class="navlink" data-screen="roles" onclick="nav('roles')"><span class="ic">⚑</span> Roles &amp; access</div>
+      <div class="navlink" data-screen="usage" onclick="nav('usage')"><span class="ic">◨</span> Usage &amp; cost</div>
+      <div class="navlink" data-screen="settings" onclick="nav('settings')"><span class="ic">⚙</span> Settings</div>
+      <div class="navlink" data-screen="audit" onclick="nav('audit')"><span class="ic">☷</span> Audit log</div>
+      <div style="flex:1"></div>
+      <div class="navlink" onclick="setWorld('adminlogin')"><span class="ic">⏻</span> Sign out</div>
+    </aside>
+    <div class="scrim" id="scrim" onclick="toggleSide()"></div>
+
+    <!-- main -->
+    <div class="main">
+      <div class="topbar">
+        <button class="iconbtn menubtn" onclick="toggleSide()" title="Menu" aria-label="Menu">☰</button>
+        <div class="crumbs"><span id="crumbOrg">Summit Daily</span> / <b id="crumb">Dashboard</b></div>
+        <div class="searchbox">🔍 <input placeholder="Search subscribers, campaigns, segments…"></div>
+        <div style="flex:1"></div>
+        <button class="btn btn-sm" id="sbxBtn" onclick="toggleSandbox()" title="Toggle sandbox mode"><span id="sbxDot" style="color:var(--good)">●</span>&nbsp;Live</button>
+        <div class="envchip">us-east-1 · prod</div>
+        <button class="iconbtn" title="Notifications">🔔</button>
+        <div class="avatar">DA</div>
+      </div>
+      <div id="sbxBanner" style="display:none;background:var(--warn-soft);color:var(--warn);padding:9px 26px;font-size:12.5px;font-weight:650;border-bottom:1px solid var(--border)">⚠ Sandbox mode — campaigns send only to seed/test addresses. No real subscribers are emailed and stats are simulated.</div>
+
+      <div class="content">
+
+        <!-- DASHBOARD -->
+        <section class="screen on" data-screen="dashboard">
+          <div class="pagehead">
+            <div><h1>Dashboard</h1><p>Sending health and audience at a glance — last 30 days.</p></div>
+            <div class="row">
+              <button class="btn">Export</button>
+              <button class="btn btn-primary" onclick="nav('compose')">＋ New campaign</button>
+            </div>
+          </div>
+          <div class="kpis">
+            <div class="kpi card"><span class="lab">Total subscribers</span><span class="val num">128,430</span><span class="delta up">▲ 3.1% vs last mo.</span></div>
+            <div class="kpi card"><span class="lab">Emails sent (30d)</span><span class="val num">2.41M</span><span class="delta up">▲ 8.4%</span></div>
+            <div class="kpi card"><span class="lab">Avg. open rate</span><span class="val num">42.6%</span><span class="delta up">▲ 1.2 pts</span></div>
+            <div class="kpi card"><span class="lab">Avg. click rate</span><span class="val num">7.9%</span><span class="delta down">▼ 0.4 pts</span></div>
+          </div>
+          <div class="grid2">
+            <div class="card">
+              <div class="cardhead"><h3>Sends &amp; engagement</h3><div class="tabs"><button class="on">30d</button><button>90d</button><button>1y</button></div></div>
+              <div class="cardpad">
+                <svg class="spark" width="100%" height="150" viewBox="0 0 560 150" preserveAspectRatio="none">
+                  <defs><linearGradient id="g1" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0" stop-color="var(--accent)" stop-opacity=".28"/><stop offset="1" stop-color="var(--accent)" stop-opacity="0"/></linearGradient></defs>
+                  <line x1="0" y1="38" x2="560" y2="38" stroke="var(--border)" stroke-dasharray="3 5"/>
+                  <line x1="0" y1="75" x2="560" y2="75" stroke="var(--border)" stroke-dasharray="3 5"/>
+                  <line x1="0" y1="112" x2="560" y2="112" stroke="var(--border)" stroke-dasharray="3 5"/>
+                  <path d="M0,110 C60,95 90,70 140,72 C190,74 220,50 270,46 C320,42 350,66 400,58 C450,50 480,28 560,24 L560,150 L0,150 Z" fill="url(#g1)"/>
+                  <path d="M0,110 C60,95 90,70 140,72 C190,74 220,50 270,46 C320,42 350,66 400,58 C450,50 480,28 560,24" fill="none" stroke="var(--accent)" stroke-width="2.5"/>
+                  <circle cx="560" cy="24" r="4" fill="var(--accent)"/><circle cx="560" cy="24" r="8" fill="var(--accent)" opacity=".18"/>
+                </svg>
+              </div>
+            </div>
+            <div class="card">
+              <div class="cardhead"><h3>Deliverability</h3><span class="pill p-good"><span class="dot"></span> Healthy</span></div>
+              <div class="health">
+                <div class="hrow"><span style="width:96px;font-size:12.5px;font-weight:600">Delivered</span><span class="hbar"><i style="width:99.2%;background:var(--good)"></i></span><span class="hv num">99.2%</span></div>
+                <div class="hrow"><span style="width:96px;font-size:12.5px;font-weight:600">Bounces</span><span class="hbar"><i style="width:6%;background:var(--warn)"></i></span><span class="hv num">0.6%</span></div>
+                <div class="hrow"><span style="width:96px;font-size:12.5px;font-weight:600">Complaints</span><span class="hbar"><i style="width:3%;background:var(--crit)"></i></span><span class="hv num">0.03%</span></div>
+                <hr class="divider">
+                <div class="kv"><dt>DKIM</dt><dd><span class="pill p-good"><span class="dot"></span>Passing</span></dd>
+                <dt>SPF</dt><dd><span class="pill p-good"><span class="dot"></span>Passing</span></dd>
+                <dt>DMARC</dt><dd><span class="pill p-good"><span class="dot"></span>p=reject</span></dd>
+                <dt>SES quota</dt><dd class="num">312k / day · 340 msg/s</dd></div>
+              </div>
+            </div>
+          </div>
+          <div class="card">
+            <div class="cardhead"><h3>Recent campaigns</h3><a class="flink" style="color:var(--accent-ink);font-weight:600;font-size:13px" onclick="nav('campaigns')">View all →</a></div>
+            <div class="actlist">
+              <div class="actitem" style="cursor:pointer" onclick="nav('analytics')" title="View report"><div class="ci">✉</div><div class="meta"><b>The Morning Ledger — Jul 20</b><div>Sent to 96,204 · 2 hours ago</div></div><div class="row"><span class="pill p-neutral num">44.1% open</span><span class="pill p-accent num">8.3% click</span><span class="pill p-good"><span class="dot"></span>Sent</span></div></div>
+              <div class="actitem"><div class="ci">✦</div><div class="meta"><b>Market Signal — Weekly Brief</b><div>Sent to 8,410 paid · yesterday</div></div><div class="row"><span class="pill p-neutral num">61.7% open</span><span class="pill p-accent num">14.2% click</span><span class="pill p-good"><span class="dot"></span>Sent</span></div></div>
+              <div class="actitem"><div class="ci">◷</div><div class="meta"><b>Weekend Long Read — Jul 20</b><div>Scheduled · Sat 8:00 AM ET</div></div><div class="row"><span class="pill p-warn"><span class="dot"></span>Scheduled</span></div></div>
+              <div class="actitem"><div class="ci">✎</div><div class="meta"><b>Product Dispatch — v4 launch</b><div>Draft · edited 3 days ago</div></div><div class="row"><span class="pill p-neutral"><span class="dot"></span>Draft</span></div></div>
+            </div>
+          </div>
+        </section>
+
+        <!-- NEWSLETTERS -->
+        <section class="screen" data-screen="newsletters">
+          <div class="pagehead"><div><h1>Newsletters</h1><p>Each newsletter is a list with its own opt-in policy, from-address and compliance footer.</p></div><button class="btn btn-primary" onclick="openModal('newsletter')">＋ New newsletter</button></div>
+          <div class="note info"><span class="ic">▹</span><div><b>Open</b> newsletters appear on the public opt-in page and accept signups. <b>Closed</b> ones are hidden from the directory and reject new signups — existing subscribers still receive them.</div></div>
+          <div class="card"><table>
+            <thead><tr><th>Newsletter</th><th>Opt-in</th><th>Subscribers</th><th>From address</th><th>Cadence</th><th>Access</th><th>Signups</th><th></th></tr></thead>
+            <tbody>
+              <tr><td class="t-strong">The Morning Ledger</td><td><span class="pill p-accent">Double opt-in</span></td><td class="num">96,204</td><td class="mono muted">ledger@summitdaily.com</td><td>Daily · 6am ET</td><td><span class="pill p-neutral">Free</span></td><td><span class="pill p-good vis"><span class="dot"></span>Open</span></td><td><button class="btn btn-ghost btn-sm" onclick="toggleClose(this)">Close</button></td></tr>
+              <tr><td class="t-strong">Market Signal</td><td><span class="pill p-accent">Double opt-in</span></td><td class="num">8,410</td><td class="mono muted">signal@summitdaily.com</td><td>Weekly</td><td><span class="pill p-paid"><span class="dot"></span>Paid</span></td><td><span class="pill p-good vis"><span class="dot"></span>Open</span></td><td><button class="btn btn-ghost btn-sm" onclick="toggleClose(this)">Close</button></td></tr>
+              <tr><td class="t-strong">Field Notes</td><td><span class="pill p-accent">Double opt-in</span></td><td class="num">54,880</td><td class="mono muted">notes@summitdaily.com</td><td>Weekly · Thu</td><td><span class="pill p-neutral">Free</span></td><td><span class="pill p-good vis"><span class="dot"></span>Open</span></td><td><button class="btn btn-ghost btn-sm" onclick="toggleClose(this)">Close</button></td></tr>
+              <tr><td class="t-strong">Weekend Long Read</td><td><span class="pill p-accent">Double opt-in</span></td><td class="num">61,300</td><td class="mono muted">read@summitdaily.com</td><td>Weekly · Sat</td><td><span class="pill p-neutral">Free</span></td><td><span class="pill p-good vis"><span class="dot"></span>Open</span></td><td><button class="btn btn-ghost btn-sm" onclick="toggleClose(this)">Close</button></td></tr>
+              <tr><td class="t-strong">Product Dispatch</td><td><span class="pill p-neutral">Single opt-in</span></td><td class="num">12,940</td><td class="mono muted">product@summitdaily.com</td><td>Ad-hoc</td><td><span class="pill p-neutral">Free</span></td><td><span class="pill p-neutral vis">Closed</span></td><td><button class="btn btn-ghost btn-sm" onclick="toggleClose(this)">Reopen</button></td></tr>
+            </tbody>
+          </table></div>
+        </section>
+
+        <!-- SUBSCRIBERS -->
+        <section class="screen" data-screen="subscribers">
+          <div class="pagehead"><div><h1>Subscribers</h1><p>Every subscriber is a Cognito account (shared pool) keyed by <span class="mono">sub</span>. Click a row to view, manually unsubscribe, or suppress.</p></div><div class="row"><button class="btn" onclick="nav('data')">Import / export</button><button class="btn btn-primary">＋ Add subscriber</button></div></div>
+          <div class="toolbar">
+            <div class="searchbox" style="max-width:280px">🔍 <input placeholder="Email or name"></div>
+            <button class="filterchip on">All</button>
+            <button class="filterchip">Confirmed</button>
+            <button class="filterchip">Pending</button>
+            <button class="filterchip">Paid</button>
+            <button class="filterchip">Unsubscribed</button>
+            <div style="flex:1"></div><span class="muted" style="font-size:12.5px">128,430 people</span>
+          </div>
+          <div class="card"><table>
+            <thead><tr><th>Subscriber</th><th>Status</th><th>Entitlement</th><th>Lists</th><th>Last open</th><th>Cognito sub</th></tr></thead>
+            <tbody>
+              <tr style="cursor:pointer" onclick="nav('subscriber-detail')"><td><div class="cellwho"><span class="avatar-sm">JR</span><div><div class="t-strong">Jordan Reyes</div><div class="muted mono" style="font-size:11.5px">jordan.reyes@gmail.com</div></div></div></td><td><span class="pill p-good"><span class="dot"></span>Confirmed</span></td><td><span class="pill p-paid"><span class="dot"></span>Paid</span></td><td class="num">3</td><td>2h ago</td><td class="mono muted" style="font-size:11.5px">a1f3…9c2</td></tr>
+              <tr><td><div class="cellwho"><span class="avatar-sm">MO</span><div><div class="t-strong">Mei Okafor</div><div class="muted mono" style="font-size:11.5px">mei@okafor.studio</div></div></div></td><td><span class="pill p-good"><span class="dot"></span>Confirmed</span></td><td><span class="pill p-neutral">Free</span></td><td class="num">2</td><td>1d ago</td><td class="mono muted" style="font-size:11.5px">7be0…14a</td></tr>
+              <tr><td><div class="cellwho"><span class="avatar-sm">TS</span><div><div class="t-strong">Tomás Silva</div><div class="muted mono" style="font-size:11.5px">tsilva@proton.me</div></div></div></td><td><span class="pill p-warn"><span class="dot"></span>Pending</span></td><td><span class="pill p-neutral">Free</span></td><td class="num">1</td><td>—</td><td class="mono muted" style="font-size:11.5px">c40d…8f1</td></tr>
+              <tr><td><div class="cellwho"><span class="avatar-sm">AH</span><div><div class="t-strong">Aisha Hassan</div><div class="muted mono" style="font-size:11.5px">aisha.h@outlook.com</div></div></div></td><td><span class="pill p-good"><span class="dot"></span>Confirmed</span></td><td><span class="pill p-paid"><span class="dot"></span>Paid</span></td><td class="num">4</td><td>5h ago</td><td class="mono muted" style="font-size:11.5px">2d99…30b</td></tr>
+              <tr><td><div class="cellwho"><span class="avatar-sm">DK</span><div><div class="t-strong">Daniel Kim</div><div class="muted mono" style="font-size:11.5px">dan.kim@gmail.com</div></div></div></td><td><span class="pill p-crit"><span class="dot"></span>Unsubscribed</span></td><td><span class="pill p-neutral">Free</span></td><td class="num">0</td><td>12d ago</td><td class="mono muted" style="font-size:11.5px">5aa1…7e4</td></tr>
+            </tbody>
+          </table></div>
+        </section>
+
+        <!-- SEGMENTS -->
+        <section class="screen" data-screen="segments">
+          <div class="pagehead"><div><h1>Segments</h1><p>Saved filters over attributes and engagement. Resolved at send time via GSIs + materialized tags.</p></div><button class="btn btn-primary">＋ New segment</button></div>
+          <div class="grid2">
+            <div class="card"><table>
+              <thead><tr><th>Segment</th><th>Size</th><th>Basis</th></tr></thead>
+              <tbody>
+                <tr><td class="t-strong">Engaged — opened last 30d</td><td class="num">71,220</td><td class="muted">engagement</td></tr>
+                <tr><td class="t-strong">Paid subscribers</td><td class="num">14,860</td><td class="muted">entitlement = paid</td></tr>
+                <tr><td class="t-strong">Lapsed — no open 90d</td><td class="num">18,940</td><td class="muted">engagement</td></tr>
+                <tr><td class="t-strong">NYC metro</td><td class="num">9,410</td><td class="muted">attribute · city</td></tr>
+              </tbody>
+            </table></div>
+            <div class="card cardpad">
+              <div class="eyebrow">Segment builder</div>
+              <h3 style="margin:8px 0 14px;font-size:15px">Lapsed — no open 90d</h3>
+              <div style="display:flex;flex-direction:column;gap:10px">
+                <div class="note info"><span class="ic">▹</span><div>Match <b>ALL</b> of the following</div></div>
+                <div class="row"><span class="pill p-neutral">List</span> is <span class="pill p-accent">The Morning Ledger</span></div>
+                <div class="row"><span class="pill p-neutral">Status</span> is <span class="pill p-accent">Confirmed</span></div>
+                <div class="row"><span class="pill p-neutral">Last open</span> before <span class="pill p-accent">90 days ago</span></div>
+                <button class="btn btn-ghost btn-sm" style="align-self:flex-start">＋ Add condition</button>
+                <hr class="divider">
+                <div class="row" style="justify-content:space-between"><span class="muted" style="font-size:12.5px">Estimated match</span><b class="num" style="font-size:18px">18,940</b></div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- CAMPAIGNS -->
+        <section class="screen" data-screen="campaigns">
+          <div class="pagehead"><div><h1>Campaigns</h1><p>Ongoing series aggregate their editions for trend reporting; one-offs report individually. Recurring sends run on EventBridge Scheduler.</p></div><button class="btn btn-primary" onclick="nav('compose')">＋ New campaign</button></div>
+
+          <div class="eyebrow">Ongoing series · last 30 days</div>
+          <div class="kpis" style="grid-template-columns:repeat(3,1fr)">
+            <div class="card cardpad" style="cursor:pointer;display:flex;flex-direction:column;gap:9px" onclick="nav('analytics')" title="View series report">
+              <div class="row" style="justify-content:space-between"><b style="font-size:14px">The Morning Ledger</b><span class="pill p-good"><span class="dot"></span>Daily</span></div>
+              <div class="row" style="gap:18px"><div><div class="muted" style="font-size:11px">Editions</div><b class="num">30</b></div><div><div class="muted" style="font-size:11px">Avg open</div><b class="num">43.6%</b></div><div><div class="muted" style="font-size:11px">Avg click</div><b class="num">8.1%</b></div></div>
+              <svg width="100%" height="30" viewBox="0 0 200 30" preserveAspectRatio="none"><path d="M0,22 L20,20 L40,23 L60,16 L80,18 L100,13 L120,16 L140,11 L160,14 L180,8 L200,10" fill="none" stroke="var(--accent)" stroke-width="2"/></svg>
+            </div>
+            <div class="card cardpad" style="cursor:pointer;display:flex;flex-direction:column;gap:9px" onclick="nav('analytics')" title="View series report">
+              <div class="row" style="justify-content:space-between"><b style="font-size:14px">Market Signal</b><span class="pill p-paid"><span class="dot"></span>Weekly · paid</span></div>
+              <div class="row" style="gap:18px"><div><div class="muted" style="font-size:11px">Editions</div><b class="num">4</b></div><div><div class="muted" style="font-size:11px">Avg open</div><b class="num">60.9%</b></div><div><div class="muted" style="font-size:11px">Avg click</div><b class="num">13.8%</b></div></div>
+              <svg width="100%" height="30" viewBox="0 0 200 30" preserveAspectRatio="none"><path d="M0,14 L50,12 L100,15 L150,9 L200,11" fill="none" stroke="var(--paid)" stroke-width="2"/></svg>
+            </div>
+            <div class="card cardpad" style="cursor:pointer;display:flex;flex-direction:column;gap:9px" onclick="nav('analytics')" title="View series report">
+              <div class="row" style="justify-content:space-between"><b style="font-size:14px">Field Notes</b><span class="pill p-good"><span class="dot"></span>Weekly</span></div>
+              <div class="row" style="gap:18px"><div><div class="muted" style="font-size:11px">Editions</div><b class="num">4</b></div><div><div class="muted" style="font-size:11px">Avg open</div><b class="num">39.2%</b></div><div><div class="muted" style="font-size:11px">Avg click</div><b class="num">6.4%</b></div></div>
+              <svg width="100%" height="30" viewBox="0 0 200 30" preserveAspectRatio="none"><path d="M0,16 L50,18 L100,14 L150,17 L200,13" fill="none" stroke="var(--accent)" stroke-width="2"/></svg>
+            </div>
+          </div>
+
+          <div class="toolbar"><button class="filterchip on">All sends</button><button class="filterchip">Ongoing</button><button class="filterchip">One-off</button><button class="filterchip">Scheduled</button><div style="flex:1"></div><span class="muted" style="font-size:12.5px">recent sends</span></div>
+          <div class="card"><table>
+            <thead><tr><th>Campaign</th><th>Type</th><th>Status</th><th>Audience</th><th>Open</th><th>Click</th><th>When</th><th></th></tr></thead>
+            <tbody>
+              <tr style="cursor:pointer" onclick="nav('analytics')" title="View report"><td class="t-strong">The Morning Ledger — Jul 20</td><td><span class="pill p-neutral">Ongoing · Daily</span></td><td><span class="pill p-good"><span class="dot"></span>Sent</span></td><td class="num">96,204</td><td class="num">44.1%</td><td class="num">8.3%</td><td>2h ago</td><td><button class="btn btn-ghost btn-sm" onclick="event.stopPropagation()">Resend</button></td></tr>
+              <tr><td class="t-strong">Market Signal — Weekly Brief</td><td><span class="pill p-neutral">Ongoing · Weekly</span></td><td><span class="pill p-good"><span class="dot"></span>Sent</span></td><td class="num">8,410</td><td class="num">61.7%</td><td class="num">14.2%</td><td>Yesterday</td><td><button class="btn btn-ghost btn-sm">Resend</button></td></tr>
+              <tr><td class="t-strong">Weekend Long Read — Jul 20</td><td><span class="pill p-neutral">Ongoing · Weekly</span></td><td><span class="pill p-warn"><span class="dot"></span>Scheduled</span></td><td class="num">61,300</td><td class="muted">—</td><td class="muted">—</td><td>Sat 8:00 ET</td><td><button class="btn btn-ghost btn-sm">Reschedule</button></td></tr>
+              <tr><td class="t-strong">Product Dispatch — v4 launch</td><td><span class="pill p-accent">One-off</span></td><td><span class="pill p-neutral"><span class="dot"></span>Draft</span></td><td class="muted">—</td><td class="muted">—</td><td class="muted">—</td><td>3d ago</td><td><button class="btn btn-ghost btn-sm" onclick="nav('compose')">Edit</button></td></tr>
+            </tbody>
+          </table></div>
+        </section>
+
+        <!-- COMPOSE / REVIEW -->
+        <section class="screen" data-screen="compose">
+          <div class="pagehead"><div><h1>New campaign</h1><p>Compose → choose audience → review &amp; send.</p></div>
+            <div class="steps"><div class="s done"><span class="n">✓</span>Content</div><span class="bar"></span><div class="s done"><span class="n">✓</span>Audience</div><span class="bar"></span><div class="s on"><span class="n">3</span>Review</div></div>
+          </div>
+          <div class="grid2">
+            <div class="card cardpad" style="display:flex;flex-direction:column;gap:13px">
+              <div class="row" style="justify-content:space-between"><span style="font-size:12.5px;font-weight:600;color:var(--ink-2)">Subject line</span><label class="row" style="gap:6px;font-size:12px;color:var(--ink-2);cursor:pointer"><input type="checkbox" checked style="width:15px;height:15px;accent-color:var(--accent)"> A/B test</label></div>
+              <div class="field"><input type="text" value="The one chart that explains this week’s market"><div class="muted" style="font-size:11px;margin-top:4px">Variant A · 50%</div></div>
+              <div class="field"><input type="text" value="Markets are flashing a signal — here’s the chart"><div class="muted" style="font-size:11px;margin-top:4px">Variant B · 50%</div></div>
+              <div class="row" style="gap:12px">
+                <div class="field" style="flex:1"><label>Pick winner by</label><select><option>Open rate</option><option>Click rate</option></select></div>
+                <div class="field" style="flex:1"><label>After</label><select><option>2 hours</option><option>4 hours</option><option>1 day</option></select></div>
+              </div>
+              <div class="field"><label>Preview text</label><input type="text" value="Plus: three things to watch before Monday’s open"></div>
+              <div class="row" style="gap:12px">
+                <div class="field" style="flex:1"><label>Template</label><select><option>Editorial — Daily (MJML)</option><option>Market Signal — Premium</option></select></div>
+                <div class="field" style="flex:1"><label>Send type</label><select><option>One-off</option><option>Recurring · daily</option><option>Recurring · weekly</option></select></div>
+              </div>
+              <div class="note info"><span class="ic">✦</span><div><b>Magic-link on · 5 / 7 ad slots filled.</b> Editorial links get each recipient’s token; LiveIntent ad tags stay untouched. <span class="flink" style="color:var(--accent-ink);font-weight:600;cursor:pointer" onclick="nav('adtags')">Edit ad tags →</span></div></div>
+            </div>
+            <div class="card cardpad" style="display:flex;flex-direction:column;gap:12px">
+              <div class="eyebrow">Review</div>
+              <dl class="kv" style="grid-template-columns:auto 1fr;gap:10px 18px">
+                <dt>Newsletter</dt><dd>The Morning Ledger</dd>
+                <dt>Audience</dt><dd>Engaged — opened last 30d <span class="muted num">· 71,220</span></dd>
+                <dt>Suppressed</dt><dd class="num">1,204 <span class="muted">(bounces + complaints)</span></dd>
+                <dt>From</dt><dd class="mono">ledger@summitdaily.com</dd>
+                <dt>Unsubscribe</dt><dd><span class="pill p-good"><span class="dot"></span>One-click (RFC 8058)</span></dd>
+                <dt>Send</dt><dd>Now — throttled to 340 msg/s</dd>
+              </dl>
+              <hr class="divider">
+              <div class="row" style="justify-content:flex-end"><button class="btn">Send test</button><button class="btn">Schedule</button><button class="btn btn-primary" onclick="nav('campaigns')">Send to 70,016 →</button></div>
+            </div>
+          </div>
+        </section>
+
+        <!-- TEMPLATES -->
+        <section class="screen" data-screen="templates">
+          <div class="pagehead"><div><h1>Templates</h1><p>Three authoring modes — pick the right one per team. All render through the same responsive pipeline and get the compliance footer + one-click unsubscribe injected automatically.</p></div><button class="btn btn-primary">＋ New template</button></div>
+          <div class="kpis" style="grid-template-columns:repeat(3,1fr)">
+            <div class="card cardpad" style="display:flex;flex-direction:column;gap:7px;cursor:pointer" onclick="nav('builder')" title="Open the visual builder"><div class="row" style="justify-content:space-between"><b style="font-size:14px">Visual builder</b><span class="pill p-good">no code</span></div><p class="muted" style="margin:0;font-size:12.5px">Drag-and-drop blocks (GrapesJS → MJML). For editors &amp; ad reps building polished sends without touching code. <span class="flink" style="color:var(--accent-ink);font-weight:600">Open →</span></p></div>
+            <div class="card cardpad" style="display:flex;flex-direction:column;gap:7px"><div class="row" style="justify-content:space-between"><b style="font-size:14px">MJML</b><span class="pill p-accent">developers</span></div><p class="muted" style="margin:0;font-size:12.5px">Responsive markup + merge tags with live preview. Full control over layout.</p></div>
+            <div class="card cardpad" style="display:flex;flex-direction:column;gap:7px"><div class="row" style="justify-content:space-between"><b style="font-size:14px">Raw HTML blast</b><span class="pill p-warn">one-off</span></div><p class="muted" style="margin:0;font-size:12.5px">Paste advertiser-supplied HTML as-is. Footer + unsubscribe injected; sanitized for safety.</p></div>
+          </div>
+          <div class="grid2">
+            <div class="card cardpad">
+              <div class="row" style="justify-content:space-between;margin-bottom:10px"><div class="eyebrow">MJML source</div><span class="pill p-neutral">v7 · autosaved</span></div>
+<pre class="mono" style="margin:0;font-size:12px;line-height:1.7;color:var(--ink-2);white-space:pre-wrap;background:var(--surface-2);border:1px solid var(--border);border-radius:8px;padding:14px;overflow:auto">&lt;mj-section&gt;
+  &lt;mj-column&gt;
+    &lt;mj-text font-size="17px"&gt;
+      Good morning, {{ first_name }}.
+    &lt;/mj-text&gt;
+    &lt;mj-button href="{{ editorial_url }}"&gt;
+      Read today’s lead
+    &lt;/mj-button&gt;
+    &lt;mj-text&gt;{{ unsubscribe_footer }}&lt;/mj-text&gt;
+  &lt;/mj-column&gt;
+&lt;/mj-section&gt;</pre>
+            </div>
+            <div class="card cardpad">
+              <div class="row" style="justify-content:space-between;margin-bottom:10px"><div class="eyebrow">Live preview</div><button class="btn btn-ghost btn-sm" onclick="openPreview()">◲ Full preview</button></div>
+              <div class="email" style="max-width:100%;box-shadow:none;border:1px solid var(--border)">
+                <div class="ehead"><span class="stamp" style="width:18px;height:18px"></span> The Morning Ledger</div>
+                <div class="ebody"><h4 style="font-size:15px">Good morning, Jordan.</h4><p style="font-size:13px;margin:0">The one chart that explains this week’s market — and three things to watch before Monday.</p><button class="btn btn-primary btn-sm" style="align-self:flex-start">Read today’s lead</button><p class="muted" style="font-size:11px;margin:0">Summit Daily · 220 Harbor St, Boston MA · Unsubscribe</p></div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- AUTOMATIONS -->
+        <section class="screen" data-screen="automations">
+          <div class="pagehead"><div><h1>Automations</h1><p>Trigger-based drip sequences, orchestrated by Step Functions.</p></div><button class="btn btn-primary">＋ New automation</button></div>
+          <div class="grid2">
+            <div class="card"><table>
+              <thead><tr><th>Automation</th><th>Trigger</th><th>Status</th><th>In flow</th></tr></thead>
+              <tbody>
+                <tr><td class="t-strong">Welcome series</td><td class="muted">Subscription confirmed</td><td><span class="pill p-good"><span class="dot"></span>Live</span></td><td class="num">1,840</td></tr>
+                <tr><td class="t-strong">Re-engagement</td><td class="muted">No open · 60d</td><td><span class="pill p-good"><span class="dot"></span>Live</span></td><td class="num">6,210</td></tr>
+                <tr><td class="t-strong">Paid onboarding</td><td class="muted">entitlement → paid</td><td><span class="pill p-warn"><span class="dot"></span>Paused</span></td><td class="num">0</td></tr>
+              </tbody>
+            </table></div>
+            <div class="card cardpad">
+              <div class="eyebrow" style="margin-bottom:14px">Welcome series</div>
+              <div class="flowmap">
+                <div class="fnode"><div class="fi" style="background:var(--good-soft);color:var(--good)">✓</div><div><b>Trigger — Opt-in confirmed</b><div><small>Double opt-in verified</small></div></div></div>
+                <div class="fconn"></div><span class="fwait">wait 0 min</span><div class="fconn"></div>
+                <div class="fnode"><div class="fi" style="background:var(--accent-soft);color:var(--accent-ink)">✉</div><div><b>Send — Welcome + what to expect</b><div><small>Template: Welcome 01</small></div></div></div>
+                <div class="fconn"></div><span class="fwait">wait 2 days</span><div class="fconn"></div>
+                <div class="fnode"><div class="fi" style="background:var(--surface-3);color:var(--ink-2)">⑂</div><div><b>Branch — Opened welcome?</b><div><small>Yes → best-of digest · No → re-send</small></div></div></div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ANALYTICS + CLICK MAP -->
+        <section class="screen" data-screen="analytics">
+          <div class="pagehead"><div><h1>Analytics — The Morning Ledger, Jul 20</h1><p>Every generic email is archived, so clicks overlay onto the real message.</p></div><div class="row"><button class="btn" onclick="openPreview()">◲ Preview email</button><div class="tabs" id="atabs"><button class="on" onclick="atab('map')">Click map</button><button onclick="atab('funnel')">Funnel</button><button onclick="atab('links')">Links</button></div></div></div>
+          <div class="kpis">
+            <div class="kpi card"><span class="lab">Delivered</span><span class="val num">95,410</span><span class="delta up">99.2%</span></div>
+            <div class="kpi card"><span class="lab">Unique opens</span><span class="val num">42,076</span><span class="delta up">44.1%</span></div>
+            <div class="kpi card"><span class="lab">Unique clicks</span><span class="val num">7,918</span><span class="delta">8.3% CTR</span></div>
+            <div class="kpi card"><span class="lab">Unsub / complaint</span><span class="val num">61</span><span class="delta">0.06%</span></div>
+          </div>
+
+          <div class="note info"><span class="ic">✦</span><div><b>A/B subject winner:</b> Variant B — “Markets are flashing a signal — here’s the chart” — beat A on open rate (46.2% vs 41.8%) and was auto-sent to the remaining 80% after 2 hours.</div></div>
+
+          <div class="apane on" data-apane="map">
+          <div class="grid2">
+            <div class="card cardpad">
+              <div class="row" style="justify-content:space-between;margin-bottom:6px"><div class="eyebrow">Click map · archived copy</div><span class="pill p-neutral mono">campaign_2f9c…</span></div>
+              <div class="emailview">
+                <div class="email">
+                  <div class="ehead"><span class="stamp" style="width:18px;height:18px"></span> The Morning Ledger</div>
+                  <div class="ebody">
+                    <h4>The one chart that explains the market</h4>
+                    <p>Good morning, Jordan. Futures slipped overnight after the jobs print. Here’s <a class="elink" href="#" onclick="return false">the chart everyone’s sharing<span class="badge hot">3,204</span></a> and why it matters.</p>
+                    <p>In markets: <a class="elink" href="#" onclick="return false">rates<span class="badge">642</span></a>, <a class="elink" href="#" onclick="return false">energy<span class="badge">418</span></a>, and a <a class="elink" href="#" onclick="return false">deal to watch<span class="badge">1,090</span></a>.</p>
+                    <div class="adslot"><span class="adtag">LiveIntent · not tracked</span>Sponsored placement</div>
+                    <p class="muted" style="font-size:11px;margin:0">Summit Daily · 40 W Main St, Frisco CO · <a class="elink" href="#" onclick="return false">Unsubscribe<span class="badge">54</span></a></p>
+                  </div>
+                </div>
+              </div>
+              <div class="legend"><span><i class="sw" style="background:var(--accent)"></i> editorial link · click count</span><span><i class="sw" style="background:var(--crit)"></i> hottest link</span><span><i class="sw" style="background:var(--border-strong)"></i> LiveIntent ad — excluded</span></div>
+            </div>
+            <div class="card">
+              <div class="cardhead"><h3>Top links</h3><span class="pill p-neutral">editorial only</span></div>
+              <table>
+                <thead><tr><th>Link</th><th>Clicks</th><th>CTR</th></tr></thead>
+                <tbody>
+                  <tr><td class="t-strong">the chart everyone’s sharing</td><td class="num">3,204</td><td class="num">3.4%</td></tr>
+                  <tr><td class="t-strong">a deal to watch</td><td class="num">1,090</td><td class="num">1.1%</td></tr>
+                  <tr><td class="t-strong">rates</td><td class="num">642</td><td class="num">0.7%</td></tr>
+                  <tr><td class="t-strong">energy</td><td class="num">418</td><td class="num">0.4%</td></tr>
+                  <tr><td class="muted">Unsubscribe</td><td class="num">54</td><td class="num">0.1%</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+          </div>
+
+          <div class="apane" data-apane="funnel">
+            <div class="card cardpad">
+              <div class="eyebrow" style="margin-bottom:14px">Engagement funnel</div>
+              <div class="funnel">
+                <div class="frow"><span class="fl">Sent</span><div class="fbar"><i style="width:100%"></i><span>96,204</span></div></div>
+                <div class="frow"><span class="fl">Delivered</span><div class="fbar"><i style="width:99.2%"></i><span>95,410 · 99.2%</span></div></div>
+                <div class="frow"><span class="fl">Unique opens</span><div class="fbar"><i style="width:44%"></i><span>42,076 · 44.1%</span></div></div>
+                <div class="frow"><span class="fl">Unique clicks</span><div class="fbar"><i style="width:8.3%;min-width:90px"></i><span>7,918 · 8.3%</span></div></div>
+                <div class="frow"><span class="fl">Bypassed paywall</span><div class="fbar"><i style="width:6.4%;min-width:90px"></i><span>6,140 · magic link</span></div></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="apane" data-apane="links">
+            <div class="grid2">
+              <div class="card"><div class="cardhead"><h3>All links</h3><span class="pill p-neutral">editorial only</span></div>
+                <table><thead><tr><th>Link</th><th>Clicks</th><th>Unique</th><th>CTR</th></tr></thead><tbody>
+                  <tr><td class="t-strong">the chart everyone’s sharing</td><td class="num">3,204</td><td class="num">2,981</td><td class="num">3.4%</td></tr>
+                  <tr><td class="t-strong">a deal to watch</td><td class="num">1,090</td><td class="num">1,004</td><td class="num">1.1%</td></tr>
+                  <tr><td class="t-strong">rates</td><td class="num">642</td><td class="num">598</td><td class="num">0.7%</td></tr>
+                  <tr><td class="t-strong">energy</td><td class="num">418</td><td class="num">402</td><td class="num">0.4%</td></tr>
+                  <tr><td class="muted">Unsubscribe</td><td class="num">54</td><td class="num">54</td><td class="num">0.1%</td></tr>
+                </tbody></table>
+              </div>
+              <div class="card"><div class="cardhead"><h3>Opens by client</h3></div>
+                <div class="health">
+                  <div class="hrow"><span style="width:96px;font-size:12.5px;font-weight:600">Apple Mail</span><span class="hbar"><i style="width:58%;background:var(--accent)"></i></span><span class="hv num">58%</span></div>
+                  <div class="hrow"><span style="width:96px;font-size:12.5px;font-weight:600">Gmail</span><span class="hbar"><i style="width:29%;background:var(--accent)"></i></span><span class="hv num">29%</span></div>
+                  <div class="hrow"><span style="width:96px;font-size:12.5px;font-weight:600">Outlook</span><span class="hbar"><i style="width:8%;background:var(--accent)"></i></span><span class="hv num">8%</span></div>
+                  <div class="hrow"><span style="width:96px;font-size:12.5px;font-weight:600">Other</span><span class="hbar"><i style="width:5%;background:var(--accent)"></i></span><span class="hv num">5%</span></div>
+                  <hr class="divider">
+                  <div class="kv"><dt>Mobile</dt><dd class="num">64%</dd><dt>Desktop</dt><dd class="num">36%</dd></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- SETTINGS -->
+        <section class="screen" data-screen="settings">
+          <div class="pagehead"><div><h1>Settings</h1><p>Deployment configuration for this addressium account.</p></div></div>
+          <div class="tabs" id="settings-tabs" style="flex-wrap:wrap">
+            <button class="on" data-t="domains" onclick="tab('settings','domains')">Domains &amp; deliverability</button>
+            <button data-t="magic" onclick="tab('settings','magic')">Magic-link &amp; entitlement</button>
+            <button data-t="alerts" onclick="tab('settings','alerts')">Alerts &amp; SNS</button>
+            <button data-t="privacy" onclick="tab('settings','privacy')">Privacy &amp; data</button>
+            <button data-t="team" onclick="tab('settings','team')">Team</button>
+          </div>
+
+          <div class="tabpane on" data-pane="settings-domains">
+            <div class="card"><table>
+              <thead><tr><th>Domain</th><th>DKIM</th><th>SPF</th><th>DMARC</th><th>Tracking</th></tr></thead>
+              <tbody>
+                <tr><td class="t-strong mono">summitdaily.com</td><td><span class="pill p-good"><span class="dot"></span>Verified</span></td><td><span class="pill p-good"><span class="dot"></span>Pass</span></td><td><span class="pill p-good"><span class="dot"></span>p=reject</span></td><td class="mono muted">click.summitdaily.com</td></tr>
+                <tr><td class="t-strong mono">news.summitdaily.com</td><td><span class="pill p-good"><span class="dot"></span>Verified</span></td><td><span class="pill p-good"><span class="dot"></span>Pass</span></td><td><span class="pill p-warn"><span class="dot"></span>p=none</span></td><td class="mono muted">click.summitdaily.com</td></tr>
+              </tbody>
+            </table></div>
+            <div class="note info"><span class="ic">✦</span><div>SES is out of the sandbox. Production quota: <b>312,000/day</b> at <b>340 msg/s</b>. Setup wizard verifies DKIM/SPF/DMARC on first deploy.</div></div>
+          </div>
+
+          <div class="tabpane" data-pane="settings-magic">
+            <div class="grid2">
+              <div class="card cardpad" style="display:flex;flex-direction:column;gap:14px">
+                <div class="eyebrow">Magic-link tokens</div>
+                <dl class="kv" style="gap:11px 18px">
+                  <dt>Signing</dt><dd>Asymmetric · <span class="mono">ES256</span> (KMS)</dd>
+                  <dt>JWKS</dt><dd class="mono" style="font-size:12px">/.well-known/jwks.json</dd>
+                  <dt>Placement</dt><dd>URL fragment <span class="mono">#tok=</span></dd>
+                  <dt>Scope</dt><dd class="mono">content:read</dd>
+                  <dt>TTL</dt><dd>14 days</dd>
+                  <dt>Redemption</dt><dd>Reusable · stateless</dd>
+                </dl>
+                <div class="note warn"><span class="ic">⚠</span><div>Forwardable by design — lite scope only. The main site must gate profile pages behind step-up auth.</div></div>
+              </div>
+              <div class="card cardpad" style="display:flex;flex-direction:column;gap:12px">
+                <div class="eyebrow">Entitlement</div>
+                <div class="field"><label>Claim whitelist (rides in token)</label>
+                  <div class="row"><span class="pill p-accent">sub</span><span class="pill p-accent">entitlement</span><span class="pill p-accent">entitlement_asof</span><span class="pill p-accent">first_name</span><button class="btn btn-ghost btn-sm">＋ Add</button></div></div>
+                <hr class="divider">
+                <div class="field"><label>Sync source of truth</label><select><option>Stripe billing webhook (live)</option><option>Custom API</option><option>Import / manual only</option></select></div>
+                <dl class="kv" style="gap:9px 18px"><dt>Last sync</dt><dd>4 min ago · 212 updated</dd><dt>Values</dt><dd><span class="pill p-neutral">free</span> <span class="pill p-paid"><span class="dot"></span>paid</span></dd></dl>
+              </div>
+            </div>
+          </div>
+
+          <div class="tabpane" data-pane="settings-alerts">
+            <div class="grid2">
+              <div class="card cardpad" style="display:flex;flex-direction:column;gap:12px">
+                <div class="eyebrow">Deliverability alerts → Amazon SNS</div>
+                <p class="muted" style="margin:0;font-size:13px">Point alerts at an SNS topic — fan out to email, SMS, Slack, PagerDuty, or a Lambda.</p>
+                <div class="field"><label>SNS topic ARN</label><input class="mono" value="arn:aws:sns:us-east-1:…:addressium-alerts"></div>
+                <div class="field"><label>Also notify</label><div class="row"><span class="pill p-accent">ops@summitdaily.com</span><span class="pill p-accent">#deliverability</span><button class="btn btn-ghost btn-sm">＋</button></div></div>
+                <button class="btn btn-sm" style="align-self:flex-start">Send test alert</button>
+              </div>
+              <div class="card cardpad">
+                <div class="eyebrow" style="margin-bottom:6px">Alert rules</div>
+                <div class="prefrow"><div class="info"><b>Complaint rate</b><div>Warn 0.1% · auto-halt 0.3%</div></div><div class="toggle on" onclick="this.classList.toggle('on')"><i></i></div></div>
+                <div class="prefrow"><div class="info"><b>Bounce rate</b><div>Warn 2% · auto-halt 5%</div></div><div class="toggle on" onclick="this.classList.toggle('on')"><i></i></div></div>
+                <div class="prefrow"><div class="info"><b>Send failure spike</b><div>SES send errors</div></div><div class="toggle on" onclick="this.classList.toggle('on')"><i></i></div></div>
+                <div class="prefrow"><div class="info"><b>Reputation drop</b><div>SES account reputation</div></div><div class="toggle" onclick="this.classList.toggle('on')"><i></i></div></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="tabpane" data-pane="settings-privacy">
+            <div class="grid2">
+              <div class="card cardpad" style="display:flex;flex-direction:column;gap:12px">
+                <div class="eyebrow">GDPR / CCPA — data-subject requests</div>
+                <p class="muted" style="margin:0;font-size:13px">Export or erase a person by email. Erasure removes the profile + events and writes a hashed tombstone to suppression so they’re never re-added.</p>
+                <div class="field"><label>Subject email</label><input type="email" placeholder="person@example.com"></div>
+                <div class="row"><button class="btn">Export data (JSON)</button><button class="btn" style="color:var(--crit);border-color:var(--crit)">Erase / forget</button></div>
+              </div>
+              <div class="card cardpad">
+                <div class="eyebrow" style="margin-bottom:12px">Retention &amp; consent</div>
+                <dl class="kv" style="gap:12px 18px">
+                  <dt>Consent capture</dt><dd>timestamp · IP · source URL</dd>
+                  <dt>Event retention</dt><dd><select style="padding:4px 8px;font-size:12.5px;width:auto"><option>13 months</option><option>25 months</option><option>Forever</option></select></dd>
+                  <dt>Right to be forgotten</dt><dd><span class="pill p-good"><span class="dot"></span>Automated</span></dd>
+                  <dt>Data residency</dt><dd>us-east-1 · your account</dd>
+                </dl>
+              </div>
+            </div>
+          </div>
+
+          <div class="tabpane" data-pane="settings-team">
+            <div class="pagehead" style="margin-bottom:2px"><div><h3 style="font-size:15px">Admin team</h3><p style="margin-top:3px">Staff in the <b>separate admin user pool</b>. Each member has a role, scoped to one or more organizations.</p></div><div class="row"><button class="btn btn-sm" onclick="nav('roles')">View roles →</button><button class="btn btn-primary btn-sm">＋ Invite</button></div></div>
+            <div class="card"><table>
+              <thead><tr><th>Member</th><th>Role</th><th>Org access</th><th>MFA</th><th>Last active</th></tr></thead>
+              <tbody>
+                <tr><td><div class="cellwho"><span class="avatar-sm">DA</span><div><div class="t-strong">Dana Alvarez</div><div class="muted mono" style="font-size:11.5px">dana@summitdaily.com</div></div></div></td><td><span class="pill p-accent">Developer Admin</span></td><td><span class="pill p-neutral">All orgs</span></td><td><span class="pill p-good"><span class="dot"></span>TOTP</span></td><td>Now</td></tr>
+                <tr><td><div class="cellwho"><span class="avatar-sm">PW</span><div><div class="t-strong">Priya Walsh</div><div class="muted mono" style="font-size:11.5px">priya@summitdaily.com</div></div></div></td><td><span class="pill p-accent">Editor</span></td><td><span class="pill p-neutral">Summit · Vail</span></td><td><span class="pill p-good"><span class="dot"></span>TOTP</span></td><td>1h ago</td></tr>
+                <tr><td><div class="cellwho"><span class="avatar-sm">RB</span><div><div class="t-strong">Ruben Ba</div><div class="muted mono" style="font-size:11.5px">ruben@summitdaily.com</div></div></div></td><td><span class="pill p-paid"><span class="dot"></span>Analyst (Sales)</span></td><td><span class="pill p-neutral">All orgs</span></td><td><span class="pill p-good"><span class="dot"></span>TOTP</span></td><td>3d ago</td></tr>
+                <tr><td><div class="cellwho"><span class="avatar-sm">MC</span><div><div class="t-strong">Marco Cruz</div><div class="muted mono" style="font-size:11.5px">marco@summitdaily.com</div></div></div></td><td><span class="pill p-neutral">Support</span></td><td><span class="pill p-neutral">Summit</span></td><td><span class="pill p-warn"><span class="dot"></span>Pending</span></td><td>—</td></tr>
+              </tbody>
+            </table></div>
+          </div>
+
+          <div class="tabpane" data-pane="settings-import">
+            <div class="grid2">
+              <div class="card cardpad" style="display:flex;flex-direction:column;gap:14px">
+                <div class="eyebrow">Migrate from Amazon Pinpoint</div>
+                <p class="muted" style="margin:0;font-size:13px">Import endpoints, segments and the opt-out list from a Pinpoint export or CSV. Runs as a dry-run first.</p>
+                <div style="border:1.5px dashed var(--border-strong);border-radius:10px;padding:26px;text-align:center;color:var(--ink-3)">⬆ Drop a Pinpoint export or CSV<br><span style="font-size:12px">endpoints · segments · suppression</span></div>
+                <button class="btn btn-primary" style="align-self:flex-start">Start dry run</button>
+              </div>
+              <div class="card cardpad">
+                <div class="eyebrow" style="margin-bottom:10px">Last import — dry run</div>
+                <dl class="kv" style="gap:11px 18px">
+                  <dt>Source</dt><dd class="mono">pinpoint-export-0719.csv</dd>
+                  <dt>Created</dt><dd class="num">12,204</dd>
+                  <dt>Updated</dt><dd class="num">3,880</dd>
+                  <dt>Skipped (dupes)</dt><dd class="num">418</dd>
+                  <dt>Suppressed</dt><dd class="num">96</dd>
+                  <dt>Errors</dt><dd class="num">0</dd>
+                </dl>
+                <button class="btn" style="margin-top:14px">Commit import →</button>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- FEEDS -->
+        <section class="screen" data-screen="feeds">
+          <div class="pagehead"><div><h1>Feeds</h1><p>Pull articles from RSS / Atom / JSON feeds to auto-build campaigns. Feed fields map to merge tags.</p></div><button class="btn btn-primary">＋ Add feed</button></div>
+          <div class="grid2">
+            <div class="card"><table>
+              <thead><tr><th>Feed</th><th>Maps to</th><th>Last pulled</th><th>Items</th><th>Status</th></tr></thead>
+              <tbody>
+                <tr><td><div class="t-strong">Homepage RSS</div><div class="mono muted" style="font-size:11.5px">summitdaily.com/feed.xml</div></td><td>The Morning Ledger</td><td>6 min ago</td><td class="num">28</td><td><span class="pill p-good"><span class="dot"></span>Active</span></td></tr>
+                <tr><td><div class="t-strong">Markets JSON</div><div class="mono muted" style="font-size:11.5px">api…/markets.json</div></td><td>Market Signal</td><td>14 min ago</td><td class="num">12</td><td><span class="pill p-good"><span class="dot"></span>Active</span></td></tr>
+                <tr><td><div class="t-strong">Features Atom</div><div class="mono muted" style="font-size:11.5px">summitdaily.com/features.atom</div></td><td>Field Notes</td><td>1 h ago</td><td class="num">6</td><td><span class="pill p-warn"><span class="dot"></span>Paused</span></td></tr>
+              </tbody>
+            </table></div>
+            <div class="card cardpad">
+              <div class="eyebrow" style="margin-bottom:12px">Field mapping — Homepage RSS</div>
+              <dl class="kv" style="gap:12px 16px">
+                <dt class="mono">&lt;title&gt;</dt><dd>→ <span class="pill p-accent mono">{{article_title}}</span></dd>
+                <dt class="mono">&lt;link&gt;</dt><dd>→ <span class="pill p-accent mono">{{editorial_url}}</span> <span class="muted">+ token</span></dd>
+                <dt class="mono">&lt;description&gt;</dt><dd>→ <span class="pill p-accent mono">{{article_excerpt}}</span></dd>
+                <dt class="mono">media:thumb</dt><dd>→ <span class="pill p-accent mono">{{article_image}}</span></dd>
+              </dl>
+              <hr class="divider" style="margin:14px 0">
+              <div class="field"><label>Pull interval</label><select><option>Every 5 minutes</option><option>Every 15 minutes</option><option>Hourly</option></select></div>
+            </div>
+          </div>
+        </section>
+
+        <!-- MERGE TAGS -->
+        <section class="screen" data-screen="tags">
+          <div class="pagehead"><div><h1>Merge tags</h1><p>In-email replacement variables and where each value comes from at send time.</p></div><button class="btn btn-primary">＋ Add tag</button></div>
+          <div class="note info"><span class="ic">✦</span><div>Tags backed by a <b>token claim</b> ride in the magic link; <b>per-recipient</b> tags resolve during bulk send; <b>per-campaign</b> tags are identical for everyone.</div></div>
+          <div class="card"><table>
+            <thead><tr><th>Tag</th><th>Source</th><th>Scope</th><th>Example</th><th>Fallback</th></tr></thead>
+            <tbody>
+              <tr><td class="mono t-strong">{{first_name}}</td><td>Profile attribute</td><td><span class="pill p-neutral">per-recipient</span></td><td class="muted">Jordan</td><td class="mono">there</td></tr>
+              <tr><td class="mono t-strong">{{editorial_url}}</td><td>Feed link + magic token</td><td><span class="pill p-accent">token</span></td><td class="mono muted" style="font-size:11px">…/article#tok=…</td><td class="muted">—</td></tr>
+              <tr><td class="mono t-strong">{{entitlement}}</td><td>Profile · synced</td><td><span class="pill p-accent">token claim</span></td><td><span class="pill p-paid"><span class="dot"></span>paid</span></td><td class="mono">free</td></tr>
+              <tr><td class="mono t-strong">{{article_title}}</td><td>Feed field</td><td><span class="pill p-neutral">per-campaign</span></td><td class="muted">The one chart…</td><td class="muted">—</td></tr>
+              <tr><td class="mono t-strong">{{unsubscribe_url}}</td><td>System</td><td><span class="pill p-neutral">per-recipient</span></td><td class="mono muted" style="font-size:11px">…/u/…</td><td class="muted">—</td></tr>
+              <tr><td class="mono t-strong">{{unsubscribe_footer}}</td><td>System · list address</td><td><span class="pill p-neutral">per-campaign</span></td><td class="muted">Summit Daily · 40 Main St…</td><td class="muted">—</td></tr>
+            </tbody>
+          </table></div>
+        </section>
+
+        <!-- AD TAGS -->
+        <section class="screen" data-screen="adtags">
+          <div class="pagehead"><div><h1>Ad tags</h1><p>LiveIntent ad HTML per slot. For recurring newsletters the fills are set once at the <b>series</b> level and reused by every edition; one-off blasts set them per campaign. Inserted as-is — never tokenized or click-tracked.</p></div><button class="btn btn-primary">＋ Add slot</button></div>
+          <div class="row" style="gap:12px">
+            <div class="field" style="max-width:260px"><label>Template</label><select><option>Editorial — Daily (MJML)</option><option>Market Signal — Premium</option></select></div>
+            <div class="field" style="max-width:280px"><label>Applies to</label><select><option>The Morning Ledger — series default (all editions)</option><option>Market Signal — series default</option><option>One-off blast override</option></select></div>
+          </div>
+          <div class="grid2">
+            <div class="card"><div class="cardhead"><h3>Slots in this template</h3><span class="pill p-neutral">7 slots</span></div><table>
+              <thead><tr><th>Slot</th><th>Position</th><th>This edition</th></tr></thead>
+              <tbody>
+                <tr style="cursor:pointer" class="t-strong"><td class="mono">{{ad_top}}</td><td class="muted">Above the fold</td><td><span class="pill p-good"><span class="dot"></span>Filled</span></td></tr>
+                <tr><td class="mono t-strong">{{ad_inline_1}}</td><td class="muted">After story 1</td><td><span class="pill p-good"><span class="dot"></span>Filled</span></td></tr>
+                <tr><td class="mono t-strong">{{ad_inline_2}}</td><td class="muted">After story 2</td><td><span class="pill p-good"><span class="dot"></span>Filled</span></td></tr>
+                <tr><td class="mono t-strong">{{ad_inline_3}}</td><td class="muted">After story 3</td><td><span class="pill p-good"><span class="dot"></span>Filled</span></td></tr>
+                <tr><td class="mono t-strong">{{ad_native}}</td><td class="muted">Native unit</td><td><span class="pill p-good"><span class="dot"></span>Filled</span></td></tr>
+                <tr><td class="mono t-strong">{{ad_sidebar}}</td><td class="muted">Sidebar</td><td><span class="pill p-warn"><span class="dot"></span>Empty</span></td></tr>
+                <tr><td class="mono t-strong">{{ad_footer}}</td><td class="muted">Below footer</td><td><span class="pill p-warn"><span class="dot"></span>Empty</span></td></tr>
+              </tbody>
+            </table></div>
+            <div class="card cardpad">
+              <div class="row" style="justify-content:space-between;margin-bottom:8px"><div class="eyebrow">Edit slot — {{ad_top}}</div><span class="pill p-neutral">not tracked</span></div>
+              <div class="muted" style="font-size:12px;margin-bottom:8px">LiveIntent HTML for <b>The Morning Ledger — series default</b> · reused by every daily edition</div>
+              <textarea rows="6" class="mono" style="font-size:11.5px;line-height:1.6">&lt;a href="https://li.example/imp/abc123"&gt;
+  &lt;img src="https://li.example/creative/728x90.png"
+       width="600" alt="Sponsored"&gt;
+&lt;/a&gt;</textarea>
+              <div class="note info" style="margin-top:10px"><span class="ic">▹</span><div>Pasted verbatim into the slot at send time. Links inside are left untouched — no magic token, no click rewriting, excluded from the click map. Saved at the series level, so every future edition reuses it until you change it.</div></div>
+              <div class="row" style="justify-content:flex-end;margin-top:10px"><button class="btn btn-primary btn-sm">Save for series</button></div>
+            </div>
+          </div>
+        </section>
+
+        <!-- IDENTITY & POOLS -->
+        <section class="screen" data-screen="identity">
+          <div class="pagehead"><div><h1>Identity &amp; pools</h1><p>Per-organization Cognito pools, app clients and magic-link signing. Stored in SSM; scoped to <b>Summit Daily</b>.</p></div><button class="btn">Save changes</button></div>
+          <div class="grid2">
+            <div class="card cardpad" style="display:flex;flex-direction:column;gap:11px">
+              <div class="row" style="justify-content:space-between"><div class="eyebrow">Admin user pool · staff</div><span class="pill p-accent">shared across orgs</span></div>
+              <div class="field"><label>User pool ID</label><input class="mono" value="us-east-1_A9dK2xQ0p" readonly></div>
+              <div class="field"><label>App client ID</label><input class="mono" value="6b3q…console" readonly></div>
+              <div class="field"><label>Hosted UI domain</label><input class="mono" value="admin.addressium.app" readonly></div>
+            </div>
+            <div class="card cardpad" style="display:flex;flex-direction:column;gap:11px">
+              <div class="row" style="justify-content:space-between"><div class="eyebrow">Subscriber user pool</div><span class="pill p-paid"><span class="dot"></span>per-org · shared w/ site</span></div>
+              <div class="field"><label>User pool ID</label><input class="mono" value="us-east-1_Smt7Rp4Wq" readonly></div>
+              <div class="field"><label>App client ID (site)</label><input class="mono" value="1f9a…summit" readonly></div>
+              <div class="field"><label>Main-site domain</label><input class="mono" value="summitdaily.com" readonly></div>
+            </div>
+          </div>
+          <div class="card cardpad" style="display:flex;flex-direction:column;gap:12px">
+            <div class="eyebrow">Magic-link signing · Summit Daily</div>
+            <div class="grid2" style="gap:12px">
+              <div class="field"><label>KMS key ARN (ES256)</label><input class="mono" value="arn:aws:kms:us-east-1:…:key/8f2c" readonly></div>
+              <div class="field"><label>JWKS URL</label><input class="mono" value="https://api.addressium…/summit/jwks.json" readonly></div>
+              <div class="field"><label>Issuer (iss)</label><input class="mono" value="https://addressium/summit" readonly></div>
+              <div class="field"><label>Audience (aud)</label><input class="mono" value="summitdaily.com" readonly></div>
+            </div>
+            <div class="note warn"><span class="ic">⚠</span><div>Each organization has its <b>own signing key, JWKS and subscriber pool</b> — silos never share tokens. Rotating here republishes only Summit Daily’s JWKS.</div></div>
+          </div>
+        </section>
+
+        <!-- DATA & EXPORTS -->
+        <section class="screen" data-screen="data">
+          <div class="pagehead"><div><h1>Data &amp; exports</h1><p>Import from Pinpoint / CSV and export subscriber lists or segments — scoped to this organization.</p></div></div>
+          <div class="grid2">
+            <div class="card cardpad" style="display:flex;flex-direction:column;gap:14px">
+              <div class="eyebrow">Import</div>
+              <div style="border:1.5px dashed var(--border-strong);border-radius:10px;padding:24px;text-align:center;color:var(--ink-3)">⬆ Drop a Pinpoint export or CSV<br><span style="font-size:12px">endpoints · segments · suppression</span></div>
+              <button class="btn btn-primary" style="align-self:flex-start">Start dry run</button>
+            </div>
+            <div class="card cardpad" style="display:flex;flex-direction:column;gap:12px">
+              <div class="eyebrow">Export</div>
+              <div class="field"><label>Audience</label><select><option>The Morning Ledger — all confirmed</option><option>Segment: Paid subscribers</option><option>Everyone in Summit Daily</option></select></div>
+              <div class="field"><label>Format</label><select><option>CSV</option><option>JSON (NDJSON)</option></select></div>
+              <div class="field"><label>Fields</label><div class="row"><span class="pill p-accent">email</span><span class="pill p-accent">first_name</span><span class="pill p-accent">entitlement</span><span class="pill p-accent">status</span><button class="btn btn-ghost btn-sm">＋</button></div></div>
+              <button class="btn btn-primary" style="align-self:flex-start">Export 96,204 rows</button>
+            </div>
+          </div>
+          <div class="card"><div class="cardhead"><h3>Recent jobs</h3></div><table>
+            <thead><tr><th>Job</th><th>Type</th><th>Rows</th><th>Status</th><th>When</th></tr></thead>
+            <tbody>
+              <tr><td class="mono">export-ledger-0720.csv</td><td>Export</td><td class="num">96,204</td><td><span class="pill p-good"><span class="dot"></span>Ready</span></td><td>Just now</td></tr>
+              <tr><td class="mono">pinpoint-export-0719.csv</td><td>Import (dry run)</td><td class="num">16,502</td><td><span class="pill p-good"><span class="dot"></span>Reviewed</span></td><td>Yesterday</td></tr>
+              <tr><td class="mono">suppression-0715.csv</td><td>Import</td><td class="num">1,204</td><td><span class="pill p-good"><span class="dot"></span>Committed</span></td><td>5 days ago</td></tr>
+            </tbody>
+          </table></div>
+        </section>
+
+        <!-- SUBSCRIBER DETAIL -->
+        <section class="screen" data-screen="subscriber-detail">
+          <div class="pagehead">
+            <div><span class="flink" style="font-size:12.5px;color:var(--accent-ink);font-weight:600;cursor:pointer" onclick="nav('subscribers')">← Subscribers</span>
+              <h1 style="margin-top:6px">Jordan Reyes <span class="pill p-paid" style="vertical-align:middle"><span class="dot"></span>Paid</span></h1>
+              <p>jordan.reyes@gmail.com</p></div>
+            <div class="row"><button class="btn" onclick="openPreview()">Send preview</button><button class="btn">Export data (GDPR)</button><button class="btn" style="color:var(--crit);border-color:var(--crit)" onclick="manualUnsubAll()">Unsubscribe from all</button><button class="btn" style="color:var(--crit);border-color:var(--crit)">Erase / forget</button></div>
+          </div>
+          <div class="grid2">
+            <div class="card cardpad">
+              <div class="eyebrow" style="margin-bottom:12px">Identity</div>
+              <dl class="kv" style="gap:11px 18px">
+                <dt>Cognito sub</dt><dd class="mono">a1f3b8c0-…-9c2</dd>
+                <dt>Organization</dt><dd>Summit Daily</dd>
+                <dt>Status</dt><dd><span class="pill p-good"><span class="dot"></span>Confirmed</span></dd>
+                <dt>Entitlement</dt><dd><span class="pill p-paid"><span class="dot"></span>paid</span> <span class="muted">· asof 4 min ago</span></dd>
+                <dt>Source</dt><dd>Signup form · homepage</dd>
+                <dt>Consent</dt><dd>2025-11-04 · IP 73.x · double opt-in</dd>
+                <dt>Suppression</dt><dd id="supState"><span class="pill p-good"><span class="dot"></span>None</span></dd>
+              </dl>
+            </div>
+            <div class="card">
+              <div class="cardhead"><h3>List subscriptions</h3></div>
+              <div id="sub-lists">
+                <div class="actitem"><div class="meta"><b>The Morning Ledger</b><div>Confirmed · daily</div></div><button class="btn btn-sm" onclick="rowUnsub(this)">Unsubscribe</button></div>
+                <div class="actitem"><div class="meta"><b>Market Signal</b><div>Confirmed · weekly · paid</div></div><button class="btn btn-sm" onclick="rowUnsub(this)">Unsubscribe</button></div>
+                <div class="actitem"><div class="meta"><b>Weekend Long Read</b><div>Confirmed · weekly</div></div><button class="btn btn-sm" onclick="rowUnsub(this)">Unsubscribe</button></div>
+              </div>
+              <div class="note info" style="margin:14px 18px"><span class="ic">▹</span><div>Manual unsubscribe writes a suppression entry and flips the list status immediately — the next send skips them.</div></div>
+            </div>
+          </div>
+          <div class="card"><div class="cardhead"><h3>Recent activity</h3></div><div class="actlist">
+            <div class="actitem"><div class="ci">◔</div><div class="meta"><b>Opened — The Morning Ledger, Jul 20</b><div>2 hours ago</div></div></div>
+            <div class="actitem"><div class="ci">➤</div><div class="meta"><b>Clicked — “the chart everyone’s sharing”</b><div>2 hours ago · lite session established</div></div></div>
+            <div class="actitem"><div class="ci">◔</div><div class="meta"><b>Opened — Market Signal</b><div>Yesterday</div></div></div>
+          </div></div>
+        </section>
+
+        <!-- SUPPRESSION -->
+        <section class="screen" data-screen="suppression">
+          <div class="pagehead"><div><h1>Suppression</h1><p>Addresses that are never sent to. Hard bounces and complaints are added automatically.</p></div><button class="btn btn-primary">＋ Add address</button></div>
+          <div class="card cardpad" style="display:flex;flex-direction:column;gap:12px">
+            <div class="eyebrow">Suppression scope</div>
+            <p class="muted" style="margin:0;font-size:13px">How the do-not-send list is shared across your organizations. Set once per deployment; override per org if needed.</p>
+            <div class="row" style="gap:10px;align-items:stretch">
+              <label class="checkline" style="border:1px solid var(--border);border-radius:10px;padding:12px 14px;flex:1;margin:0;align-items:flex-start"><input type="radio" name="supscope"><span><b>Global — shared list</b><div class="muted" style="font-size:12px">One list reused by every org. Simplest; protects shared account reputation.</div></span></label>
+              <label class="checkline" style="border:1px solid var(--border);border-radius:10px;padding:12px 14px;flex:1;margin:0;align-items:flex-start"><input type="radio" name="supscope"><span><b>Per-organization</b><div class="muted" style="font-size:12px">Each org keeps its own list. Full brand separation.</div></span></label>
+              <label class="checkline" style="border:1px solid var(--accent);border-radius:10px;padding:12px 14px;flex:1;margin:0;align-items:flex-start;background:var(--accent-soft)"><input type="radio" name="supscope" checked><span><b>Hybrid <span class="pill p-accent" style="margin-left:4px">recommended</span></b><div style="font-size:12px;color:var(--accent-ink)">Bounces + complaints global (account-wide protection); unsubscribes per-org.</div></span></label>
+            </div>
+          </div>
+          <div class="toolbar">
+            <div class="searchbox" style="max-width:260px">🔍 <input placeholder="Email"></div>
+            <button class="filterchip on">All</button><button class="filterchip">Bounce</button><button class="filterchip">Complaint</button><button class="filterchip">Unsubscribe</button><button class="filterchip">Manual</button>
+            <div style="flex:1"></div><span class="muted" style="font-size:12.5px">3,912 addresses</span>
+          </div>
+          <div class="card"><table>
+            <thead><tr><th>Address</th><th>Reason</th><th>Scope</th><th>Added</th></tr></thead>
+            <tbody>
+              <tr><td class="mono">bounce@olddomain.com</td><td><span class="pill p-crit"><span class="dot"></span>Hard bounce</span></td><td><span class="pill p-neutral">Global</span></td><td>2h ago</td></tr>
+              <tr><td class="mono">angry@example.com</td><td><span class="pill p-crit"><span class="dot"></span>Complaint</span></td><td><span class="pill p-neutral">Global</span></td><td>Yesterday</td></tr>
+              <tr><td class="mono">dan.kim@gmail.com</td><td><span class="pill p-warn"><span class="dot"></span>Unsubscribe</span></td><td><span class="pill p-accent">Summit Daily</span></td><td>12d ago</td></tr>
+              <tr><td class="mono">test@spamtrap.net</td><td><span class="pill p-neutral">Manual</span></td><td><span class="pill p-neutral">Global</span></td><td>1 mo ago</td></tr>
+            </tbody>
+          </table></div>
+        </section>
+
+        <!-- ORGANIZATIONS -->
+        <section class="screen" data-screen="organizations">
+          <div class="pagehead"><div><h1>Organizations</h1><p>Each organization is an isolated silo. Manage the subscriber-pool ↔ org ↔ domain links and per-org setup here.</p></div><button class="btn btn-primary" onclick="openModal('addorg')">＋ Add organization</button></div>
+          <div class="card"><table>
+            <thead><tr><th>Organization</th><th>Domain</th><th>Subscriber pool ID</th><th>Time zone</th><th>Sending IP</th><th>Suppression</th><th>Setup</th></tr></thead>
+            <tbody>
+              <tr><td class="t-strong">Summit Daily</td><td class="mono muted">summitdaily.com</td><td class="mono muted">us-east-1_Smt7Rp4Wq</td><td class="muted">America/Denver</td><td><span class="pill p-neutral">Shared</span></td><td><span class="pill p-neutral">Hybrid</span></td><td><span class="pill p-good"><span class="dot"></span>Verified</span></td></tr>
+              <tr><td class="t-strong">Vail Daily</td><td class="mono muted">vaildaily.com</td><td class="mono muted">us-east-1_Vail3Kp9x</td><td class="muted">America/Denver</td><td><span class="pill p-paid"><span class="dot"></span>Dedicated</span></td><td><span class="pill p-neutral">Hybrid</span></td><td><span class="pill p-good"><span class="dot"></span>Verified</span></td></tr>
+              <tr><td class="t-strong">Aspen Times</td><td class="mono muted">aspentimes.com</td><td class="mono muted">us-east-1_Asp2Qw8v</td><td class="muted">America/Denver</td><td><span class="pill p-neutral">Shared</span></td><td><span class="pill p-neutral">Per-org</span></td><td><span class="pill p-warn"><span class="dot"></span>DMARC pending</span></td></tr>
+            </tbody>
+          </table></div>
+          <div class="grid2">
+            <div class="card cardpad">
+              <div class="eyebrow" style="margin-bottom:12px">Setup checklist — Aspen Times</div>
+              <div style="display:flex;flex-direction:column;gap:9px;font-size:13.5px">
+                <div class="row"><span class="pill p-good" style="padding:1px 6px"><span class="dot"></span></span> Domain verified in SES</div>
+                <div class="row"><span class="pill p-good" style="padding:1px 6px"><span class="dot"></span></span> DKIM signing enabled</div>
+                <div class="row"><span class="pill p-good" style="padding:1px 6px"><span class="dot"></span></span> SPF aligned</div>
+                <div class="row"><span class="pill p-warn" style="padding:1px 6px"><span class="dot"></span></span> DMARC — move p=none → p=reject</div>
+                <div class="row"><span class="pill p-good" style="padding:1px 6px"><span class="dot"></span></span> Subscriber pool linked</div>
+                <div class="row"><span class="pill p-good" style="padding:1px 6px"><span class="dot"></span></span> Magic-link JWKS published</div>
+              </div>
+            </div>
+            <div class="card cardpad">
+              <div class="eyebrow" style="margin-bottom:10px">First-time install</div>
+              <p class="muted" style="margin:0 0 12px;font-size:13px">A fresh addressium deploy runs the setup wizard once: verify a domain in SES (DKIM / SPF / DMARC), then create the first organization and link a Cognito subscriber pool. Every org after that repeats this checklist.</p>
+              <div class="note info"><span class="ic">▹</span><div>Your account’s domains are already verified — this is what a new developer installing the repo walks through per org.</div></div>
+            </div>
+          </div>
+        </section>
+
+        <!-- API & WEBHOOKS -->
+        <section class="screen" data-screen="apikeys">
+          <div class="pagehead"><div><h1>API &amp; webhooks</h1><p>Programmatic access for entitlement sync, subscriber events and integrations — scoped per organization.</p></div><button class="btn btn-primary">＋ Create key</button></div>
+          <div class="card"><div class="cardhead"><h3>API keys</h3></div><table>
+            <thead><tr><th>Name</th><th>Key</th><th>Scope</th><th>Last used</th></tr></thead>
+            <tbody>
+              <tr><td class="t-strong">Stripe entitlement sync</td><td class="mono muted">sk_live_9f2c…a1</td><td><span class="pill p-accent">entitlement:write</span></td><td>4 min ago</td></tr>
+              <tr><td class="t-strong">CMS integration</td><td class="mono muted">sk_live_2b7d…c4</td><td><span class="pill p-accent">subscribers:read</span></td><td>1h ago</td></tr>
+            </tbody>
+          </table></div>
+          <div class="card"><div class="cardhead"><h3>Outbound webhooks</h3><button class="btn btn-sm">＋ Add endpoint</button></div><table>
+            <thead><tr><th>Endpoint</th><th>Events</th><th>Status</th></tr></thead>
+            <tbody>
+              <tr><td class="mono muted">summitdaily.com/hooks/addressium</td><td>subscribed · unsubscribed · complained</td><td><span class="pill p-good"><span class="dot"></span>Healthy</span></td></tr>
+              <tr><td class="mono muted">ops.summitdaily.com/deliverability</td><td>bounce · complaint</td><td><span class="pill p-good"><span class="dot"></span>Healthy</span></td></tr>
+            </tbody>
+          </table></div>
+        </section>
+
+        <!-- USAGE & COST -->
+        <section class="screen" data-screen="usage">
+          <div class="pagehead"><div><h1>Usage &amp; cost</h1><p>addressium is free software — this is your <b>AWS</b> spend, attributed per organization for chargeback across publications.</p></div><div class="tabs"><button class="on">This month</button><button>Last 3 mo</button></div></div>
+          <div class="kpis">
+            <div class="kpi card"><span class="lab">Emails sent</span><span class="val num">412,000</span><span class="delta up">▲ 6.2%</span></div>
+            <div class="kpi card"><span class="lab">Est. SES cost</span><span class="val num">$41.20</span><span class="delta">$0.10 / 1k</span></div>
+            <div class="kpi card"><span class="lab">Subscribers</span><span class="val num">254,530</span><span class="delta up">▲ 2.9%</span></div>
+            <div class="kpi card"><span class="lab">Est. AWS total</span><span class="val num">$96.40</span><span class="delta">SES + IP + infra</span></div>
+          </div>
+          <div class="card"><div class="cardhead"><h3>By organization</h3><button class="btn btn-sm">Export CSV</button></div><table>
+            <thead><tr><th>Organization</th><th>Emails (mo)</th><th>SES cost</th><th>Dedicated IP</th><th>Storage</th><th>Est. total</th></tr></thead>
+            <tbody>
+              <tr><td class="t-strong">Summit Daily</td><td class="num">268,400</td><td class="num">$26.84</td><td class="muted">—</td><td class="num">1.2 GB</td><td class="num t-strong">$27.90</td></tr>
+              <tr><td class="t-strong">Vail Daily</td><td class="num">112,900</td><td class="num">$11.29</td><td><span class="pill p-paid"><span class="dot"></span>$24.95/mo</span></td><td class="num">0.6 GB</td><td class="num t-strong">$37.10</td></tr>
+              <tr><td class="t-strong">Aspen Times</td><td class="num">30,700</td><td class="num">$3.07</td><td class="muted">—</td><td class="num">0.3 GB</td><td class="num t-strong">$3.40</td></tr>
+            </tbody>
+            <tfoot><tr><td class="t-strong">Total</td><td class="num t-strong">412,000</td><td class="num t-strong">$41.20</td><td class="num">$24.95</td><td class="num">2.1 GB</td><td class="num t-strong">$96.40</td></tr></tfoot>
+          </table></div>
+          <div class="grid2">
+            <div class="card cardpad"><div class="eyebrow" style="margin-bottom:12px">Emails sent · 30 days</div>
+              <svg width="100%" height="90" viewBox="0 0 400 90" preserveAspectRatio="none"><defs><linearGradient id="ug" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="var(--accent)" stop-opacity=".26"/><stop offset="1" stop-color="var(--accent)" stop-opacity="0"/></linearGradient></defs><path d="M0,70 L40,64 L80,66 L120,52 L160,56 L200,44 L240,48 L280,36 L320,40 L360,28 L400,30 L400,90 L0,90 Z" fill="url(#ug)"/><path d="M0,70 L40,64 L80,66 L120,52 L160,56 L200,44 L240,48 L280,36 L320,40 L360,28 L400,30" fill="none" stroke="var(--accent)" stroke-width="2"/></svg>
+            </div>
+            <div class="card cardpad"><div class="eyebrow" style="margin-bottom:12px">Cost breakdown</div>
+              <div class="health">
+                <div class="hrow"><span style="width:96px;font-size:12.5px;font-weight:600">SES sending</span><span class="hbar"><i style="width:43%;background:var(--accent)"></i></span><span class="hv num">$41.20</span></div>
+                <div class="hrow"><span style="width:96px;font-size:12.5px;font-weight:600">Dedicated IP</span><span class="hbar"><i style="width:26%;background:var(--paid)"></i></span><span class="hv num">$24.95</span></div>
+                <div class="hrow"><span style="width:96px;font-size:12.5px;font-weight:600">DynamoDB</span><span class="hbar"><i style="width:12%;background:var(--good)"></i></span><span class="hv num">$11.80</span></div>
+                <div class="hrow"><span style="width:96px;font-size:12.5px;font-weight:600">Lambda + S3</span><span class="hbar"><i style="width:19%;background:var(--warn)"></i></span><span class="hv num">$18.45</span></div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- VISUAL BUILDER -->
+        <section class="screen" data-screen="builder">
+          <div class="pagehead"><div><h1>Visual builder</h1><p>Drag-and-drop email builder (GrapesJS → MJML). Outputs the same responsive MJML as hand-authored templates; the compliance footer is added on send.</p></div><div class="row"><button class="btn" onclick="nav('templates')">← Templates</button><button class="btn" onclick="openPreview()">◲ Preview</button><button class="btn btn-primary">Save template</button></div></div>
+          <div class="builder">
+            <div class="palette">
+              <div class="plab">Blocks · drag in</div>
+              <div class="blk">▤&nbsp; Heading</div>
+              <div class="blk">¶&nbsp; Text</div>
+              <div class="blk">▭&nbsp; Image</div>
+              <div class="blk">◼&nbsp; Button</div>
+              <div class="blk">▥&nbsp; Columns</div>
+              <div class="blk">—&nbsp; Divider</div>
+              <div class="blk">▱&nbsp; Ad slot</div>
+              <div class="blk">✦&nbsp; Article (feed)</div>
+              <div class="blk">␣&nbsp; Spacer</div>
+            </div>
+            <div class="canvas">
+              <div class="canvasdoc">
+                <div class="cblk" onclick="selBlock(this)" style="background:var(--accent);color:#fff"><span class="tagname">header</span><b>The Morning Ledger</b></div>
+                <div class="cblk sel" onclick="selBlock(this)"><span class="tagname">heading</span><h4 style="font-size:17px;margin:0">Good morning, {{first_name}}</h4></div>
+                <div class="cblk" onclick="selBlock(this)"><span class="tagname">text</span>The one chart that explains the market — and three things to watch before the open.</div>
+                <div class="cblk" onclick="selBlock(this)"><span class="tagname">button</span><span style="display:inline-block;background:var(--accent);color:#fff;padding:9px 16px;border-radius:7px;font-weight:600;font-size:13px">Read today’s lead</span></div>
+                <div class="cblk" onclick="selBlock(this)" style="text-align:center;color:var(--ink-3)"><span class="tagname">ad_top · LiveIntent</span><span class="mono" style="font-size:11px">{{ad_top}} — inserted on send, not tracked</span></div>
+                <div class="cblk" onclick="selBlock(this)" style="font-size:11px;color:var(--ink-3)"><span class="tagname">footer · auto</span>Summit Daily · 40 W Main St, Frisco CO · Unsubscribe</div>
+              </div>
+            </div>
+            <div class="inspector">
+              <div class="plab">Button · settings</div>
+              <div class="insp-field"><label>Label</label><input type="text" value="Read today’s lead"></div>
+              <div class="insp-field"><label>Link</label><select><option>{{editorial_url}}</option><option>Custom URL</option></select></div>
+              <div class="insp-field"><label>Background</label><input type="text" value="#2f56d4"></div>
+              <div class="insp-field"><label>Align</label><select><option>Left</option><option>Center</option><option>Right</option></select></div>
+              <hr class="divider" style="margin:6px 0">
+              <div class="muted" style="font-size:11.5px">Editorial links get each recipient’s magic-link token automatically.</div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ROLES & ACCESS -->
+        <section class="screen" data-screen="roles">
+          <div class="pagehead"><div><h1>Roles &amp; access</h1><p>What each admin role can do. Assign roles per member and scope them to specific organizations.</p></div><button class="btn btn-primary">＋ New role</button></div>
+          <div class="card" style="overflow-x:auto"><table>
+            <thead><tr><th>Capability</th><th style="text-align:center">Developer&nbsp;Admin</th><th style="text-align:center">Editor</th><th style="text-align:center">Analyst&nbsp;(Sales)</th><th style="text-align:center">Support</th></tr></thead>
+            <tbody>
+              <tr><td class="t-strong">View reports &amp; analytics</td><td class="rc y">✓</td><td class="rc y">✓</td><td class="rc y">✓ <span class="muted" style="font-weight:400">read-only</span></td><td class="rc y">✓</td></tr>
+              <tr><td class="t-strong">Schedule / resend / modify send times</td><td class="rc y">✓</td><td class="rc y">✓</td><td class="rc n">—</td><td class="rc n">—</td></tr>
+              <tr><td class="t-strong">Create / edit / send campaigns</td><td class="rc y">✓</td><td class="rc y">✓</td><td class="rc n">—</td><td class="rc n">—</td></tr>
+              <tr><td class="t-strong">Manage templates &amp; segments</td><td class="rc y">✓</td><td class="rc y">✓</td><td class="rc n">—</td><td class="rc n">—</td></tr>
+              <tr><td class="t-strong">Manage individual subscribers</td><td class="rc y">✓</td><td class="rc y">✓</td><td class="rc n">—</td><td class="rc y">✓</td></tr>
+              <tr><td class="t-strong">Manually unsubscribe someone</td><td class="rc y">✓</td><td class="rc y">✓</td><td class="rc n">—</td><td class="rc y">✓</td></tr>
+              <tr><td class="t-strong">Delete contacts</td><td class="rc y">✓</td><td class="rc n">—</td><td class="rc n">—</td><td class="rc n">—</td></tr>
+              <tr><td class="t-strong">Close / reopen newsletters</td><td class="rc y">✓</td><td class="rc n">—</td><td class="rc n">—</td><td class="rc n">—</td></tr>
+              <tr><td class="t-strong">Manage suppression &amp; alerts</td><td class="rc y">✓</td><td class="rc n">—</td><td class="rc n">—</td><td class="rc n">—</td></tr>
+              <tr><td class="t-strong">Identity, pools, organizations</td><td class="rc y">✓</td><td class="rc n">—</td><td class="rc n">—</td><td class="rc n">—</td></tr>
+              <tr><td class="t-strong">API keys, webhooks &amp; feeds</td><td class="rc y">✓</td><td class="rc n">—</td><td class="rc n">—</td><td class="rc n">—</td></tr>
+              <tr><td class="t-strong">Manage team &amp; roles</td><td class="rc y">✓</td><td class="rc n">—</td><td class="rc n">—</td><td class="rc n">—</td></tr>
+            </tbody>
+          </table></div>
+          <div class="note info"><span class="ic">▹</span><div>Roles are also <b>org-scoped</b>: an Editor for Vail Daily can’t send for Summit Daily, and a Sales/Analyst gets read-only reporting only for the orgs you grant. Destructive actions (delete contacts, close newsletters) are Developer-Admin-only by design.</div></div>
+        </section>
+
+        <!-- AUDIT LOG -->
+        <section class="screen" data-screen="audit">
+          <div class="pagehead"><div><h1>Audit log</h1><p>Every admin action, immutable. Filter by member, organization or action type.</p></div><button class="btn">Export</button></div>
+          <div class="card"><table>
+            <thead><tr><th>When</th><th>Member</th><th>Action</th><th>Org</th></tr></thead>
+            <tbody>
+              <tr><td class="muted">2m ago</td><td>Dana Alvarez</td><td>Sent campaign “The Morning Ledger — Jul 20”</td><td>Summit Daily</td></tr>
+              <tr><td class="muted">1h ago</td><td>Priya Walsh</td><td>Closed newsletter “Product Dispatch”</td><td>Summit Daily</td></tr>
+              <tr><td class="muted">3h ago</td><td>Dana Alvarez</td><td>Manually unsubscribed dan.kim@gmail.com</td><td>Summit Daily</td></tr>
+              <tr><td class="muted">Yesterday</td><td>Ruben Ba</td><td>Exported 96,204 subscribers (CSV)</td><td>Summit Daily</td></tr>
+              <tr><td class="muted">2d ago</td><td>Dana Alvarez</td><td>Provisioned organization “Aspen Times”</td><td>—</td></tr>
+              <tr><td class="muted">3d ago</td><td>Priya Walsh</td><td>Rotated magic-link signing key</td><td>Vail Daily</td></tr>
+            </tbody>
+          </table></div>
+        </section>
+
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============ SUBSCRIBER SITE ============ -->
+<div class="frame" id="frame-subscriber">
+  <div class="pubnav">
+    <div class="plogo"><span class="mark">S</span> Summit&nbsp;Daily</div>
+    <div class="seg" style="margin-left:6px">
+      <button class="on" data-sub="directory" onclick="subnav('directory')">Newsletters</button>
+      <button data-sub="preferences" onclick="subnav('preferences')">My preferences</button>
+      <button data-sub="unsubscribe" onclick="subnav('unsubscribe')">Unsubscribe</button>
+    </div>
+    <div style="flex:1"></div>
+    <button class="btn btn-sm" onclick="setWorld('subscriber');subnav('login')">Log in</button>
+  </div>
+
+  <!-- directory -->
+  <section class="pubscreen" data-sub="directory">
+    <div class="pub">
+      <span class="eyebrow">Summit Daily newsletters</span>
+      <h1 style="margin-top:8px">Independent journalism, in your inbox.</h1>
+      <p class="lede">Pick the newsletters you want. Every subscription is double opt-in — we’ll email you to confirm, and you can manage or leave anytime.</p>
+      <div class="nl-grid">
+        <div class="nl card"><div class="top"><div><h3>The Morning Ledger</h3><div class="freq">Daily · weekday mornings</div></div><span class="pill p-neutral">Free</span></div><p>The business day in a five-minute read. Markets, deals, and the one chart that matters.</p><div class="foot"><span class="cnt">96,204 readers</span><button class="btn btn-primary btn-sm" onclick="subnav('confirm')">Subscribe</button></div></div>
+        <div class="nl card"><div class="top"><div><h3>Market Signal</h3><div class="freq">Weekly · Sunday</div></div><span class="pill p-paid"><span class="dot"></span>Paid</span></div><p>Deep premium analysis for investors. Included with a Summit membership.</p><div class="foot"><span class="cnt">8,410 members</span><button class="btn btn-primary btn-sm" onclick="subnav('confirm')">Subscribe</button></div></div>
+        <div class="nl card"><div class="top"><div><h3>Field Notes</h3><div class="freq">Weekly · Thursday</div></div><span class="pill p-neutral">Free</span></div><p>Long-form features and reporting from the field. One story, told well.</p><div class="foot"><span class="cnt">54,880 readers</span><button class="btn btn-primary btn-sm" onclick="subnav('confirm')">Subscribe</button></div></div>
+        <div class="nl card"><div class="top"><div><h3>Weekend Long Read</h3><div class="freq">Weekly · Saturday</div></div><span class="pill p-neutral">Free</span></div><p>The best of the week plus one essay worth your Saturday coffee.</p><div class="foot"><span class="cnt">61,300 readers</span><button class="btn btn-primary btn-sm" onclick="subnav('confirm')">Subscribe</button></div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- confirm / double opt-in -->
+  <section class="pubscreen" data-sub="confirm" style="display:none">
+    <div class="pub"><div class="card cardpad centercard" style="text-align:center;display:flex;flex-direction:column;gap:12px;align-items:center">
+      <div class="bigcheck">✉</div>
+      <h1 style="font-size:22px">Check your inbox</h1>
+      <p class="muted" style="margin:0">We sent a confirmation link to <b>jordan.reyes@gmail.com</b>. Click it to confirm your subscription to <b>The Morning Ledger</b>.</p>
+      <div class="note info" style="text-align:left"><span class="ic">▹</span><div>Double opt-in protects deliverability and proves consent. Didn’t get it? Check spam, or <a class="flink" href="#" onclick="return false">resend</a>.</div></div>
+      <hr class="divider" style="width:100%">
+      <div style="font-size:13px" class="muted">Already confirmed? <a class="flink" href="#" onclick="subnav('login')">Log in to manage preferences →</a></div>
+    </div></div>
+  </section>
+
+  <!-- subscriber login (Cognito hosted UI — subscriber pool) -->
+  <section class="pubscreen" data-sub="login" style="display:none">
+    <div class="cog-wrap sub">
+      <div class="cog">
+        <span class="poolchip sub">Subscriber pool · shared with summitdaily.com</span>
+        <div class="cog-card">
+          <div class="cog-logo"><span class="mark" style="width:28px;height:28px;border-radius:7px;background:linear-gradient(135deg,#c98a3a,#9a5a20);color:#fff;display:grid;place-items:center;font-weight:800">S</span><b>Summit Daily</b></div>
+          <h2>Sign in</h2>
+          <div class="sub">One account for your newsletters and the site</div>
+          <form onsubmit="subnav('preferences');return false">
+            <div class="field"><label>Email</label><input type="email" value="jordan.reyes@gmail.com"></div>
+            <div class="field"><label>Password</label><input type="password" value="••••••••••"></div>
+            <a class="flink" href="#" onclick="return false">Forgot your password?</a>
+            <button class="btn btn-primary" type="submit" style="justify-content:center;padding:11px">Sign in</button>
+            <div class="or">or</div>
+            <button class="btn" type="button" style="justify-content:center" onclick="subnav('preferences')">Email me a magic link</button>
+          </form>
+          <div class="foot" style="margin-top:14px">New here? <a class="flink" href="#" onclick="subnav('directory')">Browse newsletters</a></div>
+        </div>
+        <div class="cog foot" style="text-align:center">Hosted UI secured by <b>Amazon Cognito</b></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- preference center -->
+  <section class="pubscreen" data-sub="preferences" style="display:none">
+    <div class="pub" style="max-width:680px">
+      <span class="eyebrow">Signed in as jordan.reyes@gmail.com</span>
+      <h1 style="margin-top:8px">Your newsletters</h1>
+      <p class="lede">Toggle what lands in your inbox. Changes save instantly.</p>
+      <div class="card cardpad" style="margin-top:22px">
+        <div class="prefrow"><div class="info"><b>The Morning Ledger</b><div>Daily · weekday mornings</div></div><div class="toggle on" onclick="this.classList.toggle('on')"><i></i></div></div>
+        <div class="prefrow"><div class="info"><b>Market Signal</b> <span class="pill p-paid" style="margin-left:6px"><span class="dot"></span>Paid</span><div>Weekly · Sunday</div></div><div class="toggle on" onclick="this.classList.toggle('on')"><i></i></div></div>
+        <div class="prefrow"><div class="info"><b>Field Notes</b><div>Weekly · Thursday</div></div><div class="toggle" onclick="this.classList.toggle('on')"><i></i></div></div>
+        <div class="prefrow"><div class="info"><b>Weekend Long Read</b><div>Weekly · Saturday</div></div><div class="toggle on" onclick="this.classList.toggle('on')"><i></i></div></div>
+      </div>
+      <div class="card cardpad" style="margin-top:16px;display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap">
+        <div><b style="font-size:14px">Account &amp; membership</b><div class="muted" style="font-size:12.5px;margin-top:2px">Membership: <span class="pill p-paid"><span class="dot"></span>Paid</span> · entitlement drives your paywall access on the site</div></div>
+        <button class="btn btn-sm">Manage account</button>
+      </div>
+      <div style="margin-top:16px;font-size:13px" class="muted">Want out entirely? <a class="flink" href="#" onclick="subnav('unsubscribe')">Unsubscribe from everything →</a></div>
+    </div>
+  </section>
+
+  <!-- unsubscribe (POST form) -->
+  <section class="pubscreen" data-sub="unsubscribe" style="display:none">
+    <div class="pub"><div class="card cardpad centercard" style="display:flex;flex-direction:column;gap:14px">
+      <div><span class="eyebrow">Unsubscribe</span><h1 style="font-size:22px;margin-top:8px">Leave a newsletter</h1></div>
+      <p class="muted" style="margin:0;font-size:13.5px">You’re unsubscribing <b>jordan.reyes@gmail.com</b>. This is a one-click, no-login action (RFC 8058) — the button posts a signed form.</p>
+      <!-- illustrative POST form: one-click unsubscribe endpoint -->
+      <form method="POST" action="/u/unsubscribe" onsubmit="showUnsubDone();return false" style="display:flex;flex-direction:column;gap:12px">
+        <input type="hidden" name="token" value="eyJhbGciOiJFUzI1NiJ9.…signed">
+        <div class="field"><label>Which list?</label>
+          <select name="list"><option value="ledger">The Morning Ledger</option><option value="signal">Market Signal</option><option value="field">Field Notes</option><option value="__all">All newsletters</option></select></div>
+        <label class="checkline"><input type="checkbox" name="reason_optout"><span style="font-size:13px">Optionally tell us why (helps us improve) — too many emails</span></label>
+        <div class="row"><button class="btn btn-primary" type="submit" name="action" value="unsubscribe">Unsubscribe</button><button class="btn" type="button" onclick="subnav('preferences')">Manage instead</button></div>
+      </form>
+      <div class="note info"><span class="ic">▹</span><div>The <span class="mono">List-Unsubscribe-Post</span> header lets Gmail/Apple Mail trigger this same endpoint from the inbox in one tap.</div></div>
+      <div id="unsub-done" style="display:none" class="note" ><span class="ic">✓</span></div>
+    </div></div>
+  </section>
+</div>
+
+<!-- ============ MODALS ============ -->
+<div class="modal-bk" id="m-preview" onclick="if(event.target===this)closeModal()">
+  <div class="modal wide">
+    <div class="modal-h"><h3>Email preview — The Morning Ledger</h3><button class="xbtn" onclick="closeModal()">×</button></div>
+    <div class="modal-b" style="background:var(--surface-2)">
+      <div class="row" style="justify-content:center;gap:6px"><span class="pill p-neutral">Desktop</span><span class="pill p-accent">Mobile</span><span class="muted" style="font-size:12px;align-self:center">merge tags resolved for Jordan</span></div>
+      <div class="email" style="max-width:480px;margin:0 auto">
+        <div class="ehead"><span class="stamp" style="width:18px;height:18px"></span> The Morning Ledger</div>
+        <div class="ebody">
+          <div class="muted" style="font-size:11px">Tuesday, July 20 · Frisco, CO</div>
+          <h4>The one chart that explains the market</h4>
+          <p>Good morning, Jordan. Futures slipped overnight after the jobs print — here’s the single chart everyone in the valley is forwarding this morning, and the three things worth watching before the open.</p>
+          <button class="btn btn-primary btn-sm" style="align-self:flex-start" onclick="return false">Read today’s lead →</button>
+          <hr class="divider">
+          <p style="margin:0"><b>Also in today’s Ledger</b></p>
+          <p style="margin:0;font-size:13px">· Rates tick up as the Fed signals patience<br>· Energy names lead the pre-market<br>· A local deal to watch in Summit County</p>
+          <div class="adslot" style="margin-top:6px"><span class="adtag">LiveIntent · sponsored</span>Your ad here — untracked, no token</div>
+          <p class="muted" style="font-size:11px;margin:6px 0 0">You’re getting this because you subscribed at summitdaily.com.<br>Summit Daily · 40 W Main St, Frisco CO · <span style="text-decoration:underline">Unsubscribe</span> · <span style="text-decoration:underline">Manage preferences</span></p>
+        </div>
+      </div>
+    </div>
+    <div class="modal-f"><button class="btn" onclick="closeModal()">Close</button><button class="btn btn-primary" onclick="closeModal()">Send test to me</button></div>
+  </div>
+</div>
+
+<div class="modal-bk" id="m-newsletter" onclick="if(event.target===this)closeModal()">
+  <div class="modal">
+    <div class="modal-h"><h3>New newsletter</h3><button class="xbtn" onclick="closeModal()">×</button></div>
+    <div class="modal-b">
+      <div class="field"><label>Name (shown on the opt-in page)</label><input type="text" placeholder="e.g. Summit Sports Weekly"></div>
+      <div class="field"><label>Short description</label><textarea rows="2" placeholder="One or two lines subscribers see when choosing."></textarea></div>
+      <div class="grid2" style="gap:12px">
+        <div class="field"><label>Opt-in policy</label><select><option>Double opt-in (recommended)</option><option>Single opt-in</option></select></div>
+        <div class="field"><label>Access</label><select><option>Free</option><option>Paid — requires entitlement</option></select></div>
+      </div>
+      <div class="field"><label>From address</label><div class="row" style="gap:6px"><input type="text" placeholder="sports" style="max-width:150px"><span class="mono muted">@summitdaily.com</span></div></div>
+      <hr class="divider">
+      <div class="row" style="justify-content:space-between"><div><b style="font-size:13.5px">Show on public opt-in page</b><div class="muted" style="font-size:12px">Off = created but closed; hidden from the directory, no signups.</div></div><div class="toggle on" onclick="this.classList.toggle('on')"><i></i></div></div>
+    </div>
+    <div class="modal-f"><button class="btn" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal()">Create newsletter</button></div>
+  </div>
+</div>
+
+<div class="modal-bk" id="m-org" onclick="if(event.target===this)closeModal()">
+  <div class="modal">
+    <div class="modal-h"><h3>Switch organization</h3><button class="xbtn" onclick="closeModal()">×</button></div>
+    <div class="modal-b" style="gap:8px">
+      <div class="muted" style="font-size:12.5px">Each organization is an isolated silo — its own domain, subscriber pool, signing key and data.</div>
+      <div class="actitem" style="border:1px solid var(--accent);border-radius:10px;cursor:pointer" onclick="switchOrg('Summit Daily','summitdaily.com')"><div class="ci">S</div><div class="meta"><b>Summit Daily</b><div>summitdaily.com · 128,430 subscribers</div></div><span class="pill p-accent">current</span></div>
+      <div class="actitem" style="border:1px solid var(--border);border-radius:10px;cursor:pointer" onclick="switchOrg('Vail Daily','vaildaily.com')"><div class="ci" style="background:#e9dcc7;color:#8a5a1c">V</div><div class="meta"><b>Vail Daily</b><div>vaildaily.com · 74,900 subscribers</div></div><span class="muted">↦</span></div>
+      <div class="actitem" style="border:1px solid var(--border);border-radius:10px;cursor:pointer" onclick="switchOrg('Aspen Times','aspentimes.com')"><div class="ci" style="background:var(--surface-3);color:var(--ink-2)">A</div><div class="meta"><b>Aspen Times</b><div>aspentimes.com · 51,200 subscribers</div></div><span class="muted">↦</span></div>
+    </div>
+    <div class="modal-f"><button class="btn btn-primary" style="width:100%;justify-content:center" onclick="openModal('addorg')">＋ Add organization</button></div>
+  </div>
+</div>
+
+<div class="modal-bk" id="m-addorg" onclick="if(event.target===this)closeModal()">
+  <div class="modal">
+    <div class="modal-h"><h3>Add organization</h3><button class="xbtn" onclick="closeModal()">×</button></div>
+    <div class="modal-b">
+      <div class="note info"><span class="ic">▹</span><div>This provisions an isolated silo: a dedicated subscriber Cognito pool, KMS signing key, SES identity and JWKS — nothing is shared with your other publications.</div></div>
+      <div class="field"><label>Organization name</label><input type="text" placeholder="e.g. Steamboat Pilot"></div>
+      <div class="field"><label>Primary sending domain</label><input class="mono" type="text" placeholder="steamboatpilot.com"></div>
+      <div class="grid2" style="gap:12px">
+        <div class="field"><label>Region</label><select><option>us-east-1</option><option>us-west-2</option></select></div>
+        <div class="field"><label>Default time zone</label><select><option>America/Denver</option><option>America/New_York</option><option>America/Chicago</option><option>America/Los_Angeles</option><option>UTC</option></select></div>
+      </div>
+      <div class="muted" style="font-size:11px;margin-top:-6px">Time zone drives recurring send schedules (DST-aware) and report bucketing — storage stays UTC.</div>
+      <div class="grid2" style="gap:12px">
+        <div class="field"><label>Subscriber pool</label><select><option>Link existing pool (recommended)</option><option>Create a new pool</option></select></div>
+        <div class="field"><label>Existing user pool ID</label><input class="mono" type="text" placeholder="us-west-2_XXXXXXXXX"></div>
+      </div>
+      <div class="field"><label>Site domain (shared login / paywall)</label><input class="mono" type="text" placeholder="steamboatpilot.com"></div>
+      <div class="note info"><span class="ic">▹</span><div>Most publishers already have a Cognito pool behind their site — link it so magic-link <span class="mono">sub</span> matches your existing users. Pick “create” only if this site has no auth yet.</div></div>
+      <hr class="divider">
+      <div class="row" style="justify-content:space-between"><div><b style="font-size:13.5px">Dedicated IP pool</b><div class="muted" style="font-size:12px">Isolate this org’s sending reputation (added cost). Off = shared account IPs.</div></div><div class="toggle" onclick="this.classList.toggle('on')"><i></i></div></div>
+      <div class="field"><label>Suppression scope</label><select><option>Hybrid — bounces/complaints global, unsubscribes per-org</option><option>Global shared list</option><option>Per-organization</option></select></div>
+    </div>
+    <div class="modal-f"><button class="btn" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal()">Provision silo →</button></div>
+  </div>
+</div>
+
+<script>
+  // theme toggle
+  var tb=document.getElementById('themebtn');
+  tb.addEventListener('click',function(){
+    var r=document.documentElement;
+    var cur=r.getAttribute('data-theme');
+    if(!cur){cur=matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light';}
+    r.setAttribute('data-theme',cur==='dark'?'light':'dark');
+  });
+
+  // world switcher (admin login / admin console / subscriber site)
+  function setWorld(w){
+    document.querySelectorAll('.frame').forEach(function(f){f.classList.remove('on')});
+    document.getElementById('frame-'+w).classList.add('on');
+    document.querySelectorAll('#worldseg button').forEach(function(b){b.classList.toggle('on',b.dataset.world===w)});
+    window.scrollTo(0,0);
+  }
+  document.querySelectorAll('#worldseg button').forEach(function(b){
+    b.addEventListener('click',function(){setWorld(b.dataset.world)});
+  });
+  // convenience: jump to a world + admin screen
+  function go(world,screen){setWorld(world);if(screen)nav(screen);}
+
+  // admin nav
+  var crumbNames={dashboard:'Dashboard',analytics:'Analytics',newsletters:'Newsletters',subscribers:'Subscribers','subscriber-detail':'Subscriber',segments:'Segments',campaigns:'Campaigns',compose:'New campaign',templates:'Templates',automations:'Automations',feeds:'Feeds',tags:'Merge tags',adtags:'Ad tags',identity:'Identity & pools',data:'Data & exports',apikeys:'API & webhooks',suppression:'Suppression',organizations:'Organizations',roles:'Roles & access',usage:'Usage & cost',builder:'Visual builder',audit:'Audit log',settings:'Settings'};
+  function nav(screen){
+    document.querySelectorAll('#frame-admin .screen').forEach(function(s){s.classList.toggle('on',s.dataset.screen===screen)});
+    document.querySelectorAll('#frame-admin .navlink').forEach(function(n){n.classList.toggle('on',n.dataset.screen===screen)});
+    var c=document.getElementById('crumb');if(c)c.textContent=crumbNames[screen]||screen;
+    closeSide();
+    window.scrollTo(0,0);
+  }
+  function toggleSide(){
+    document.querySelector('#frame-admin .side').classList.toggle('open');
+    document.getElementById('scrim').classList.toggle('on');
+  }
+  function closeSide(){
+    var s=document.querySelector('#frame-admin .side');if(s)s.classList.remove('open');
+    var sc=document.getElementById('scrim');if(sc)sc.classList.remove('on');
+  }
+
+  // in-page tabs (settings, etc.)
+  function tab(group,name){
+    document.querySelectorAll('#'+group+'-tabs button').forEach(function(b){b.classList.toggle('on',b.dataset.t===name)});
+    document.querySelectorAll('[data-pane^="'+group+'-"]').forEach(function(p){p.classList.toggle('on',p.dataset.pane===group+'-'+name)});
+  }
+
+  // subscriber nav
+  function subnav(name){
+    setWorld('subscriber');
+    document.querySelectorAll('.pubscreen').forEach(function(s){s.style.display=s.dataset.sub===name?'block':'none'});
+    document.querySelectorAll('[data-sub]').forEach(function(b){if(b.tagName==='BUTTON')b.classList.toggle('on',b.dataset.sub===name)});
+    window.scrollTo(0,0);
+  }
+  function showUnsubDone(){
+    var d=document.getElementById('unsub-done');
+    d.className='note';d.style.display='flex';d.style.background='var(--good-soft)';d.style.color='var(--good)';
+    d.innerHTML='<span class="ic">✓</span><div><b>You’re unsubscribed.</b> You’ll stop receiving that newsletter within a few minutes. Changed your mind? Re-subscribe anytime.</div>';
+  }
+
+  // modals
+  function openModal(id){
+    document.querySelectorAll('.modal-bk').forEach(function(m){m.classList.remove('on')});
+    var el=document.getElementById('m-'+id);if(el)el.classList.add('on');
+  }
+  function closeModal(){document.querySelectorAll('.modal-bk').forEach(function(m){m.classList.remove('on')});}
+  function openPreview(){openModal('preview');}
+  document.addEventListener('keydown',function(e){if(e.key==='Escape')closeModal();});
+
+  // analytics report tabs
+  function atab(name){
+    var btns=document.querySelectorAll('#atabs button');var map={map:0,funnel:1,links:2};
+    btns.forEach(function(b){b.classList.remove('on')});if(btns[map[name]])btns[map[name]].classList.add('on');
+    document.querySelectorAll('[data-apane]').forEach(function(p){p.classList.toggle('on',p.dataset.apane===name)});
+  }
+
+  // close / reopen a newsletter (signups on/off + opt-in page visibility)
+  function toggleClose(btn){
+    var pill=btn.closest('tr').querySelector('.vis');
+    var closed=pill.textContent.trim()==='Closed';
+    if(closed){pill.className='pill p-good vis';pill.innerHTML='<span class="dot"></span>Open';btn.textContent='Close';}
+    else{pill.className='pill p-neutral vis';pill.textContent='Closed';btn.textContent='Reopen';}
+  }
+
+  // manual unsubscribe (subscriber detail)
+  function rowUnsub(btn){
+    var item=btn.closest('.actitem');var meta=item.querySelector('.meta div');
+    meta.innerHTML='<span style="color:var(--crit);font-weight:600">Unsubscribed · suppressed</span>';
+    btn.outerHTML='<span class="pill p-crit"><span class="dot"></span>Removed</span>';
+  }
+  function manualUnsubAll(){
+    document.querySelectorAll('#sub-lists .actitem').forEach(function(item){
+      var b=item.querySelector('button');if(b)rowUnsub(b);
+    });
+    var s=document.getElementById('supState');if(s)s.innerHTML='<span class="pill p-crit"><span class="dot"></span>Suppressed · all lists</span>';
+  }
+
+  // visual builder — select a block
+  function selBlock(el){
+    document.querySelectorAll('#frame-admin .cblk').forEach(function(b){b.classList.remove('sel')});
+    el.classList.add('sel');
+  }
+
+  // sandbox / test mode
+  function toggleSandbox(){
+    var on=document.getElementById('sbxBanner').style.display==='none';
+    document.getElementById('sbxBanner').style.display=on?'block':'none';
+    document.getElementById('sbxBtn').innerHTML=on
+      ? '<span id="sbxDot" style="color:var(--warn)">●</span>&nbsp;Sandbox'
+      : '<span id="sbxDot" style="color:var(--good)">●</span>&nbsp;Live';
+  }
+
+  // organization switcher (multi-silo)
+  function switchOrg(name,domain){
+    document.getElementById('orgName').textContent=name;
+    document.getElementById('orgDomain').textContent=domain+' · prod';
+    document.getElementById('crumbOrg').textContent=name;
+    closeModal();nav('dashboard');
+  }
+</script>

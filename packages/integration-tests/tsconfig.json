@@ -1,0 +1,27 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "dist",
+    "rootDir": "."
+  },
+  "include": [
+    "test/**/*.ts"
+  ],
+  "references": [
+    {
+      "path": "../core"
+    },
+    {
+      "path": "../domain"
+    },
+    {
+      "path": "../adapters-aws"
+    },
+    {
+      "path": "../rbac"
+    },
+    {
+      "path": "../segment"
+    }
+  ]
+}

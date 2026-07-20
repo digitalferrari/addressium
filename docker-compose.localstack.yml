@@ -1,0 +1,16 @@
+# LocalStack for the AWS-adapter integration tests (#19).
+#   docker compose -f docker-compose.localstack.yml up -d
+#   npm test        # the localstack.integration test now runs; otherwise it skips
+services:
+  localstack:
+    image: localstack/localstack:3
+    ports:
+      - "4566:4566"
+    environment:
+      - SERVICES=sqs,kms,scheduler,ses
+      - DEBUG=0
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4566/_localstack/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 10

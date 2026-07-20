@@ -1,0 +1,16 @@
+:root { --accent: #4f8cff; --ink: #12141a; --ink-2: #5a6473; --line: #e6e9ef; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
+* { box-sizing: border-box; }
+body { margin: 0; color: var(--ink); background: #f6f7f9; }
+.wrap { max-width: 640px; margin: 0 auto; padding: 40px 20px; }
+h1 { font-size: 22px; }
+.card { background: #fff; border: 1px solid var(--line); border-radius: 14px; padding: 22px; margin-bottom: 18px; }
+label { font-size: 13px; color: var(--ink-2); display: block; margin: 8px 0 4px; }
+input { width: 100%; border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; font-size: 14px; }
+button { background: var(--accent); color: #fff; border: 0; border-radius: 8px; padding: 10px 16px; cursor: pointer; margin-top: 12px; }
+.muted { color: var(--ink-2); font-size: 13px; }
+.err { color: #d64550; font-size: 13px; }
+pre { background: #0e1116; color: #e6e9ee; padding: 14px; border-radius: 10px; overflow-x: auto; font-size: 12px; }
+/* Embeddable widget: scoped so it can be dropped into any page. */
+.addressium-embed { border: 1px solid var(--line); border-radius: 12px; padding: 16px; max-width: 420px; background: #fff; }
+.addressium-embed .row { display: flex; gap: 8px; }
+.addressium-embed input { flex: 1; }

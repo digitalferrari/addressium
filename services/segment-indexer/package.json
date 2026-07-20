@@ -1,0 +1,17 @@
+{
+  "name": "@addressium/svc-segment-indexer",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc --build"
+  },
+  "dependencies": {
+    "@addressium/core": "0.1.0",
+    "@addressium/domain": "0.1.0",
+    "@addressium/adapters-aws": "0.1.0",
+    "@addressium/segment": "0.1.0"
+  }
+}
