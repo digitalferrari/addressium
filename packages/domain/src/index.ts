@@ -21,3 +21,4 @@ export * from "./abtest.js";
 export * from "./usage.js";
 export * from "./feed.js";
 export * from "./ssrf.js";
+export * from "./provisioning.js";

@@ -11,6 +11,7 @@ export { EventBridgeScheduler, type EventBridgeSchedulerConfig } from "./schedul
 export { getSecret } from "./secrets.js";
 export { KmsJwksProvider, spkiDerToJwk, type Jwk } from "./jwks.js";
 export { SnsAlertPublisher } from "./sns.js";
+export { AwsProvisioningProviders } from "./provisioning.js";
 
 import { DynamoStores } from "./dynamo.js";
 import { SesEmailSender } from "./ses.js";
