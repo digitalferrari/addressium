@@ -12,6 +12,7 @@
     "build": "tsc --build"
   },
   "dependencies": {
-    "@addressium/core": "0.1.0"
+    "@addressium/core": "0.1.0",
+    "@addressium/domain": "0.1.0"
   }
 }

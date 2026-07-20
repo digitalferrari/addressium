@@ -174,15 +174,17 @@ export class DynamoStores implements Stores {
 
   suppression: SuppressionStore = {
     isSuppressed: async (orgId, email) => {
-      const hit = await this.get<SuppressionEntry>(
-        `${org(orgId)}#SUPPRESSION`,
-        `EMAIL#${email.toLowerCase()}`,
-      );
-      return hit !== undefined;
+      const e = email.toLowerCase();
+      const [orgHit, globalHit] = await Promise.all([
+        this.get<SuppressionEntry>(`${org(orgId)}#SUPPRESSION`, `EMAIL#${e}`),
+        this.get<SuppressionEntry>("GLOBAL#SUPPRESSION", `EMAIL#${e}`),
+      ]);
+      return orgHit !== undefined || globalHit !== undefined;
     },
     add: (e) =>
       this.put({
-        pk: `${org(e.orgId)}#SUPPRESSION`,
+        // Global entries (bounces/complaints) live in a cross-org partition (§4.13).
+        pk: e.scope === "global" ? "GLOBAL#SUPPRESSION" : `${org(e.orgId)}#SUPPRESSION`,
         sk: `EMAIL#${e.email.toLowerCase()}`,
         data: e,
       }),

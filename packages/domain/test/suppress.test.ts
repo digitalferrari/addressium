@@ -129,6 +129,24 @@ test("idempotent: the same campaign id is not dispatched twice", async () => {
   assert.equal(second.skipped, true);
 });
 
+test("global suppression applies across orgs; unsubscribe stays per-org", async () => {
+  const h = await harness();
+  const s = await confirmedSubscriber(h, "x@y.com");
+  await recordComplaint(h.stores, h.clock, { orgId: ORG, subscriberId: s.sub, email: "x@y.com" });
+  assert.equal(await h.stores.suppression.isSuppressed(ORG, "x@y.com"), true);
+  assert.equal(await h.stores.suppression.isSuppressed("other-org", "x@y.com"), true); // global
+
+  await h.stores.suppression.add({
+    orgId: ORG,
+    email: "z@y.com",
+    source: "unsubscribe",
+    scope: "org",
+    addedAt: h.clock.now().toISOString(),
+  });
+  assert.equal(await h.stores.suppression.isSuppressed(ORG, "z@y.com"), true);
+  assert.equal(await h.stores.suppression.isSuppressed("other-org", "z@y.com"), false); // per-org
+});
+
 test("bounce marks the subscription bounced and suppresses", async () => {
   const h = await harness();
   const s = await confirmedSubscriber(h, "gone@nowhere.test");

@@ -93,12 +93,17 @@ export class MemLists implements ListStore {
 }
 
 export class MemSuppression implements SuppressionStore {
-  private set = new Set<string>();
+  private orgScoped = new Set<string>();
+  private global = new Set<string>();
   async isSuppressed(orgId: string, email: string) {
-    return this.set.has(subKey(orgId, email.toLowerCase()));
+    const e = email.toLowerCase();
+    // Global entries (hard bounces / complaints) suppress across every org.
+    return this.orgScoped.has(subKey(orgId, e)) || this.global.has(e);
   }
   async add(e: SuppressionEntry) {
-    this.set.add(subKey(e.orgId, e.email.toLowerCase()));
+    const email = e.email.toLowerCase();
+    if (e.scope === "global") this.global.add(email);
+    else this.orgScoped.add(subKey(e.orgId, email));
   }
 }
 
