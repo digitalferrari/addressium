@@ -8,6 +8,7 @@
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import {
   DynamoDBDocumentClient,
+  DeleteCommand,
   GetCommand,
   PutCommand,
   QueryCommand,
@@ -228,6 +229,25 @@ export class DynamoStores implements Stores {
         sk: `EMAIL#${e.email.toLowerCase()}`,
         data: e,
       }),
+    entriesFor: async (orgId, email) => {
+      const e = email.toLowerCase();
+      const [orgHit, globalHit] = await Promise.all([
+        this.get<SuppressionEntry>(`${org(orgId)}#SUPPRESSION`, `EMAIL#${e}`),
+        this.get<SuppressionEntry>("GLOBAL#SUPPRESSION", `EMAIL#${e}`),
+      ]);
+      return [orgHit, globalHit].filter((x): x is SuppressionEntry => x !== undefined);
+    },
+    remove: async (orgId, email, scope) => {
+      await this.doc.send(
+        new DeleteCommand({
+          TableName: this.tableName,
+          Key: {
+            pk: scope === "global" ? "GLOBAL#SUPPRESSION" : `${org(orgId)}#SUPPRESSION`,
+            sk: `EMAIL#${email.toLowerCase()}`,
+          },
+        }),
+      );
+    },
   };
 
   archive: ArchiveStore = {
