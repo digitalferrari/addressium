@@ -174,6 +174,15 @@ export class ControlPlaneStack extends Stack {
     signupFn.addToRolePolicy(
       new PolicyStatement({ actions: ["ses:SendEmail"], resources: ["*"] }),
     );
+    const signupBatchFn = fn("SignupBatchFn", apiEntry, "signupBatchHandler", {
+      ...apiEnv,
+      CONFIRM_URL_BASE:
+        (this.node.tryGetContext("confirmUrlBase") as string | undefined) ??
+        "https://your-site.example/confirm",
+    });
+    signupBatchFn.addToRolePolicy(
+      new PolicyStatement({ actions: ["ses:SendEmail"], resources: ["*"] }),
+    );
     const confirmFn = fn("ConfirmFn", apiEntry, "confirmHandler", apiEnv);
     const unsubscribeFn = fn("UnsubscribeFn", apiEntry, "unsubscribeHandler", apiEnv);
     const entitlementFn = fn("EntitlementFn", apiEntry, "entitlementSyncHandler", apiEnv);
@@ -284,6 +293,7 @@ export class ControlPlaneStack extends Stack {
     // ---- permissions ----
     for (const f of [
       signupFn,
+      signupBatchFn,
       confirmFn,
       unsubscribeFn,
       entitlementFn,
@@ -297,6 +307,7 @@ export class ControlPlaneStack extends Stack {
       table.grantReadWriteData(f);
     }
     confirmSecret.grantRead(signupFn);
+    confirmSecret.grantRead(signupBatchFn);
     confirmSecret.grantRead(confirmFn);
     confirmSecret.grantRead(unsubscribeFn);
     webhookSecret.grantRead(entitlementFn);
@@ -311,6 +322,11 @@ export class ControlPlaneStack extends Stack {
       path: "/signup",
       methods: [HttpMethod.POST],
       integration: new HttpLambdaIntegration("SignupInt", signupFn),
+    });
+    api.addRoutes({
+      path: "/signup/batch",
+      methods: [HttpMethod.POST],
+      integration: new HttpLambdaIntegration("SignupBatchInt", signupBatchFn),
     });
     api.addRoutes({
       path: "/confirm",

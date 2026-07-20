@@ -169,9 +169,18 @@ export interface EmailSender {
 }
 
 /** Signs & verifies the internal double-opt-in confirmation token (HMAC). */
+export interface ConfirmClaims {
+  orgId: string;
+  sub: string;
+  /** Single-list opt-in (public signup). */
+  listId?: string;
+  /** Multi-list opt-in (the "All newsletters" page) — one confirmation covers all. */
+  listIds?: string[];
+  exp: number;
+}
 export interface ConfirmationTokenSigner {
-  sign(payload: { orgId: string; sub: string; listId: string; exp: number }): string;
-  verify(token: string): { orgId: string; sub: string; listId: string; exp: number };
+  sign(payload: ConfirmClaims): string;
+  verify(token: string): ConfirmClaims;
 }
 
 /** Mints the per-recipient magic-link JWT for editorial links (§4.9). */

@@ -9,7 +9,7 @@
  */
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { SignJWT, type KeyLike } from "jose";
-import type { Clock, ConfirmationTokenSigner, MagicLinkSigner } from "./ports.js";
+import type { Clock, ConfirmationTokenSigner, ConfirmClaims, MagicLinkSigner } from "./ports.js";
 
 export class SystemClock implements Clock {
   now() {
@@ -20,12 +20,7 @@ export class SystemClock implements Clock {
 const b64url = (buf: Buffer | string) =>
   Buffer.from(buf).toString("base64url");
 
-interface ConfirmPayload {
-  orgId: string;
-  sub: string;
-  listId: string;
-  exp: number;
-}
+type ConfirmPayload = ConfirmClaims;
 
 export class HmacConfirmationSigner implements ConfirmationTokenSigner {
   constructor(private readonly secret: string) {}
