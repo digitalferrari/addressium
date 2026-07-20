@@ -1,11 +1,11 @@
-# sespool
+# addressium
 
 An open-source, self-hostable replacement for the email capabilities of
 **Amazon Pinpoint**. Deploy it into your own AWS account, verify a sending
 domain, and run email lists, signup forms, broadcasts, and drip automations —
 all serverless, at near-zero idle cost.
 
-Pinpoint is being retired. sespool gives teams a path to keep running email
+Pinpoint is being retired. addressium gives teams a path to keep running email
 lists on their own infrastructure: **you own the subscriber data** (DynamoDB in
 your account) and **you own the sending reputation** (your own Amazon SES
 identity). It is not a hosted SaaS — each deployment is a single organization's

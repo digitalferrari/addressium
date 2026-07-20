@@ -1,4 +1,4 @@
-# sespool — Architecture & Design
+# addressium — Architecture & Design
 
 > An open-source, self-hostable replacement for the email capabilities of
 > **Amazon Pinpoint**. Deploy it into your own AWS account, verify a sending
@@ -6,7 +6,7 @@
 > all serverless, at near-zero idle cost.
 
 - **Status:** Design (pre-implementation)
-- **Audience:** Contributors and operators evaluating or building sespool
+- **Audience:** Contributors and operators evaluating or building addressium
 - **Scope of this document:** the canonical system design. Code follows this spec.
 
 ---
@@ -18,7 +18,7 @@ signup forms, and campaign sending without a drop-in path. Existing hosted
 alternatives (Mailchimp, Customer.io, etc.) are SaaS and take custody of your
 subscriber data and sending reputation.
 
-**sespool** fills that gap: a project **anyone can deploy into their own AWS
+**addressium** fills that gap: a project **anyone can deploy into their own AWS
 account**. You own the data (DynamoDB), you own the sending reputation (your
 SES identity), and you pay AWS directly (~$0 at idle, ~$0.10 per 1,000 emails
 via SES). It is not a multi-tenant SaaS — each deployment is a single
@@ -211,7 +211,7 @@ campaigns.
 Ingests **Amazon Pinpoint exports** and **CSV** files:
 
 - Endpoints → subscribers (with attribute mapping)
-- Segments → sespool segments (best-effort predicate translation)
+- Segments → addressium segments (best-effort predicate translation)
 - Suppression/opt-out lists → suppression entries
 
 Runs as an async job (S3 upload → Lambda/Step Functions) with a dry-run
@@ -325,7 +325,7 @@ available without an always-on analytics cluster.
 ### Proposed repository layout
 
 ```
-sespool/
+addressium/
 ├── apps/
 │   ├── admin-web/         # React admin SPA
 │   └── public-web/        # signup / confirm / preference / unsubscribe
@@ -370,9 +370,9 @@ sespool/
 - **Backups/export**: point-in-time recovery on DynamoDB plus a scheduled full
   export to S3 for portability.
 - **Webhooks/API for operators**: an outbound webhook + public API so operators
-  can integrate sespool with their own systems.
+  can integrate addressium with their own systems.
 
 ---
 
-*This document is the source of truth for sespool's design. Implementation PRs
+*This document is the source of truth for addressium's design. Implementation PRs
 should reference and, where they deviate, update it.*
