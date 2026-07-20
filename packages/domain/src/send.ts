@@ -7,16 +7,11 @@
  * "sent" event per recipient.
  */
 import type { EmailArchive, EngagementEvent, List } from "@addressium/core";
-import type { Clock, EmailSender, MagicLinkSigner, Stores } from "./ports.js";
-import { buildLinkMap, renderForRecipient, type EmailTemplate } from "./render.js";
+import type { Clock, EmailSender, MagicLinkSigner, SendDescriptor, Stores } from "./ports.js";
+import { buildLinkMap, renderForRecipient } from "./render.js";
 
-export interface SendCampaignInput {
-  orgId: string;
-  campaignId: string;
-  listId: string;
-  subject: string;
-  template: EmailTemplate;
-}
+/** Alias kept for readability; a campaign send takes a SendDescriptor. */
+export type SendCampaignInput = SendDescriptor;
 
 export interface SendResult {
   sent: number;

@@ -5,7 +5,7 @@
  * against DynamoDB-backed stores (@addressium/adapters-aws). No business logic
  * lives here. See docs/ARCHITECTURE.md §4.2–4.3.
  */
-import { DynamoStores } from "@addressium/adapters-aws";
+import { DynamoStores, EventBridgeScheduler, SqsSendQueue } from "@addressium/adapters-aws";
 import {
   HmacConfirmationSigner,
   SystemClock,
@@ -14,6 +14,7 @@ import {
   signup,
   unsubscribeFromList,
   verifyWebhookSignature,
+  type SendDescriptor,
 } from "@addressium/domain";
 
 export interface HttpEvent {
@@ -43,6 +44,16 @@ let _stores: DynamoStores | undefined;
 const stores = () => (_stores ??= new DynamoStores(env("TABLE_NAME")));
 let _confirm: HmacConfirmationSigner | undefined;
 const confirmSigner = () => (_confirm ??= new HmacConfirmationSigner(env("CONFIRM_SECRET")));
+let _queue: SqsSendQueue | undefined;
+const queue = () => (_queue ??= new SqsSendQueue(env("SEND_QUEUE_URL")));
+let _scheduler: EventBridgeScheduler | undefined;
+const scheduler = () =>
+  (_scheduler ??= new EventBridgeScheduler({
+    roleArn: env("SCHEDULER_ROLE_ARN"),
+    groupName: env("SCHEDULER_GROUP"),
+    queueArn: env("SEND_QUEUE_ARN"),
+    launchArn: env("LAUNCH_FN_ARN"),
+  }));
 
 /** POST /signup — public, double opt-in (§4.2). */
 export async function signupHandler(event: HttpEvent): Promise<HttpResult> {
@@ -62,6 +73,51 @@ export async function confirmHandler(event: HttpEvent): Promise<HttpResult> {
     const token = event.queryStringParameters?.token ?? "";
     const sub = await confirmOptIn(stores(), confirmSigner(), clock, token);
     return json(200, { status: sub.status });
+  } catch (e) {
+    return json(400, { error: (e as Error).message });
+  }
+}
+
+export interface ScheduleBody extends SendDescriptor {
+  when:
+    | { type: "now" }
+    | { type: "at"; at: string }
+    | { type: "recurring"; cron: string; timezone: string };
+}
+
+/** POST /campaigns/schedule — send now, at a time, or recurring (§4.6, §4.16). */
+export async function scheduleCampaignHandler(event: HttpEvent): Promise<HttpResult> {
+  try {
+    const body = JSON.parse(event.body ?? "{}") as ScheduleBody;
+    const descriptor: SendDescriptor = {
+      orgId: body.orgId,
+      campaignId: body.campaignId,
+      listId: body.listId,
+      subject: body.subject,
+      template: body.template,
+    };
+    switch (body.when.type) {
+      case "now":
+        await queue().enqueue(descriptor);
+        return json(202, { status: "queued" });
+      case "at":
+        await scheduler().scheduleOneOff({
+          name: `camp-${body.orgId}-${body.campaignId}`,
+          at: new Date(body.when.at),
+          descriptor,
+        });
+        return json(202, { status: "scheduled" });
+      case "recurring":
+        await scheduler().scheduleRecurring({
+          name: `series-${body.orgId}-${body.campaignId}`,
+          cron: body.when.cron,
+          timezone: body.when.timezone,
+          payload: descriptor,
+        });
+        return json(202, { status: "recurring" });
+      default:
+        return json(400, { error: "unknown schedule type" });
+    }
   } catch (e) {
     return json(400, { error: (e as Error).message });
   }

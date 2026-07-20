@@ -17,6 +17,8 @@
     "@aws-sdk/client-dynamodb": "^3.600.0",
     "@aws-sdk/lib-dynamodb": "^3.600.0",
     "@aws-sdk/client-sesv2": "^3.600.0",
-    "@aws-sdk/client-kms": "^3.600.0"
+    "@aws-sdk/client-kms": "^3.600.0",
+    "@aws-sdk/client-sqs": "^3.600.0",
+    "@aws-sdk/client-scheduler": "^3.600.0"
   }
 }

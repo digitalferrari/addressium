@@ -75,11 +75,13 @@ with no AWS. The security controls are proven by tests (magic-link ES256
 verification and algorithm-confusion rejection, KMS-style DER→JOSE signing, token
 redaction, webhook signatures, suppression, and the SSRF guard).
 
-The AWS adapters (`packages/adapters-aws`: DynamoDB / SES / KMS) satisfy the same
-ports, and `packages/integration-tests` runs the whole journey against a **real
-DynamoDB API** (via `dynalite` — no Java/Docker). The Lambda handlers in
-`services/*` are thin wrappers that call the domain, and `infra/cdk` wires them to
-an HTTP API, the SQS send queue, and the SES-events SNS topic.
+The AWS adapters (`packages/adapters-aws`: DynamoDB / SES / KMS / SQS /
+EventBridge Scheduler) satisfy the same ports, and `packages/integration-tests`
+runs the whole journey against a **real DynamoDB API** (via `dynalite` — no
+Java/Docker). The Lambda handlers in `services/*` are thin wrappers that call the
+domain, and `infra/cdk` wires them to an HTTP API, the SQS send queue, the
+SES-events SNS topic, **EventBridge Scheduler** (send-now / one-off / recurring
+sends — no minute-poll), and **S3 + CloudFront** for the admin and public SPAs.
 
 ```bash
 npm install       # all workspaces

@@ -6,10 +6,13 @@
 export { DynamoStores } from "./dynamo.js";
 export { SesEmailSender } from "./ses.js";
 export { KmsMagicLinkSigner, type KmsMagicLinkSignerConfig } from "./kms.js";
+export { SqsSendQueue } from "./sqs.js";
+export { EventBridgeScheduler, type EventBridgeSchedulerConfig } from "./scheduler.js";
 
 import { DynamoStores } from "./dynamo.js";
 import { SesEmailSender } from "./ses.js";
 import { KmsMagicLinkSigner } from "./kms.js";
+import { SqsSendQueue } from "./sqs.js";
 import { HmacConfirmationSigner, SystemClock, type Stores } from "@addressium/domain";
 
 function required(name: string): string {
@@ -23,6 +26,7 @@ export interface Deps {
   sender: SesEmailSender;
   magic: KmsMagicLinkSigner;
   confirmation: HmacConfirmationSigner;
+  queue: SqsSendQueue;
   clock: SystemClock;
 }
 
@@ -43,6 +47,7 @@ export function depsFromEnv(): Deps {
       clock,
     ),
     confirmation: new HmacConfirmationSigner(required("CONFIRM_SECRET")),
+    queue: new SqsSendQueue(required("SEND_QUEUE_URL")),
     clock,
   };
 }

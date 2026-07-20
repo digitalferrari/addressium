@@ -29,6 +29,9 @@ import { HttpLambdaIntegration } from "aws-cdk-lib/aws-apigatewayv2-integrations
 import { Topic } from "aws-cdk-lib/aws-sns";
 import { LambdaSubscription } from "aws-cdk-lib/aws-sns-subscriptions";
 import { Secret } from "aws-cdk-lib/aws-secretsmanager";
+import { Role, ServicePrincipal, PolicyStatement } from "aws-cdk-lib/aws-iam";
+import { CfnScheduleGroup } from "aws-cdk-lib/aws-scheduler";
+import { StaticSite } from "./static-site.js";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../../..");
 const svc = (rel: string) => resolve(REPO_ROOT, rel);
@@ -129,6 +132,7 @@ export class ControlPlaneStack extends Stack {
     const entitlementFn = fn("EntitlementFn", apiEntry, "entitlementSyncHandler", apiEnv);
 
     const senderFn = fn("SenderFn", svc("services/sender/src/index.ts"), "handler", {
+      SEND_QUEUE_URL: sendQueue.queueUrl,
       // Per-org KMS key + JWKS are resolved from the org record at send time
       // (§4.11); these are deployment defaults / placeholders.
       MAGIC_ISSUER: "https://addressium.example",
@@ -138,8 +142,51 @@ export class ControlPlaneStack extends Stack {
     });
     const eventsFn = fn("EventsFn", svc("services/events/src/index.ts"), "handler");
 
+    // Launch handler for recurring series (EventBridge Scheduler target, §4.16).
+    const launchFn = fn("LaunchFn", svc("services/automations/src/index.ts"), "handler", {
+      SEND_QUEUE_URL: sendQueue.queueUrl,
+    });
+
+    // ---- scheduling (EventBridge Scheduler, §4.6) ----
+    const scheduleGroupName = `addressium-${props.stage}`;
+    new CfnScheduleGroup(this, "ScheduleGroup", { name: scheduleGroupName });
+    // Role EventBridge Scheduler assumes to hit its targets.
+    const schedulerRole = new Role(this, "SchedulerRole", {
+      assumedBy: new ServicePrincipal("scheduler.amazonaws.com"),
+    });
+    sendQueue.grantSendMessages(schedulerRole); // one-off schedules -> queue
+    launchFn.grantInvoke(schedulerRole); // recurring schedules -> launch
+
+    const scheduleFn = fn("ScheduleFn", apiEntry, "scheduleCampaignHandler", {
+      ...apiEnv,
+      SEND_QUEUE_URL: sendQueue.queueUrl,
+      SEND_QUEUE_ARN: sendQueue.queueArn,
+      SCHEDULER_ROLE_ARN: schedulerRole.roleArn,
+      SCHEDULER_GROUP: scheduleGroupName,
+      LAUNCH_FN_ARN: launchFn.functionArn,
+    });
+    sendQueue.grantSendMessages(scheduleFn); // "send now" path
+    scheduleFn.addToRolePolicy(
+      new PolicyStatement({
+        actions: ["scheduler:CreateSchedule", "scheduler:DeleteSchedule"],
+        resources: ["*"],
+      }),
+    );
+    scheduleFn.addToRolePolicy(
+      new PolicyStatement({ actions: ["iam:PassRole"], resources: [schedulerRole.roleArn] }),
+    );
+
     // ---- permissions ----
-    for (const f of [signupFn, confirmFn, unsubscribeFn, entitlementFn, senderFn, eventsFn]) {
+    for (const f of [
+      signupFn,
+      confirmFn,
+      unsubscribeFn,
+      entitlementFn,
+      scheduleFn,
+      senderFn,
+      eventsFn,
+      launchFn,
+    ]) {
       table.grantReadWriteData(f);
     }
     confirmSecret.grantRead(signupFn);
@@ -168,6 +215,11 @@ export class ControlPlaneStack extends Stack {
       integration: new HttpLambdaIntegration("UnsubscribeInt", unsubscribeFn),
     });
     api.addRoutes({
+      path: "/campaigns/schedule",
+      methods: [HttpMethod.POST],
+      integration: new HttpLambdaIntegration("ScheduleInt", scheduleFn),
+    });
+    api.addRoutes({
       path: "/webhooks/entitlement",
       methods: [HttpMethod.POST],
       integration: new HttpLambdaIntegration("EntitlementInt", entitlementFn),
@@ -176,12 +228,21 @@ export class ControlPlaneStack extends Stack {
     senderFn.addEventSource(new SqsEventSource(sendQueue));
     sesEvents.addSubscription(new LambdaSubscription(eventsFn));
 
+    // ---- frontends (static SPAs on S3 + CloudFront, §4.1–4.2) ----
+    const prod = props.stage === "prod";
+    const adminSite = new StaticSite(this, "AdminSite", { prod }); // apps/admin-web
+    const publicSite = new StaticSite(this, "PublicSite", { prod }); // apps/subscriber-web + public-web
+
     // ---- outputs ----
     new CfnOutput(this, "AdminPoolId", { value: adminPool.userPoolId });
     new CfnOutput(this, "AdminClientId", { value: adminClient.userPoolClientId });
     new CfnOutput(this, "HttpApiUrl", { value: api.apiEndpoint });
     new CfnOutput(this, "SendQueueUrl", { value: sendQueue.queueUrl });
     new CfnOutput(this, "SesEventsTopicArn", { value: sesEvents.topicArn });
+    new CfnOutput(this, "AdminSiteUrl", { value: adminSite.distribution.domainName });
+    new CfnOutput(this, "AdminSiteBucket", { value: adminSite.bucket.bucketName });
+    new CfnOutput(this, "PublicSiteUrl", { value: publicSite.distribution.domainName });
+    new CfnOutput(this, "PublicSiteBucket", { value: publicSite.bucket.bucketName });
     void analyticsBucket;
   }
 }

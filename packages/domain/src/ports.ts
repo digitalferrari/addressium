@@ -13,6 +13,16 @@ import type {
   Subscription,
   SuppressionEntry,
 } from "@addressium/core";
+import type { EmailTemplate } from "./render.js";
+
+/** The unit of work sent through the queue and produced by a schedule firing. */
+export interface SendDescriptor {
+  orgId: string;
+  campaignId: string;
+  listId: string;
+  subject: string;
+  template: EmailTemplate;
+}
 
 export interface SubscriberStore {
   get(orgId: string, sub: string): Promise<Subscriber | undefined>;
@@ -82,6 +92,28 @@ export interface MagicLinkSigner {
     entitlement: "free" | "paid";
     entitlementAsof?: string;
   }): Promise<string>;
+}
+
+/** Enqueue a send for the sender to consume (SQS in prod). */
+export interface SendQueue {
+  enqueue(descriptor: SendDescriptor): Promise<void>;
+}
+
+/**
+ * Schedules future sends (EventBridge Scheduler in prod). One-off schedules
+ * target the send queue directly and auto-delete after firing; recurring
+ * schedules target a launch handler that builds each edition.
+ */
+export interface CampaignScheduler {
+  scheduleOneOff(input: { name: string; at: Date; descriptor: SendDescriptor }): Promise<void>;
+  scheduleRecurring(input: {
+    name: string;
+    /** cron/rate expression, e.g. "cron(0 6 * * ? *)". */
+    cron: string;
+    timezone: string;
+    payload: unknown;
+  }): Promise<void>;
+  cancel(name: string): Promise<void>;
 }
 
 export interface Clock {

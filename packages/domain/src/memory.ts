@@ -13,10 +13,13 @@ import type {
 } from "@addressium/core";
 import type {
   ArchiveStore,
+  CampaignScheduler,
   EmailSender,
   EntitlementStore,
   EventStore,
   ListStore,
+  SendDescriptor,
+  SendQueue,
   SentMessage,
   Stores,
   SubscriberStore,
@@ -118,6 +121,29 @@ export class CaptureSender implements EmailSender {
   public sent: SentMessage[] = [];
   async send(msg: SentMessage) {
     this.sent.push(msg);
+  }
+}
+
+/** In-memory queue + scheduler for tests. */
+export class MemSendQueue implements SendQueue {
+  public enqueued: SendDescriptor[] = [];
+  async enqueue(descriptor: SendDescriptor) {
+    this.enqueued.push(descriptor);
+  }
+}
+
+export class MemScheduler implements CampaignScheduler {
+  public oneOff = new Map<string, { at: Date; descriptor: SendDescriptor }>();
+  public recurring = new Map<string, { cron: string; timezone: string; payload: unknown }>();
+  async scheduleOneOff(input: { name: string; at: Date; descriptor: SendDescriptor }) {
+    this.oneOff.set(input.name, { at: input.at, descriptor: input.descriptor });
+  }
+  async scheduleRecurring(input: { name: string; cron: string; timezone: string; payload: unknown }) {
+    this.recurring.set(input.name, { cron: input.cron, timezone: input.timezone, payload: input.payload });
+  }
+  async cancel(name: string) {
+    this.oneOff.delete(name);
+    this.recurring.delete(name);
   }
 }
 
