@@ -184,8 +184,15 @@ first-class control:
 
 - **SLSA** build provenance; **Sigstore/cosign**-signed release artifacts.
 - Published **SBOM** (CycloneDX) per release.
-- GitHub Actions **pinned by commit SHA**; workflow `permissions` least-privilege;
-  **OIDC to AWS** (no static deploy keys).
+- GitHub Actions **pinned by commit SHA** (every `uses:` in `.github/workflows/`
+  carries a full-SHA pin + a version comment); workflow `permissions`
+  least-privilege; **OIDC to AWS** (no static deploy keys). The `deploy` job runs
+  only on `refs/tags/v*`, requests `id-token: write`, and assumes the
+  `DEPLOY_ROLE_ARN` repo variable's role via `configure-aws-credentials`.
+  Create that role once with a GitHub OIDC provider
+  (`token.actions.githubusercontent.com`) and a trust policy that restricts
+  `sub` to `repo:<owner>/<repo>:ref:refs/tags/v*`; grant it only the CDK
+  deploy permissions. No branch/PR run can assume it.
 - **Dependabot/Renovate**, **CodeQL**, and **secret scanning** enabled.
 - Branch protection + required review; maintainer **2FA**.
 - Public trust signals: **OpenSSF Scorecard** + **Best Practices Badge**.
@@ -221,7 +228,8 @@ A living checklist mapped to our controls (full ASVS tracked separately):
 ## 10. Open items (tracked)
 
 - Central policy engine (Cedar) for authorization as rules grow.
-- WORM/Object-Lock wiring for the audit log.
-- CI: CodeQL + Dependabot + Scorecard + SBOM (added under `.github/`), pin all
-  actions to SHAs, wire OIDC-to-AWS deploy role.
+- ~~WORM/Object-Lock wiring for the audit log.~~ **Done** — audit log backed by
+  S3 Object Lock (COMPLIANCE mode) in the CDK stack (#29).
+- ~~CI: pin all actions to SHAs, wire OIDC-to-AWS deploy role.~~ **Done** —
+  every `uses:` pinned by SHA; OIDC `deploy` job assumes a scoped role on tags (#27).
 - Formal, full ASVS L2 line-by-line review before a 1.0 release.

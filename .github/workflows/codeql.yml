@@ -1,6 +1,6 @@
 # CodeQL static analysis (docs/SECURITY.md §7).
-# NOTE: before 1.0, pin each `uses:` to a full commit SHA (SLSA / OpenSSF
-# Scorecard requirement). Tags are used here for readability of the scaffold.
+# Every `uses:` is pinned to a full commit SHA (SLSA / OpenSSF Scorecard); the
+# trailing comment records the human-readable version it corresponds to.
 name: codeql
 
 on:
@@ -23,8 +23,8 @@ jobs:
       actions: read
       contents: read
     steps:
-      - uses: actions/checkout@v4
-      - uses: github/codeql-action/init@v3
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: github/codeql-action/init@d03f4cc0498d5a63039d157eb274d9c2fc50f17a # v3.37.1
         with:
           languages: javascript-typescript
-      - uses: github/codeql-action/analyze@v3
+      - uses: github/codeql-action/analyze@d03f4cc0498d5a63039d157eb274d9c2fc50f17a # v3.37.1
