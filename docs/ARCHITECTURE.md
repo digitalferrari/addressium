@@ -313,6 +313,13 @@ series), inactivity (re-engagement), attribute change, or manual enrollment.
 EventBridge Scheduler drives time-based enrollment and scheduled/recurring
 campaigns.
 
+**Scheduling policy — every send goes through a schedule, and one-offs keep a
+cancel window.** Both "send now" and "send at" create a **one-off schedule
+placed at least 5 minutes in the future** (`MIN_ONEOFF_LEAD_MS`), so an operator
+can hit **cancel** (`POST /campaigns/cancel` → `DeleteSchedule`) before anything
+leaves. A requested time further out is honored as-is. Recurring series use a
+timezone-aware cron (§4.21).
+
 ### 4.7 Importer (`services/importer`)
 
 Ingests **Amazon Pinpoint exports** and **CSV** files:

@@ -17,6 +17,7 @@ import type {
   EngagementEvent,
   EntitlementSync,
   List,
+  Organization,
   Subscriber,
   Subscription,
   SuppressionEntry,
@@ -26,6 +27,7 @@ import type {
   EntitlementStore,
   EventStore,
   ListStore,
+  OrganizationStore,
   Stores,
   SubscriberStore,
   SubscriptionStore,
@@ -70,6 +72,29 @@ export class DynamoStores implements Stores {
     );
     return (res.Item as Item<T> | undefined)?.data;
   }
+
+  organizations: OrganizationStore = {
+    get: (orgId) => this.get<Organization>(org(orgId), "#META"),
+    put: (o) =>
+      this.put({
+        pk: org(o.orgId),
+        sk: "#META",
+        gsi1pk: "ORGS", // list all orgs via gsi1
+        gsi1sk: o.orgId,
+        data: o,
+      }),
+    list: async () => {
+      const res = await this.doc.send(
+        new QueryCommand({
+          TableName: this.tableName,
+          IndexName: "gsi1",
+          KeyConditionExpression: "gsi1pk = :p",
+          ExpressionAttributeValues: { ":p": "ORGS" },
+        }),
+      );
+      return (res.Items ?? []).map((i) => (i as Item<Organization>).data);
+    },
+  };
 
   subscribers: SubscriberStore = {
     get: (orgId, sub) => this.get<Subscriber>(org(orgId), `SUBSCRIBER#${sub}`),

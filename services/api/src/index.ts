@@ -11,6 +11,7 @@ import {
   SystemClock,
   applyEntitlementSync,
   confirmOptIn,
+  effectiveOneOffTime,
   signup,
   unsubscribeFromList,
   verifyWebhookSignature,
@@ -96,22 +97,24 @@ export async function scheduleCampaignHandler(event: HttpEvent): Promise<HttpRes
       subject: body.subject,
       template: body.template,
     };
+    const oneOffName = `camp-${body.orgId}-${body.campaignId}`;
     switch (body.when.type) {
+      // "now" and "at" both become one-off schedules placed at least 5 minutes
+      // out (§4.6), so the send stays cancellable until it fires.
       case "now":
-        await queue().enqueue(descriptor);
-        return json(202, { status: "queued" });
-      case "at":
-        await scheduler().scheduleOneOff({
-          name: `camp-${body.orgId}-${body.campaignId}`,
-          at: new Date(body.when.at),
-          descriptor,
-        });
-        return json(202, { status: "scheduled" });
+      case "at": {
+        const requested = body.when.type === "at" ? new Date(body.when.at) : undefined;
+        const at = effectiveOneOffTime(clock.now(), requested);
+        await scheduler().scheduleOneOff({ name: oneOffName, at, descriptor });
+        return json(202, { status: "scheduled", at: at.toISOString(), cancelName: oneOffName });
+      }
       case "recurring": {
         // Zone: per-campaign override ?? org defaultTimezone (§4.21).
-        // TODO: resolve the org's defaultTimezone via an OrganizationStore when
-        // no override is given; env default is the interim fallback.
-        const timezone = body.when.timezone ?? process.env.DEFAULT_TIMEZONE ?? "UTC";
+        let timezone = body.when.timezone;
+        if (!timezone) {
+          const orgRec = await stores().organizations.get(body.orgId);
+          timezone = orgRec?.defaultTimezone ?? process.env.DEFAULT_TIMEZONE ?? "UTC";
+        }
         await scheduler().scheduleRecurring({
           name: `series-${body.orgId}-${body.campaignId}`,
           cron: body.when.cron,
@@ -123,6 +126,21 @@ export async function scheduleCampaignHandler(event: HttpEvent): Promise<HttpRes
       default:
         return json(400, { error: "unknown schedule type" });
     }
+  } catch (e) {
+    return json(400, { error: (e as Error).message });
+  }
+}
+
+/** POST /campaigns/cancel — cancel a scheduled one-off before it fires (§4.6). */
+export async function cancelCampaignHandler(event: HttpEvent): Promise<HttpResult> {
+  try {
+    const { orgId, campaignId } = JSON.parse(event.body ?? "{}") as {
+      orgId: string;
+      campaignId: string;
+    };
+    if (!orgId || !campaignId) return json(400, { error: "orgId and campaignId required" });
+    await scheduler().cancel(`camp-${orgId}-${campaignId}`);
+    return json(200, { status: "cancelled" });
   } catch (e) {
     return json(400, { error: (e as Error).message });
   }

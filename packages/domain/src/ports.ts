@@ -9,6 +9,7 @@ import type {
   EngagementEvent,
   EntitlementSync,
   List,
+  Organization,
   Subscriber,
   Subscription,
   SuppressionEntry,
@@ -22,6 +23,12 @@ export interface SendDescriptor {
   listId: string;
   subject: string;
   template: EmailTemplate;
+}
+
+export interface OrganizationStore {
+  get(orgId: string): Promise<Organization | undefined>;
+  put(org: Organization): Promise<void>;
+  list(): Promise<Organization[]>;
 }
 
 export interface SubscriberStore {
@@ -121,6 +128,7 @@ export interface Clock {
 }
 
 export interface Stores {
+  organizations: OrganizationStore;
   subscribers: SubscriberStore;
   subscriptions: SubscriptionStore;
   lists: ListStore;

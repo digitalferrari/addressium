@@ -157,21 +157,24 @@ export class ControlPlaneStack extends Stack {
     sendQueue.grantSendMessages(schedulerRole); // one-off schedules -> queue
     launchFn.grantInvoke(schedulerRole); // recurring schedules -> launch
 
-    const scheduleFn = fn("ScheduleFn", apiEntry, "scheduleCampaignHandler", {
+    const schedEnv = {
       ...apiEnv,
       SEND_QUEUE_URL: sendQueue.queueUrl,
       SEND_QUEUE_ARN: sendQueue.queueArn,
       SCHEDULER_ROLE_ARN: schedulerRole.roleArn,
       SCHEDULER_GROUP: scheduleGroupName,
       LAUNCH_FN_ARN: launchFn.functionArn,
-    });
-    sendQueue.grantSendMessages(scheduleFn); // "send now" path
-    scheduleFn.addToRolePolicy(
-      new PolicyStatement({
-        actions: ["scheduler:CreateSchedule", "scheduler:DeleteSchedule"],
-        resources: ["*"],
-      }),
-    );
+    };
+    const scheduleFn = fn("ScheduleFn", apiEntry, "scheduleCampaignHandler", schedEnv);
+    const cancelFn = fn("CancelFn", apiEntry, "cancelCampaignHandler", schedEnv);
+    for (const f of [scheduleFn, cancelFn]) {
+      f.addToRolePolicy(
+        new PolicyStatement({
+          actions: ["scheduler:CreateSchedule", "scheduler:DeleteSchedule"],
+          resources: ["*"],
+        }),
+      );
+    }
     scheduleFn.addToRolePolicy(
       new PolicyStatement({ actions: ["iam:PassRole"], resources: [schedulerRole.roleArn] }),
     );
@@ -183,6 +186,7 @@ export class ControlPlaneStack extends Stack {
       unsubscribeFn,
       entitlementFn,
       scheduleFn,
+      cancelFn,
       senderFn,
       eventsFn,
       launchFn,
@@ -218,6 +222,11 @@ export class ControlPlaneStack extends Stack {
       path: "/campaigns/schedule",
       methods: [HttpMethod.POST],
       integration: new HttpLambdaIntegration("ScheduleInt", scheduleFn),
+    });
+    api.addRoutes({
+      path: "/campaigns/cancel",
+      methods: [HttpMethod.POST],
+      integration: new HttpLambdaIntegration("CancelInt", cancelFn),
     });
     api.addRoutes({
       path: "/webhooks/entitlement",

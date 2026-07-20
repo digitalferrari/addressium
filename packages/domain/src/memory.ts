@@ -7,6 +7,7 @@ import type {
   EngagementEvent,
   EntitlementSync,
   List,
+  Organization,
   Subscriber,
   Subscription,
   SuppressionEntry,
@@ -18,6 +19,7 @@ import type {
   EntitlementStore,
   EventStore,
   ListStore,
+  OrganizationStore,
   SendDescriptor,
   SendQueue,
   SentMessage,
@@ -29,6 +31,19 @@ import type {
 
 const subKey = (o: string, s: string) => `${o}#${s}`;
 const subnKey = (o: string, s: string, l: string) => `${o}#${s}#${l}`;
+
+export class MemOrganizations implements OrganizationStore {
+  private map = new Map<string, Organization>();
+  async get(orgId: string) {
+    return this.map.get(orgId);
+  }
+  async put(org: Organization) {
+    this.map.set(org.orgId, org);
+  }
+  async list() {
+    return [...this.map.values()];
+  }
+}
 
 export class MemSubscribers implements SubscriberStore {
   private byId = new Map<string, Subscriber>();
@@ -149,6 +164,7 @@ export class MemScheduler implements CampaignScheduler {
 
 export function memStores(): Stores {
   return {
+    organizations: new MemOrganizations(),
     subscribers: new MemSubscribers(),
     subscriptions: new MemSubscriptions(),
     lists: new MemLists(),

@@ -118,6 +118,22 @@ test("signup → confirm → send → click → click map, then unsubscribe (on 
     clock,
   );
 
+  // Organization store round-trips (get + list via gsi1 "ORGS").
+  await stores.organizations.put({
+    orgId: ORG,
+    name: "Summit Daily",
+    domains: ["summitdaily.com"],
+    subscriberPoolId: "us-east-1_Smt",
+    kmsKeyArn: "arn:aws:kms:...:key/1",
+    sesConfigSet: "summit-cs",
+    ipMode: "shared",
+    suppressionScope: "hybrid",
+    defaultTimezone: "America/Denver",
+    setupComplete: true,
+  });
+  assert.equal((await stores.organizations.get(ORG))?.defaultTimezone, "America/Denver");
+  assert.equal((await stores.organizations.list()).length, 1);
+
   const list: List = {
     orgId: ORG,
     listId: LIST,
