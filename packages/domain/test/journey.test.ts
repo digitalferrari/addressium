@@ -9,9 +9,10 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { generateKeyPair, exportJWK, SignJWT, type JSONWebKeySet } from "jose";
 import { verifyMagicLinkToken, tryVerifyMagicLinkToken } from "@addressium/magiclink-verify";
-import { assertPublicHttpsUrl, SsrfBlockedError } from "@addressium/svc-feeds";
 import type { List } from "@addressium/core";
 import {
+  assertPublicHttpsUrl,
+  SsrfBlockedError,
   memStores,
   CaptureSender,
   HmacConfirmationSigner,

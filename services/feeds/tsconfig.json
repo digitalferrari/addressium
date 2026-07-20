@@ -2,5 +2,9 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": { "outDir": "dist", "rootDir": "src" },
   "include": ["src/**/*.ts"],
-  "references": [{ "path": "../../packages/core" }, { "path": "../../packages/rbac" }]
+  "references": [
+    { "path": "../../packages/core" },
+    { "path": "../../packages/rbac" },
+    { "path": "../../packages/domain" }
+  ]
 }
