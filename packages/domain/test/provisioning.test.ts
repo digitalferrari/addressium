@@ -14,9 +14,9 @@ import {
 } from "@addressium/domain";
 
 const input: schemas.CreateOrgInput = {
-  name: "Summit Daily",
-  primaryDomain: "summitdaily.com",
-  siteDomain: "summitdaily.com",
+  name: "Northwind Times",
+  primaryDomain: "northwindtimes.example",
+  siteDomain: "northwindtimes.example",
   region: "us-east-1",
   defaultTimezone: "America/Denver",
   subscriberPool: { mode: "create" },
@@ -29,7 +29,7 @@ function fakeProviders(overrides: Partial<ProvisioningProviders> = {}): Provisio
     ensureSubscriberPool: async () => ({ poolId: "pool-123" }),
     createSigningKey: async () => ({ kmsKeyArn: "arn:aws:kms:...:key/abc", kid: "abc" }),
     ensureSesDomainIdentity: async () => ({
-      configSet: "addressium-summit-daily",
+      configSet: "addressium-northwind-times",
       dkimTokens: ["tok1", "tok2"],
       verificationStatus: "pending",
     }),
@@ -38,8 +38,8 @@ function fakeProviders(overrides: Partial<ProvisioningProviders> = {}): Provisio
 }
 
 test("slugifyOrgId derives a DNS-safe id from the name", () => {
-  assert.equal(slugifyOrgId("Summit Daily"), "summit-daily");
-  assert.equal(slugifyOrgId("  Vail Daily!! "), "vail-daily");
+  assert.equal(slugifyOrgId("Northwind Times"), "northwind-times");
+  assert.equal(slugifyOrgId("  Lakeside Ledger!! "), "lakeside-ledger");
 });
 
 test("provision assembles the org record and returns DKIM/SPF/DMARC DNS", async () => {
@@ -47,22 +47,22 @@ test("provision assembles the org record and returns DKIM/SPF/DMARC DNS", async 
   const result = await provisionOrganization(stores, fakeProviders(), input);
 
   assert.equal(result.alreadyExisted, false);
-  assert.equal(result.org.orgId, "summit-daily");
+  assert.equal(result.org.orgId, "northwind-times");
   assert.equal(result.org.subscriberPoolId, "pool-123");
   assert.equal(result.org.magicLink.kmsKeyArn, "arn:aws:kms:...:key/abc");
-  assert.equal(result.org.magicLink.audience, "summitdaily.com");
+  assert.equal(result.org.magicLink.audience, "northwindtimes.example");
   assert.equal(result.org.defaultTimezone, "America/Denver");
   assert.equal(result.org.ipMode, "shared");
   assert.equal(result.org.setupComplete, false); // SES pending
 
   const dkim = result.dns.filter((r) => r.type === "CNAME");
   assert.equal(dkim.length, 2);
-  assert.match(dkim[0]!.name, /_domainkey\.summitdaily\.com$/);
+  assert.match(dkim[0]!.name, /_domainkey\.northwindtimes\.example$/);
   assert.ok(result.dns.some((r) => r.value.startsWith("v=spf1")));
   assert.ok(result.dns.some((r) => r.name.startsWith("_dmarc.")));
 
   // Persisted for the tokens service + sender to resolve.
-  assert.deepEqual(await stores.organizations.get("summit-daily"), result.org);
+  assert.deepEqual(await stores.organizations.get("northwind-times"), result.org);
 });
 
 test("setupComplete flips true when SES reports verified", async () => {

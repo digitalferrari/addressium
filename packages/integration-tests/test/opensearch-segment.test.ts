@@ -55,12 +55,12 @@ test("projectSubscriber flattens attributes and carries lists + last_open_at", (
     orgId: "summit",
     sub: "s1",
     email: "a@x.com",
-    attributes: { city: "Vail" },
+    attributes: { city: "Lakeside" },
     status: "active",
     entitlement: "paid",
   };
   const doc = projectSubscriber(subscriber, ["ledger"], "2026-07-01T00:00:00Z");
-  assert.equal(doc.attr.city, "Vail");
+  assert.equal(doc.attr.city, "Lakeside");
   assert.deepEqual(doc.lists, ["ledger"]);
   assert.equal(doc.last_open_at, "2026-07-01T00:00:00Z");
 });

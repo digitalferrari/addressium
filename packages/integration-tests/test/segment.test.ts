@@ -28,7 +28,7 @@ async function seed() {
   const people: Array<[string, "free" | "paid", string]> = [
     ["a", "paid", "Denver"],
     ["b", "free", "Denver"],
-    ["c", "paid", "Vail"],
+    ["c", "paid", "Lakeside"],
   ];
   for (const [id, ent, city] of people) {
     const sub: Subscriber = {

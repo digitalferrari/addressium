@@ -20,8 +20,8 @@ const LIST = "ledger";
 function org(): Organization {
   return {
     orgId: ORG,
-    name: "Summit",
-    domains: ["summitdaily.com"],
+    name: "Northwind",
+    domains: ["northwindtimes.example"],
     subscriberPoolId: "pool",
     magicLink: { kmsKeyArn: "arn", kid: "k", issuer: "i", audience: "a" },
     sesConfigSet: "cs",
@@ -38,7 +38,7 @@ function list(): List {
     name: "Ledger",
     description: "Daily markets",
     optInPolicy: "single",
-    fromAddress: "l@summitdaily.com",
+    fromAddress: "l@northwindtimes.example",
     access: "free",
     visibility: "open",
     complianceFooter: "f",

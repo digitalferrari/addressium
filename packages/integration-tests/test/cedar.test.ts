@@ -17,15 +17,15 @@ test("buildPolicySet emits one Cedar permit per capability", () => {
 
 test("Cedar decisions match the role matrix + org scope", () => {
   const cedar = new CedarAuthorizer();
-  const editorSummit = grantFromClaims({ "custom:role": "editor", "custom:orgs": "summit" });
+  const editorNorthwind = grantFromClaims({ "custom:role": "editor", "custom:orgs": "summit" });
   const analystStar = grantFromClaims({ "custom:role": "analyst", "custom:orgs": "*" });
   const admin = grantFromClaims({ "custom:role": "developer_admin", "custom:orgs": "summit" });
 
   // editor may manage campaigns in its org, but not another org, nor destructive caps
-  assert.equal(cedar.isAllowed(editorSummit, "campaigns:manage", "summit"), true);
-  assert.equal(cedar.isAllowed(editorSummit, "campaigns:manage", "vail"), false);
-  assert.equal(cedar.isAllowed(editorSummit, "subscribers:delete", "summit"), false);
-  assert.equal(cedar.isAllowed(editorSummit, "newsletters:close", "summit"), false);
+  assert.equal(cedar.isAllowed(editorNorthwind, "campaigns:manage", "summit"), true);
+  assert.equal(cedar.isAllowed(editorNorthwind, "campaigns:manage", "vail"), false);
+  assert.equal(cedar.isAllowed(editorNorthwind, "subscribers:delete", "summit"), false);
+  assert.equal(cedar.isAllowed(editorNorthwind, "newsletters:close", "summit"), false);
 
   // analyst scoped to all orgs is read-only everywhere
   assert.equal(cedar.isAllowed(analystStar, "reports:view", "anything"), true);

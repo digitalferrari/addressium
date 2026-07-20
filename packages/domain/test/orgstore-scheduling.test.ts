@@ -8,14 +8,14 @@ import { MemOrganizations, effectiveOneOffTime, MIN_ONEOFF_LEAD_MS } from "@addr
 
 const org: Organization = {
   orgId: "summit",
-  name: "Summit Daily",
-  domains: ["summitdaily.com"],
+  name: "Northwind Times",
+  domains: ["northwindtimes.example"],
   subscriberPoolId: "us-east-1_Smt",
   magicLink: {
     kmsKeyArn: "arn:aws:kms:...:key/1",
     kid: "k1",
     issuer: "https://addressium/summit",
-    audience: "summitdaily.com",
+    audience: "northwindtimes.example",
   },
   sesConfigSet: "summit-cs",
   ipMode: "shared",

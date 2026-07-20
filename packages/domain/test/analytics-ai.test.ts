@@ -34,7 +34,7 @@ async function seededStores() {
     orgId: ORG,
     campaignId: C,
     s3Key: "k",
-    linkMap: { l0: { urlTemplate: "https://summitdaily.com/a", position: 1, label: "Lead story", class: "editorial" } },
+    linkMap: { l0: { urlTemplate: "https://northwindtimes.example/a", position: 1, label: "Lead story", class: "editorial" } },
   });
   return stores;
 }

@@ -5,6 +5,12 @@ An open-source, self-hostable replacement for the email capabilities of
 domain, and run email lists, signup forms, broadcasts, and drip automations —
 all serverless, at near-zero idle cost.
 
+![addressium admin console](docs/images/screenshot.png)
+
+> **Live demo:** try the click-through UI at **<https://addressium.com/demo>**
+> (or open [`demo/index.html`](demo/index.html) locally). It's a static, no-backend
+> prototype with sample data.
+
 Pinpoint is being retired. addressium gives teams a path to keep running email
 lists on their own infrastructure: **you own the subscriber data** (DynamoDB in
 your account) and **you own the sending reputation** (your own Amazon SES
@@ -23,19 +29,28 @@ owner's AWS account.
 - **Deliverability built in** — DKIM/SPF/DMARC setup, RFC 8058 one-click
   unsubscribe, suppression handling, complaint-rate protection, SNS alerts.
 - **Role-based access** — Developer Admin / Editor / Analyst (Sales) / Support,
-  scoped per organization and enforced server-side.
+  scoped per organization and enforced server-side (Cedar policy engine).
+- **Brandable subscriber site** — per-org logo, theme colors and background,
+  plus per-list presentation toggles (frequency, send time, reader/free-paid
+  counts), applied with no rebuild.
+- **LLM-assisted analytics** — send a campaign's *aggregates only* (never
+  subscriber PII) to Anthropic / OpenAI / Gemini for a performance read and
+  suggestions; the API key stays in Secrets Manager.
 - **Migration-friendly** — first-class importer for Amazon Pinpoint exports and
   CSV (endpoints, segments, suppression lists).
 - **One-command deploy** — AWS CDK (TypeScript) plus a guided setup wizard.
 
 ## Documentation
 
+- [Deploying & operating addressium](docs/DEPLOYMENT.md) — from an empty AWS
+  account to a running deployment, provisioning an org, and configuring branding,
+  presentation and LLM analytics.
 - [Architecture & Design](docs/ARCHITECTURE.md) — the canonical system design.
 - [Security Design & Threat Model](docs/SECURITY.md) — STRIDE model, standards
   mapping, and the hardened magic-link reference verifier.
 - [Security Policy](SECURITY.md) — how to report a vulnerability.
-- [Clickable UI prototype](docs/prototype/addressium-prototype.html) — the
-  admin console + subscriber site design reference (open in a browser).
+- [Live demo / UI prototype](demo/index.html) — the admin console + subscriber
+  site design reference (hosted at <https://addressium.com/demo>).
 
 ## Security
 
@@ -53,7 +68,8 @@ packages/    core (domain types + zod) · rbac · segment
 services/    api · sender · events · automations · reporting · tokens ·
              provisioning · feeds · privacy · importer   (Lambda handlers)
 infra/cdk/   CDK app — shared control-plane stack + per-org provisioning
-docs/        ARCHITECTURE.md · prototype/
+docs/        ARCHITECTURE.md · SECURITY.md · DEPLOYMENT.md · images/
+demo/        self-contained static UI demo (addressium.com/demo)
 ```
 
 ## Development

@@ -382,7 +382,7 @@
         <h2>Sign in to the console</h2>
         <div class="sub">Newsletter operators &amp; administrators</div>
         <form onsubmit="go('admin','dashboard');return false">
-          <div class="field"><label>Email</label><input type="email" value="dana@summitdaily.com" autocomplete="username"></div>
+          <div class="field"><label>Email</label><input type="email" value="dana@northwindtimes.example" autocomplete="username"></div>
           <div class="field"><label>Password</label><input type="password" value="••••••••••••"></div>
           <a class="flink" href="#" onclick="return false">Forgot your password?</a>
           <button class="btn btn-primary" style="justify-content:center;padding:11px" type="submit">Sign in</button>
@@ -391,7 +391,7 @@
         </form>
         <div class="foot" style="margin-top:16px"><span class="mfa">🔐 MFA required · TOTP</span></div>
       </div>
-      <div class="cog foot" style="text-align:center">Hosted UI secured by <b>Amazon Cognito</b> · <span class="mono">admin.addressium.summitdaily.com</span></div>
+      <div class="cog foot" style="text-align:center">Hosted UI secured by <b>Amazon Cognito</b> · <span class="mono">admin.addressium.northwindtimes.example</span></div>
     </div>
   </div>
 </div>
@@ -403,7 +403,7 @@
     <aside class="side">
       <div class="org" onclick="openModal('org')" style="cursor:pointer" title="Switch organization">
         <span class="stamp"></span>
-        <div style="flex:1;min-width:0"><b id="orgName">Summit Daily</b><br><small id="orgDomain">summitdaily.com · prod</small></div>
+        <div style="flex:1;min-width:0"><b id="orgName">Northwind Times</b><br><small id="orgDomain">northwindtimes.example · prod</small></div>
         <span style="color:var(--ink-3);font-size:14px">⇅</span>
       </div>
       <div class="navlab">Overview</div>
@@ -440,7 +440,7 @@
     <div class="main">
       <div class="topbar">
         <button class="iconbtn menubtn" onclick="toggleSide()" title="Menu" aria-label="Menu">☰</button>
-        <div class="crumbs"><span id="crumbOrg">Summit Daily</span> / <b id="crumb">Dashboard</b></div>
+        <div class="crumbs"><span id="crumbOrg">Northwind Times</span> / <b id="crumb">Dashboard</b></div>
         <div class="searchbox">🔍 <input placeholder="Search subscribers, campaigns, segments…"></div>
         <div style="flex:1"></div>
         <button class="btn btn-sm" id="sbxBtn" onclick="toggleSandbox()" title="Toggle sandbox mode"><span id="sbxDot" style="color:var(--good)">●</span>&nbsp;Live</button>
@@ -515,11 +515,11 @@
           <div class="card"><table>
             <thead><tr><th>Newsletter</th><th>Opt-in</th><th>Subscribers</th><th>From address</th><th>Cadence</th><th>Access</th><th>Signups</th><th></th></tr></thead>
             <tbody>
-              <tr><td class="t-strong">The Morning Ledger</td><td><span class="pill p-accent">Double opt-in</span></td><td class="num">96,204</td><td class="mono muted">ledger@summitdaily.com</td><td>Daily · 6am ET</td><td><span class="pill p-neutral">Free</span></td><td><span class="pill p-good vis"><span class="dot"></span>Open</span></td><td><button class="btn btn-ghost btn-sm" onclick="toggleClose(this)">Close</button></td></tr>
-              <tr><td class="t-strong">Market Signal</td><td><span class="pill p-accent">Double opt-in</span></td><td class="num">8,410</td><td class="mono muted">signal@summitdaily.com</td><td>Weekly</td><td><span class="pill p-paid"><span class="dot"></span>Paid</span></td><td><span class="pill p-good vis"><span class="dot"></span>Open</span></td><td><button class="btn btn-ghost btn-sm" onclick="toggleClose(this)">Close</button></td></tr>
-              <tr><td class="t-strong">Field Notes</td><td><span class="pill p-accent">Double opt-in</span></td><td class="num">54,880</td><td class="mono muted">notes@summitdaily.com</td><td>Weekly · Thu</td><td><span class="pill p-neutral">Free</span></td><td><span class="pill p-good vis"><span class="dot"></span>Open</span></td><td><button class="btn btn-ghost btn-sm" onclick="toggleClose(this)">Close</button></td></tr>
-              <tr><td class="t-strong">Weekend Long Read</td><td><span class="pill p-accent">Double opt-in</span></td><td class="num">61,300</td><td class="mono muted">read@summitdaily.com</td><td>Weekly · Sat</td><td><span class="pill p-neutral">Free</span></td><td><span class="pill p-good vis"><span class="dot"></span>Open</span></td><td><button class="btn btn-ghost btn-sm" onclick="toggleClose(this)">Close</button></td></tr>
-              <tr><td class="t-strong">Product Dispatch</td><td><span class="pill p-neutral">Single opt-in</span></td><td class="num">12,940</td><td class="mono muted">product@summitdaily.com</td><td>Ad-hoc</td><td><span class="pill p-neutral">Free</span></td><td><span class="pill p-neutral vis">Closed</span></td><td><button class="btn btn-ghost btn-sm" onclick="toggleClose(this)">Reopen</button></td></tr>
+              <tr><td class="t-strong">The Morning Ledger</td><td><span class="pill p-accent">Double opt-in</span></td><td class="num">96,204</td><td class="mono muted">ledger@northwindtimes.example</td><td>Daily · 6am ET</td><td><span class="pill p-neutral">Free</span></td><td><span class="pill p-good vis"><span class="dot"></span>Open</span></td><td><button class="btn btn-ghost btn-sm" onclick="toggleClose(this)">Close</button></td></tr>
+              <tr><td class="t-strong">Market Signal</td><td><span class="pill p-accent">Double opt-in</span></td><td class="num">8,410</td><td class="mono muted">signal@northwindtimes.example</td><td>Weekly</td><td><span class="pill p-paid"><span class="dot"></span>Paid</span></td><td><span class="pill p-good vis"><span class="dot"></span>Open</span></td><td><button class="btn btn-ghost btn-sm" onclick="toggleClose(this)">Close</button></td></tr>
+              <tr><td class="t-strong">Field Notes</td><td><span class="pill p-accent">Double opt-in</span></td><td class="num">54,880</td><td class="mono muted">notes@northwindtimes.example</td><td>Weekly · Thu</td><td><span class="pill p-neutral">Free</span></td><td><span class="pill p-good vis"><span class="dot"></span>Open</span></td><td><button class="btn btn-ghost btn-sm" onclick="toggleClose(this)">Close</button></td></tr>
+              <tr><td class="t-strong">Weekend Long Read</td><td><span class="pill p-accent">Double opt-in</span></td><td class="num">61,300</td><td class="mono muted">read@northwindtimes.example</td><td>Weekly · Sat</td><td><span class="pill p-neutral">Free</span></td><td><span class="pill p-good vis"><span class="dot"></span>Open</span></td><td><button class="btn btn-ghost btn-sm" onclick="toggleClose(this)">Close</button></td></tr>
+              <tr><td class="t-strong">Product Dispatch</td><td><span class="pill p-neutral">Single opt-in</span></td><td class="num">12,940</td><td class="mono muted">product@northwindtimes.example</td><td>Ad-hoc</td><td><span class="pill p-neutral">Free</span></td><td><span class="pill p-neutral vis">Closed</span></td><td><button class="btn btn-ghost btn-sm" onclick="toggleClose(this)">Reopen</button></td></tr>
             </tbody>
           </table></div>
         </section>
@@ -639,7 +639,7 @@
                 <dt>Newsletter</dt><dd>The Morning Ledger</dd>
                 <dt>Audience</dt><dd>Engaged — opened last 30d <span class="muted num">· 71,220</span></dd>
                 <dt>Suppressed</dt><dd class="num">1,204 <span class="muted">(bounces + complaints)</span></dd>
-                <dt>From</dt><dd class="mono">ledger@summitdaily.com</dd>
+                <dt>From</dt><dd class="mono">ledger@northwindtimes.example</dd>
                 <dt>Unsubscribe</dt><dd><span class="pill p-good"><span class="dot"></span>One-click (RFC 8058)</span></dd>
                 <dt>Send</dt><dd>Now — throttled to 340 msg/s</dd>
               </dl>
@@ -676,7 +676,7 @@
               <div class="row" style="justify-content:space-between;margin-bottom:10px"><div class="eyebrow">Live preview</div><button class="btn btn-ghost btn-sm" onclick="openPreview()">◲ Full preview</button></div>
               <div class="email" style="max-width:100%;box-shadow:none;border:1px solid var(--border)">
                 <div class="ehead"><span class="stamp" style="width:18px;height:18px"></span> The Morning Ledger</div>
-                <div class="ebody"><h4 style="font-size:15px">Good morning, Jordan.</h4><p style="font-size:13px;margin:0">The one chart that explains this week’s market — and three things to watch before Monday.</p><button class="btn btn-primary btn-sm" style="align-self:flex-start">Read today’s lead</button><p class="muted" style="font-size:11px;margin:0">Summit Daily · 220 Harbor St, Boston MA · Unsubscribe</p></div>
+                <div class="ebody"><h4 style="font-size:15px">Good morning, Jordan.</h4><p style="font-size:13px;margin:0">The one chart that explains this week’s market — and three things to watch before Monday.</p><button class="btn btn-primary btn-sm" style="align-self:flex-start">Read today’s lead</button><p class="muted" style="font-size:11px;margin:0">Northwind Times · 500 Market Street, Metro City, USA · Unsubscribe</p></div>
               </div>
             </div>
           </div>
@@ -731,7 +731,7 @@
                     <p>Good morning, Jordan. Futures slipped overnight after the jobs print. Here’s <a class="elink" href="#" onclick="return false">the chart everyone’s sharing<span class="badge hot">3,204</span></a> and why it matters.</p>
                     <p>In markets: <a class="elink" href="#" onclick="return false">rates<span class="badge">642</span></a>, <a class="elink" href="#" onclick="return false">energy<span class="badge">418</span></a>, and a <a class="elink" href="#" onclick="return false">deal to watch<span class="badge">1,090</span></a>.</p>
                     <div class="adslot"><span class="adtag">LiveIntent · not tracked</span>Sponsored placement</div>
-                    <p class="muted" style="font-size:11px;margin:0">Summit Daily · 40 W Main St, Frisco CO · <a class="elink" href="#" onclick="return false">Unsubscribe<span class="badge">54</span></a></p>
+                    <p class="muted" style="font-size:11px;margin:0">Northwind Times · 123 Main Street, Anytown, USA · <a class="elink" href="#" onclick="return false">Unsubscribe<span class="badge">54</span></a></p>
                   </div>
                 </div>
               </div>
@@ -806,8 +806,8 @@
             <div class="card"><table>
               <thead><tr><th>Domain</th><th>DKIM</th><th>SPF</th><th>DMARC</th><th>Tracking</th></tr></thead>
               <tbody>
-                <tr><td class="t-strong mono">summitdaily.com</td><td><span class="pill p-good"><span class="dot"></span>Verified</span></td><td><span class="pill p-good"><span class="dot"></span>Pass</span></td><td><span class="pill p-good"><span class="dot"></span>p=reject</span></td><td class="mono muted">click.summitdaily.com</td></tr>
-                <tr><td class="t-strong mono">news.summitdaily.com</td><td><span class="pill p-good"><span class="dot"></span>Verified</span></td><td><span class="pill p-good"><span class="dot"></span>Pass</span></td><td><span class="pill p-warn"><span class="dot"></span>p=none</span></td><td class="mono muted">click.summitdaily.com</td></tr>
+                <tr><td class="t-strong mono">northwindtimes.example</td><td><span class="pill p-good"><span class="dot"></span>Verified</span></td><td><span class="pill p-good"><span class="dot"></span>Pass</span></td><td><span class="pill p-good"><span class="dot"></span>p=reject</span></td><td class="mono muted">click.northwindtimes.example</td></tr>
+                <tr><td class="t-strong mono">news.northwindtimes.example</td><td><span class="pill p-good"><span class="dot"></span>Verified</span></td><td><span class="pill p-good"><span class="dot"></span>Pass</span></td><td><span class="pill p-warn"><span class="dot"></span>p=none</span></td><td class="mono muted">click.northwindtimes.example</td></tr>
               </tbody>
             </table></div>
             <div class="note info"><span class="ic">✦</span><div>SES is out of the sandbox. Production quota: <b>312,000/day</b> at <b>340 msg/s</b>. Setup wizard verifies DKIM/SPF/DMARC on first deploy.</div></div>
@@ -844,7 +844,7 @@
                 <div class="eyebrow">Deliverability alerts → Amazon SNS</div>
                 <p class="muted" style="margin:0;font-size:13px">Point alerts at an SNS topic — fan out to email, SMS, Slack, PagerDuty, or a Lambda.</p>
                 <div class="field"><label>SNS topic ARN</label><input class="mono" value="arn:aws:sns:us-east-1:…:addressium-alerts"></div>
-                <div class="field"><label>Also notify</label><div class="row"><span class="pill p-accent">ops@summitdaily.com</span><span class="pill p-accent">#deliverability</span><button class="btn btn-ghost btn-sm">＋</button></div></div>
+                <div class="field"><label>Also notify</label><div class="row"><span class="pill p-accent">ops@northwindtimes.example</span><span class="pill p-accent">#deliverability</span><button class="btn btn-ghost btn-sm">＋</button></div></div>
                 <button class="btn btn-sm" style="align-self:flex-start">Send test alert</button>
               </div>
               <div class="card cardpad">
@@ -882,10 +882,10 @@
             <div class="card"><table>
               <thead><tr><th>Member</th><th>Role</th><th>Org access</th><th>MFA</th><th>Last active</th></tr></thead>
               <tbody>
-                <tr><td><div class="cellwho"><span class="avatar-sm">DA</span><div><div class="t-strong">Dana Alvarez</div><div class="muted mono" style="font-size:11.5px">dana@summitdaily.com</div></div></div></td><td><span class="pill p-accent">Developer Admin</span></td><td><span class="pill p-neutral">All orgs</span></td><td><span class="pill p-good"><span class="dot"></span>TOTP</span></td><td>Now</td></tr>
-                <tr><td><div class="cellwho"><span class="avatar-sm">PW</span><div><div class="t-strong">Priya Walsh</div><div class="muted mono" style="font-size:11.5px">priya@summitdaily.com</div></div></div></td><td><span class="pill p-accent">Editor</span></td><td><span class="pill p-neutral">Summit · Vail</span></td><td><span class="pill p-good"><span class="dot"></span>TOTP</span></td><td>1h ago</td></tr>
-                <tr><td><div class="cellwho"><span class="avatar-sm">RB</span><div><div class="t-strong">Ruben Ba</div><div class="muted mono" style="font-size:11.5px">ruben@summitdaily.com</div></div></div></td><td><span class="pill p-paid"><span class="dot"></span>Analyst (Sales)</span></td><td><span class="pill p-neutral">All orgs</span></td><td><span class="pill p-good"><span class="dot"></span>TOTP</span></td><td>3d ago</td></tr>
-                <tr><td><div class="cellwho"><span class="avatar-sm">MC</span><div><div class="t-strong">Marco Cruz</div><div class="muted mono" style="font-size:11.5px">marco@summitdaily.com</div></div></div></td><td><span class="pill p-neutral">Support</span></td><td><span class="pill p-neutral">Summit</span></td><td><span class="pill p-warn"><span class="dot"></span>Pending</span></td><td>—</td></tr>
+                <tr><td><div class="cellwho"><span class="avatar-sm">DA</span><div><div class="t-strong">Dana Alvarez</div><div class="muted mono" style="font-size:11.5px">dana@northwindtimes.example</div></div></div></td><td><span class="pill p-accent">Developer Admin</span></td><td><span class="pill p-neutral">All orgs</span></td><td><span class="pill p-good"><span class="dot"></span>TOTP</span></td><td>Now</td></tr>
+                <tr><td><div class="cellwho"><span class="avatar-sm">PW</span><div><div class="t-strong">Priya Walsh</div><div class="muted mono" style="font-size:11.5px">priya@northwindtimes.example</div></div></div></td><td><span class="pill p-accent">Editor</span></td><td><span class="pill p-neutral">Northwind · Lakeside</span></td><td><span class="pill p-good"><span class="dot"></span>TOTP</span></td><td>1h ago</td></tr>
+                <tr><td><div class="cellwho"><span class="avatar-sm">RB</span><div><div class="t-strong">Ruben Ba</div><div class="muted mono" style="font-size:11.5px">ruben@northwindtimes.example</div></div></div></td><td><span class="pill p-paid"><span class="dot"></span>Analyst (Sales)</span></td><td><span class="pill p-neutral">All orgs</span></td><td><span class="pill p-good"><span class="dot"></span>TOTP</span></td><td>3d ago</td></tr>
+                <tr><td><div class="cellwho"><span class="avatar-sm">MC</span><div><div class="t-strong">Marco Cruz</div><div class="muted mono" style="font-size:11.5px">marco@northwindtimes.example</div></div></div></td><td><span class="pill p-neutral">Support</span></td><td><span class="pill p-neutral">Northwind</span></td><td><span class="pill p-warn"><span class="dot"></span>Pending</span></td><td>—</td></tr>
               </tbody>
             </table></div>
           </div>
@@ -921,9 +921,9 @@
             <div class="card"><table>
               <thead><tr><th>Feed</th><th>Maps to</th><th>Last pulled</th><th>Items</th><th>Status</th></tr></thead>
               <tbody>
-                <tr><td><div class="t-strong">Homepage RSS</div><div class="mono muted" style="font-size:11.5px">summitdaily.com/feed.xml</div></td><td>The Morning Ledger</td><td>6 min ago</td><td class="num">28</td><td><span class="pill p-good"><span class="dot"></span>Active</span></td></tr>
+                <tr><td><div class="t-strong">Homepage RSS</div><div class="mono muted" style="font-size:11.5px">northwindtimes.example/feed.xml</div></td><td>The Morning Ledger</td><td>6 min ago</td><td class="num">28</td><td><span class="pill p-good"><span class="dot"></span>Active</span></td></tr>
                 <tr><td><div class="t-strong">Markets JSON</div><div class="mono muted" style="font-size:11.5px">api…/markets.json</div></td><td>Market Signal</td><td>14 min ago</td><td class="num">12</td><td><span class="pill p-good"><span class="dot"></span>Active</span></td></tr>
-                <tr><td><div class="t-strong">Features Atom</div><div class="mono muted" style="font-size:11.5px">summitdaily.com/features.atom</div></td><td>Field Notes</td><td>1 h ago</td><td class="num">6</td><td><span class="pill p-warn"><span class="dot"></span>Paused</span></td></tr>
+                <tr><td><div class="t-strong">Features Atom</div><div class="mono muted" style="font-size:11.5px">northwindtimes.example/features.atom</div></td><td>Field Notes</td><td>1 h ago</td><td class="num">6</td><td><span class="pill p-warn"><span class="dot"></span>Paused</span></td></tr>
               </tbody>
             </table></div>
             <div class="card cardpad">
@@ -952,7 +952,7 @@
               <tr><td class="mono t-strong">{{entitlement}}</td><td>Profile · synced</td><td><span class="pill p-accent">token claim</span></td><td><span class="pill p-paid"><span class="dot"></span>paid</span></td><td class="mono">free</td></tr>
               <tr><td class="mono t-strong">{{article_title}}</td><td>Feed field</td><td><span class="pill p-neutral">per-campaign</span></td><td class="muted">The one chart…</td><td class="muted">—</td></tr>
               <tr><td class="mono t-strong">{{unsubscribe_url}}</td><td>System</td><td><span class="pill p-neutral">per-recipient</span></td><td class="mono muted" style="font-size:11px">…/u/…</td><td class="muted">—</td></tr>
-              <tr><td class="mono t-strong">{{unsubscribe_footer}}</td><td>System · list address</td><td><span class="pill p-neutral">per-campaign</span></td><td class="muted">Summit Daily · 40 Main St…</td><td class="muted">—</td></tr>
+              <tr><td class="mono t-strong">{{unsubscribe_footer}}</td><td>System · list address</td><td><span class="pill p-neutral">per-campaign</span></td><td class="muted">Northwind Times · 123 Main Street…</td><td class="muted">—</td></tr>
             </tbody>
           </table></div>
         </section>
@@ -992,7 +992,7 @@
 
         <!-- IDENTITY & POOLS -->
         <section class="screen" data-screen="identity">
-          <div class="pagehead"><div><h1>Identity &amp; pools</h1><p>Per-organization Cognito pools, app clients and magic-link signing. Stored in SSM; scoped to <b>Summit Daily</b>.</p></div><button class="btn">Save changes</button></div>
+          <div class="pagehead"><div><h1>Identity &amp; pools</h1><p>Per-organization Cognito pools, app clients and magic-link signing. Stored in SSM; scoped to <b>Northwind Times</b>.</p></div><button class="btn">Save changes</button></div>
           <div class="grid2">
             <div class="card cardpad" style="display:flex;flex-direction:column;gap:11px">
               <div class="row" style="justify-content:space-between"><div class="eyebrow">Admin user pool · staff</div><span class="pill p-accent">shared across orgs</span></div>
@@ -1004,18 +1004,18 @@
               <div class="row" style="justify-content:space-between"><div class="eyebrow">Subscriber user pool</div><span class="pill p-paid"><span class="dot"></span>per-org · shared w/ site</span></div>
               <div class="field"><label>User pool ID</label><input class="mono" value="us-east-1_Smt7Rp4Wq" readonly></div>
               <div class="field"><label>App client ID (site)</label><input class="mono" value="1f9a…summit" readonly></div>
-              <div class="field"><label>Main-site domain</label><input class="mono" value="summitdaily.com" readonly></div>
+              <div class="field"><label>Main-site domain</label><input class="mono" value="northwindtimes.example" readonly></div>
             </div>
           </div>
           <div class="card cardpad" style="display:flex;flex-direction:column;gap:12px">
-            <div class="eyebrow">Magic-link signing · Summit Daily</div>
+            <div class="eyebrow">Magic-link signing · Northwind Times</div>
             <div class="grid2" style="gap:12px">
               <div class="field"><label>KMS key ARN (ES256)</label><input class="mono" value="arn:aws:kms:us-east-1:…:key/8f2c" readonly></div>
               <div class="field"><label>JWKS URL</label><input class="mono" value="https://api.addressium…/summit/jwks.json" readonly></div>
               <div class="field"><label>Issuer (iss)</label><input class="mono" value="https://addressium/summit" readonly></div>
-              <div class="field"><label>Audience (aud)</label><input class="mono" value="summitdaily.com" readonly></div>
+              <div class="field"><label>Audience (aud)</label><input class="mono" value="northwindtimes.example" readonly></div>
             </div>
-            <div class="note warn"><span class="ic">⚠</span><div>Each organization has its <b>own signing key, JWKS and subscriber pool</b> — silos never share tokens. Rotating here republishes only Summit Daily’s JWKS.</div></div>
+            <div class="note warn"><span class="ic">⚠</span><div>Each organization has its <b>own signing key, JWKS and subscriber pool</b> — silos never share tokens. Rotating here republishes only Northwind Times’s JWKS.</div></div>
           </div>
         </section>
 
@@ -1030,7 +1030,7 @@
             </div>
             <div class="card cardpad" style="display:flex;flex-direction:column;gap:12px">
               <div class="eyebrow">Export</div>
-              <div class="field"><label>Audience</label><select><option>The Morning Ledger — all confirmed</option><option>Segment: Paid subscribers</option><option>Everyone in Summit Daily</option></select></div>
+              <div class="field"><label>Audience</label><select><option>The Morning Ledger — all confirmed</option><option>Segment: Paid subscribers</option><option>Everyone in Northwind Times</option></select></div>
               <div class="field"><label>Format</label><select><option>CSV</option><option>JSON (NDJSON)</option></select></div>
               <div class="field"><label>Fields</label><div class="row"><span class="pill p-accent">email</span><span class="pill p-accent">first_name</span><span class="pill p-accent">entitlement</span><span class="pill p-accent">status</span><button class="btn btn-ghost btn-sm">＋</button></div></div>
               <button class="btn btn-primary" style="align-self:flex-start">Export 96,204 rows</button>
@@ -1059,7 +1059,7 @@
               <div class="eyebrow" style="margin-bottom:12px">Identity</div>
               <dl class="kv" style="gap:11px 18px">
                 <dt>Cognito sub</dt><dd class="mono">a1f3b8c0-…-9c2</dd>
-                <dt>Organization</dt><dd>Summit Daily</dd>
+                <dt>Organization</dt><dd>Northwind Times</dd>
                 <dt>Status</dt><dd><span class="pill p-good"><span class="dot"></span>Confirmed</span></dd>
                 <dt>Entitlement</dt><dd><span class="pill p-paid"><span class="dot"></span>paid</span> <span class="muted">· asof 4 min ago</span></dd>
                 <dt>Source</dt><dd>Signup form · homepage</dd>
@@ -1106,7 +1106,7 @@
             <tbody>
               <tr><td class="mono">bounce@olddomain.com</td><td><span class="pill p-crit"><span class="dot"></span>Hard bounce</span></td><td><span class="pill p-neutral">Global</span></td><td>2h ago</td></tr>
               <tr><td class="mono">angry@example.com</td><td><span class="pill p-crit"><span class="dot"></span>Complaint</span></td><td><span class="pill p-neutral">Global</span></td><td>Yesterday</td></tr>
-              <tr><td class="mono">dan.kim@gmail.com</td><td><span class="pill p-warn"><span class="dot"></span>Unsubscribe</span></td><td><span class="pill p-accent">Summit Daily</span></td><td>12d ago</td></tr>
+              <tr><td class="mono">dan.kim@gmail.com</td><td><span class="pill p-warn"><span class="dot"></span>Unsubscribe</span></td><td><span class="pill p-accent">Northwind Times</span></td><td>12d ago</td></tr>
               <tr><td class="mono">test@spamtrap.net</td><td><span class="pill p-neutral">Manual</span></td><td><span class="pill p-neutral">Global</span></td><td>1 mo ago</td></tr>
             </tbody>
           </table></div>
@@ -1118,14 +1118,14 @@
           <div class="card"><table>
             <thead><tr><th>Organization</th><th>Domain</th><th>Subscriber pool ID</th><th>Time zone</th><th>Sending IP</th><th>Suppression</th><th>Setup</th></tr></thead>
             <tbody>
-              <tr><td class="t-strong">Summit Daily</td><td class="mono muted">summitdaily.com</td><td class="mono muted">us-east-1_Smt7Rp4Wq</td><td class="muted">America/Denver</td><td><span class="pill p-neutral">Shared</span></td><td><span class="pill p-neutral">Hybrid</span></td><td><span class="pill p-good"><span class="dot"></span>Verified</span></td></tr>
-              <tr><td class="t-strong">Vail Daily</td><td class="mono muted">vaildaily.com</td><td class="mono muted">us-east-1_Vail3Kp9x</td><td class="muted">America/Denver</td><td><span class="pill p-paid"><span class="dot"></span>Dedicated</span></td><td><span class="pill p-neutral">Hybrid</span></td><td><span class="pill p-good"><span class="dot"></span>Verified</span></td></tr>
-              <tr><td class="t-strong">Aspen Times</td><td class="mono muted">aspentimes.com</td><td class="mono muted">us-east-1_Asp2Qw8v</td><td class="muted">America/Denver</td><td><span class="pill p-neutral">Shared</span></td><td><span class="pill p-neutral">Per-org</span></td><td><span class="pill p-warn"><span class="dot"></span>DMARC pending</span></td></tr>
+              <tr><td class="t-strong">Northwind Times</td><td class="mono muted">northwindtimes.example</td><td class="mono muted">us-east-1_Smt7Rp4Wq</td><td class="muted">America/Denver</td><td><span class="pill p-neutral">Shared</span></td><td><span class="pill p-neutral">Hybrid</span></td><td><span class="pill p-good"><span class="dot"></span>Verified</span></td></tr>
+              <tr><td class="t-strong">Lakeside Ledger</td><td class="mono muted">lakesideledger.example</td><td class="mono muted">us-east-1_Lakeside3Kp9x</td><td class="muted">America/Denver</td><td><span class="pill p-paid"><span class="dot"></span>Dedicated</span></td><td><span class="pill p-neutral">Hybrid</span></td><td><span class="pill p-good"><span class="dot"></span>Verified</span></td></tr>
+              <tr><td class="t-strong">Copperline Courier</td><td class="mono muted">copperlinecourier.example</td><td class="mono muted">us-east-1_Asp2Qw8v</td><td class="muted">America/Denver</td><td><span class="pill p-neutral">Shared</span></td><td><span class="pill p-neutral">Per-org</span></td><td><span class="pill p-warn"><span class="dot"></span>DMARC pending</span></td></tr>
             </tbody>
           </table></div>
           <div class="grid2">
             <div class="card cardpad">
-              <div class="eyebrow" style="margin-bottom:12px">Setup checklist — Aspen Times</div>
+              <div class="eyebrow" style="margin-bottom:12px">Setup checklist — Copperline Courier</div>
               <div style="display:flex;flex-direction:column;gap:9px;font-size:13.5px">
                 <div class="row"><span class="pill p-good" style="padding:1px 6px"><span class="dot"></span></span> Domain verified in SES</div>
                 <div class="row"><span class="pill p-good" style="padding:1px 6px"><span class="dot"></span></span> DKIM signing enabled</div>
@@ -1156,8 +1156,8 @@
           <div class="card"><div class="cardhead"><h3>Outbound webhooks</h3><button class="btn btn-sm">＋ Add endpoint</button></div><table>
             <thead><tr><th>Endpoint</th><th>Events</th><th>Status</th></tr></thead>
             <tbody>
-              <tr><td class="mono muted">summitdaily.com/hooks/addressium</td><td>subscribed · unsubscribed · complained</td><td><span class="pill p-good"><span class="dot"></span>Healthy</span></td></tr>
-              <tr><td class="mono muted">ops.summitdaily.com/deliverability</td><td>bounce · complaint</td><td><span class="pill p-good"><span class="dot"></span>Healthy</span></td></tr>
+              <tr><td class="mono muted">northwindtimes.example/hooks/addressium</td><td>subscribed · unsubscribed · complained</td><td><span class="pill p-good"><span class="dot"></span>Healthy</span></td></tr>
+              <tr><td class="mono muted">ops.northwindtimes.example/deliverability</td><td>bounce · complaint</td><td><span class="pill p-good"><span class="dot"></span>Healthy</span></td></tr>
             </tbody>
           </table></div>
         </section>
@@ -1174,9 +1174,9 @@
           <div class="card"><div class="cardhead"><h3>By organization</h3><button class="btn btn-sm">Export CSV</button></div><table>
             <thead><tr><th>Organization</th><th>Emails (mo)</th><th>SES cost</th><th>Dedicated IP</th><th>Storage</th><th>Est. total</th></tr></thead>
             <tbody>
-              <tr><td class="t-strong">Summit Daily</td><td class="num">268,400</td><td class="num">$26.84</td><td class="muted">—</td><td class="num">1.2 GB</td><td class="num t-strong">$27.90</td></tr>
-              <tr><td class="t-strong">Vail Daily</td><td class="num">112,900</td><td class="num">$11.29</td><td><span class="pill p-paid"><span class="dot"></span>$24.95/mo</span></td><td class="num">0.6 GB</td><td class="num t-strong">$37.10</td></tr>
-              <tr><td class="t-strong">Aspen Times</td><td class="num">30,700</td><td class="num">$3.07</td><td class="muted">—</td><td class="num">0.3 GB</td><td class="num t-strong">$3.40</td></tr>
+              <tr><td class="t-strong">Northwind Times</td><td class="num">268,400</td><td class="num">$26.84</td><td class="muted">—</td><td class="num">1.2 GB</td><td class="num t-strong">$27.90</td></tr>
+              <tr><td class="t-strong">Lakeside Ledger</td><td class="num">112,900</td><td class="num">$11.29</td><td><span class="pill p-paid"><span class="dot"></span>$24.95/mo</span></td><td class="num">0.6 GB</td><td class="num t-strong">$37.10</td></tr>
+              <tr><td class="t-strong">Copperline Courier</td><td class="num">30,700</td><td class="num">$3.07</td><td class="muted">—</td><td class="num">0.3 GB</td><td class="num t-strong">$3.40</td></tr>
             </tbody>
             <tfoot><tr><td class="t-strong">Total</td><td class="num t-strong">412,000</td><td class="num t-strong">$41.20</td><td class="num">$24.95</td><td class="num">2.1 GB</td><td class="num t-strong">$96.40</td></tr></tfoot>
           </table></div>
@@ -1218,7 +1218,7 @@
                 <div class="cblk" onclick="selBlock(this)"><span class="tagname">text</span>The one chart that explains the market — and three things to watch before the open.</div>
                 <div class="cblk" onclick="selBlock(this)"><span class="tagname">button</span><span style="display:inline-block;background:var(--accent);color:#fff;padding:9px 16px;border-radius:7px;font-weight:600;font-size:13px">Read today’s lead</span></div>
                 <div class="cblk" onclick="selBlock(this)" style="text-align:center;color:var(--ink-3)"><span class="tagname">ad_top · LiveIntent</span><span class="mono" style="font-size:11px">{{ad_top}} — inserted on send, not tracked</span></div>
-                <div class="cblk" onclick="selBlock(this)" style="font-size:11px;color:var(--ink-3)"><span class="tagname">footer · auto</span>Summit Daily · 40 W Main St, Frisco CO · Unsubscribe</div>
+                <div class="cblk" onclick="selBlock(this)" style="font-size:11px;color:var(--ink-3)"><span class="tagname">footer · auto</span>Northwind Times · 123 Main Street, Anytown, USA · Unsubscribe</div>
               </div>
             </div>
             <div class="inspector">
@@ -1253,7 +1253,7 @@
               <tr><td class="t-strong">Manage team &amp; roles</td><td class="rc y">✓</td><td class="rc n">—</td><td class="rc n">—</td><td class="rc n">—</td></tr>
             </tbody>
           </table></div>
-          <div class="note info"><span class="ic">▹</span><div>Roles are also <b>org-scoped</b>: an Editor for Vail Daily can’t send for Summit Daily, and a Sales/Analyst gets read-only reporting only for the orgs you grant. Destructive actions (delete contacts, close newsletters) are Developer-Admin-only by design.</div></div>
+          <div class="note info"><span class="ic">▹</span><div>Roles are also <b>org-scoped</b>: an Editor for Lakeside Ledger can’t send for Northwind Times, and a Sales/Analyst gets read-only reporting only for the orgs you grant. Destructive actions (delete contacts, close newsletters) are Developer-Admin-only by design.</div></div>
         </section>
 
         <!-- AUDIT LOG -->
@@ -1262,12 +1262,12 @@
           <div class="card"><table>
             <thead><tr><th>When</th><th>Member</th><th>Action</th><th>Org</th></tr></thead>
             <tbody>
-              <tr><td class="muted">2m ago</td><td>Dana Alvarez</td><td>Sent campaign “The Morning Ledger — Jul 20”</td><td>Summit Daily</td></tr>
-              <tr><td class="muted">1h ago</td><td>Priya Walsh</td><td>Closed newsletter “Product Dispatch”</td><td>Summit Daily</td></tr>
-              <tr><td class="muted">3h ago</td><td>Dana Alvarez</td><td>Manually unsubscribed dan.kim@gmail.com</td><td>Summit Daily</td></tr>
-              <tr><td class="muted">Yesterday</td><td>Ruben Ba</td><td>Exported 96,204 subscribers (CSV)</td><td>Summit Daily</td></tr>
-              <tr><td class="muted">2d ago</td><td>Dana Alvarez</td><td>Provisioned organization “Aspen Times”</td><td>—</td></tr>
-              <tr><td class="muted">3d ago</td><td>Priya Walsh</td><td>Rotated magic-link signing key</td><td>Vail Daily</td></tr>
+              <tr><td class="muted">2m ago</td><td>Dana Alvarez</td><td>Sent campaign “The Morning Ledger — Jul 20”</td><td>Northwind Times</td></tr>
+              <tr><td class="muted">1h ago</td><td>Priya Walsh</td><td>Closed newsletter “Product Dispatch”</td><td>Northwind Times</td></tr>
+              <tr><td class="muted">3h ago</td><td>Dana Alvarez</td><td>Manually unsubscribed dan.kim@gmail.com</td><td>Northwind Times</td></tr>
+              <tr><td class="muted">Yesterday</td><td>Ruben Ba</td><td>Exported 96,204 subscribers (CSV)</td><td>Northwind Times</td></tr>
+              <tr><td class="muted">2d ago</td><td>Dana Alvarez</td><td>Provisioned organization “Copperline Courier”</td><td>—</td></tr>
+              <tr><td class="muted">3d ago</td><td>Priya Walsh</td><td>Rotated magic-link signing key</td><td>Lakeside Ledger</td></tr>
             </tbody>
           </table></div>
         </section>
@@ -1280,7 +1280,7 @@
 <!-- ============ SUBSCRIBER SITE ============ -->
 <div class="frame" id="frame-subscriber">
   <div class="pubnav">
-    <div class="plogo"><span class="mark">S</span> Summit&nbsp;Daily</div>
+    <div class="plogo"><span class="mark">S</span> Northwind&nbsp;Daily</div>
     <div class="seg" style="margin-left:6px">
       <button class="on" data-sub="directory" onclick="subnav('directory')">Newsletters</button>
       <button data-sub="preferences" onclick="subnav('preferences')">My preferences</button>
@@ -1293,12 +1293,12 @@
   <!-- directory -->
   <section class="pubscreen" data-sub="directory">
     <div class="pub">
-      <span class="eyebrow">Summit Daily newsletters</span>
+      <span class="eyebrow">Northwind Times newsletters</span>
       <h1 style="margin-top:8px">Independent journalism, in your inbox.</h1>
       <p class="lede">Pick the newsletters you want. Every subscription is double opt-in — we’ll email you to confirm, and you can manage or leave anytime.</p>
       <div class="nl-grid">
         <div class="nl card"><div class="top"><div><h3>The Morning Ledger</h3><div class="freq">Daily · weekday mornings</div></div><span class="pill p-neutral">Free</span></div><p>The business day in a five-minute read. Markets, deals, and the one chart that matters.</p><div class="foot"><span class="cnt">96,204 readers</span><button class="btn btn-primary btn-sm" onclick="subnav('confirm')">Subscribe</button></div></div>
-        <div class="nl card"><div class="top"><div><h3>Market Signal</h3><div class="freq">Weekly · Sunday</div></div><span class="pill p-paid"><span class="dot"></span>Paid</span></div><p>Deep premium analysis for investors. Included with a Summit membership.</p><div class="foot"><span class="cnt">8,410 members</span><button class="btn btn-primary btn-sm" onclick="subnav('confirm')">Subscribe</button></div></div>
+        <div class="nl card"><div class="top"><div><h3>Market Signal</h3><div class="freq">Weekly · Sunday</div></div><span class="pill p-paid"><span class="dot"></span>Paid</span></div><p>Deep premium analysis for investors. Included with a Northwind membership.</p><div class="foot"><span class="cnt">8,410 members</span><button class="btn btn-primary btn-sm" onclick="subnav('confirm')">Subscribe</button></div></div>
         <div class="nl card"><div class="top"><div><h3>Field Notes</h3><div class="freq">Weekly · Thursday</div></div><span class="pill p-neutral">Free</span></div><p>Long-form features and reporting from the field. One story, told well.</p><div class="foot"><span class="cnt">54,880 readers</span><button class="btn btn-primary btn-sm" onclick="subnav('confirm')">Subscribe</button></div></div>
         <div class="nl card"><div class="top"><div><h3>Weekend Long Read</h3><div class="freq">Weekly · Saturday</div></div><span class="pill p-neutral">Free</span></div><p>The best of the week plus one essay worth your Saturday coffee.</p><div class="foot"><span class="cnt">61,300 readers</span><button class="btn btn-primary btn-sm" onclick="subnav('confirm')">Subscribe</button></div></div>
       </div>
@@ -1321,9 +1321,9 @@
   <section class="pubscreen" data-sub="login" style="display:none">
     <div class="cog-wrap sub">
       <div class="cog">
-        <span class="poolchip sub">Subscriber pool · shared with summitdaily.com</span>
+        <span class="poolchip sub">Subscriber pool · shared with northwindtimes.example</span>
         <div class="cog-card">
-          <div class="cog-logo"><span class="mark" style="width:28px;height:28px;border-radius:7px;background:linear-gradient(135deg,#c98a3a,#9a5a20);color:#fff;display:grid;place-items:center;font-weight:800">S</span><b>Summit Daily</b></div>
+          <div class="cog-logo"><span class="mark" style="width:28px;height:28px;border-radius:7px;background:linear-gradient(135deg,#c98a3a,#9a5a20);color:#fff;display:grid;place-items:center;font-weight:800">S</span><b>Northwind Times</b></div>
           <h2>Sign in</h2>
           <div class="sub">One account for your newsletters and the site</div>
           <form onsubmit="subnav('preferences');return false">
@@ -1389,15 +1389,15 @@
       <div class="email" style="max-width:480px;margin:0 auto">
         <div class="ehead"><span class="stamp" style="width:18px;height:18px"></span> The Morning Ledger</div>
         <div class="ebody">
-          <div class="muted" style="font-size:11px">Tuesday, July 20 · Frisco, CO</div>
+          <div class="muted" style="font-size:11px">Tuesday, July 20 · Anytown, USA</div>
           <h4>The one chart that explains the market</h4>
           <p>Good morning, Jordan. Futures slipped overnight after the jobs print — here’s the single chart everyone in the valley is forwarding this morning, and the three things worth watching before the open.</p>
           <button class="btn btn-primary btn-sm" style="align-self:flex-start" onclick="return false">Read today’s lead →</button>
           <hr class="divider">
           <p style="margin:0"><b>Also in today’s Ledger</b></p>
-          <p style="margin:0;font-size:13px">· Rates tick up as the Fed signals patience<br>· Energy names lead the pre-market<br>· A local deal to watch in Summit County</p>
+          <p style="margin:0;font-size:13px">· Rates tick up as the Fed signals patience<br>· Energy names lead the pre-market<br>· A local deal to watch in Northwind County</p>
           <div class="adslot" style="margin-top:6px"><span class="adtag">LiveIntent · sponsored</span>Your ad here — untracked, no token</div>
-          <p class="muted" style="font-size:11px;margin:6px 0 0">You’re getting this because you subscribed at summitdaily.com.<br>Summit Daily · 40 W Main St, Frisco CO · <span style="text-decoration:underline">Unsubscribe</span> · <span style="text-decoration:underline">Manage preferences</span></p>
+          <p class="muted" style="font-size:11px;margin:6px 0 0">You’re getting this because you subscribed at northwindtimes.example.<br>Northwind Times · 123 Main Street, Anytown, USA · <span style="text-decoration:underline">Unsubscribe</span> · <span style="text-decoration:underline">Manage preferences</span></p>
         </div>
       </div>
     </div>
@@ -1409,13 +1409,13 @@
   <div class="modal">
     <div class="modal-h"><h3>New newsletter</h3><button class="xbtn" onclick="closeModal()">×</button></div>
     <div class="modal-b">
-      <div class="field"><label>Name (shown on the opt-in page)</label><input type="text" placeholder="e.g. Summit Sports Weekly"></div>
+      <div class="field"><label>Name (shown on the opt-in page)</label><input type="text" placeholder="e.g. Northwind Sports Weekly"></div>
       <div class="field"><label>Short description</label><textarea rows="2" placeholder="One or two lines subscribers see when choosing."></textarea></div>
       <div class="grid2" style="gap:12px">
         <div class="field"><label>Opt-in policy</label><select><option>Double opt-in (recommended)</option><option>Single opt-in</option></select></div>
         <div class="field"><label>Access</label><select><option>Free</option><option>Paid — requires entitlement</option></select></div>
       </div>
-      <div class="field"><label>From address</label><div class="row" style="gap:6px"><input type="text" placeholder="sports" style="max-width:150px"><span class="mono muted">@summitdaily.com</span></div></div>
+      <div class="field"><label>From address</label><div class="row" style="gap:6px"><input type="text" placeholder="sports" style="max-width:150px"><span class="mono muted">@northwindtimes.example</span></div></div>
       <hr class="divider">
       <div class="row" style="justify-content:space-between"><div><b style="font-size:13.5px">Show on public opt-in page</b><div class="muted" style="font-size:12px">Off = created but closed; hidden from the directory, no signups.</div></div><div class="toggle on" onclick="this.classList.toggle('on')"><i></i></div></div>
     </div>
@@ -1428,9 +1428,9 @@
     <div class="modal-h"><h3>Switch organization</h3><button class="xbtn" onclick="closeModal()">×</button></div>
     <div class="modal-b" style="gap:8px">
       <div class="muted" style="font-size:12.5px">Each organization is an isolated silo — its own domain, subscriber pool, signing key and data.</div>
-      <div class="actitem" style="border:1px solid var(--accent);border-radius:10px;cursor:pointer" onclick="switchOrg('Summit Daily','summitdaily.com')"><div class="ci">S</div><div class="meta"><b>Summit Daily</b><div>summitdaily.com · 128,430 subscribers</div></div><span class="pill p-accent">current</span></div>
-      <div class="actitem" style="border:1px solid var(--border);border-radius:10px;cursor:pointer" onclick="switchOrg('Vail Daily','vaildaily.com')"><div class="ci" style="background:#e9dcc7;color:#8a5a1c">V</div><div class="meta"><b>Vail Daily</b><div>vaildaily.com · 74,900 subscribers</div></div><span class="muted">↦</span></div>
-      <div class="actitem" style="border:1px solid var(--border);border-radius:10px;cursor:pointer" onclick="switchOrg('Aspen Times','aspentimes.com')"><div class="ci" style="background:var(--surface-3);color:var(--ink-2)">A</div><div class="meta"><b>Aspen Times</b><div>aspentimes.com · 51,200 subscribers</div></div><span class="muted">↦</span></div>
+      <div class="actitem" style="border:1px solid var(--accent);border-radius:10px;cursor:pointer" onclick="switchOrg('Northwind Times','northwindtimes.example')"><div class="ci">S</div><div class="meta"><b>Northwind Times</b><div>northwindtimes.example · 128,430 subscribers</div></div><span class="pill p-accent">current</span></div>
+      <div class="actitem" style="border:1px solid var(--border);border-radius:10px;cursor:pointer" onclick="switchOrg('Lakeside Ledger','lakesideledger.example')"><div class="ci" style="background:#e9dcc7;color:#8a5a1c">V</div><div class="meta"><b>Lakeside Ledger</b><div>lakesideledger.example · 74,900 subscribers</div></div><span class="muted">↦</span></div>
+      <div class="actitem" style="border:1px solid var(--border);border-radius:10px;cursor:pointer" onclick="switchOrg('Copperline Courier','copperlinecourier.example')"><div class="ci" style="background:var(--surface-3);color:var(--ink-2)">A</div><div class="meta"><b>Copperline Courier</b><div>copperlinecourier.example · 51,200 subscribers</div></div><span class="muted">↦</span></div>
     </div>
     <div class="modal-f"><button class="btn btn-primary" style="width:100%;justify-content:center" onclick="openModal('addorg')">＋ Add organization</button></div>
   </div>

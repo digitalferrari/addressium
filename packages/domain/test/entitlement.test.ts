@@ -28,10 +28,10 @@ import { generateKeyPair } from "jose";
 const ORG = "summit";
 const LIST = "ledger";
 const ISS = "https://addressium.example/summit";
-const AUD = "summitdaily.com";
+const AUD = "northwindtimes.example";
 
 const template: EmailTemplate = {
-  blocks: [{ kind: "editorial", label: "read", url: "https://summitdaily.com/a" }],
+  blocks: [{ kind: "editorial", label: "read", url: "https://northwindtimes.example/a" }],
 };
 
 function need<T>(v: T | undefined | null, msg: string): T {
@@ -56,7 +56,7 @@ async function harness() {
     listId: LIST,
     name: "Ledger",
     optInPolicy: "double",
-    fromAddress: "l@summitdaily.com",
+    fromAddress: "l@northwindtimes.example",
     access: "free",
     visibility: "open",
     complianceFooter: "f",

@@ -84,7 +84,7 @@ test("sendToSubscriber sends once, gates suppression, and is idempotent", async 
     listId: "ledger",
     name: "Ledger",
     optInPolicy: "single",
-    fromAddress: "l@summitdaily.com",
+    fromAddress: "l@northwindtimes.example",
     access: "free",
     visibility: "open",
     complianceFooter: "f",
