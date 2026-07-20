@@ -71,6 +71,12 @@ export class MemSubscribers implements SubscriberStore {
     }
     return undefined;
   }
+  async findByExternalId(orgId: string, externalId: string) {
+    for (const s of this.byId.values()) {
+      if (s.orgId === orgId && s.externalId === externalId) return s;
+    }
+    return undefined;
+  }
   async put(sub: Subscriber) {
     this.byId.set(subKey(sub.orgId, sub.sub), sub);
   }
