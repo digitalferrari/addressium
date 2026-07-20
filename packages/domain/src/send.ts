@@ -82,6 +82,8 @@ export interface SendOneInput {
   listId: string;
   subject: string;
   template: EmailTemplate;
+  /** Optional pacing — acquired only for an actual send (skips don't burn tokens). */
+  throttle?: SendThrottle;
 }
 
 export interface SendOneResult {
@@ -111,6 +113,7 @@ export async function sendToSubscriber(
   if (await stores.suppression.isSuppressed(input.orgId, subscriber.email)) {
     return { sent: false, reason: "suppressed" };
   }
+  if (input.throttle) await input.throttle.acquire();
   const token = await magic.mint({
     orgId: subscriber.orgId,
     sub: subscriber.sub,
