@@ -2,7 +2,7 @@
  * Inbound webhook signature verification (docs/SECURITY.md §4.6).
  *
  * The entitlement-sync endpoint accepts updates from an external billing system
- * (e.g. Stripe). We authenticate the caller with an HMAC over the raw body,
+ * (e.g. your billing provider). We authenticate the caller with an HMAC over the raw body,
  * compared in constant time — never trust an unsigned/unverified webhook.
  */
 import { createHmac, timingSafeEqual } from "node:crypto";

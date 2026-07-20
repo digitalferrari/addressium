@@ -320,7 +320,7 @@ export interface EmailArchive {
 export interface EntitlementSync {
   orgId: OrgId;
   subscriberId: SubscriberId;
-  source: string; // e.g. "stripe"
+  source: string; // e.g. your billing provider
   value: Entitlement;
   version: string;
   at: string;
