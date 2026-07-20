@@ -6,8 +6,9 @@
  * analysis (funnels, series roll-ups, A/B) runs off the Firehose → S3 → Athena
  * tier wired in infra; this endpoint is the low-latency dashboard read.
  */
-import { DynamoStores } from "@addressium/adapters-aws";
-import { SystemClock, buildAbReport, buildCampaignReport, recordUsage } from "@addressium/domain";
+import { DynamoStores, HttpLlmAdvisor, getSecret } from "@addressium/adapters-aws";
+import { SystemClock, analyzeCampaign, buildAbReport, buildCampaignReport, recordUsage } from "@addressium/domain";
+import { authorize, grantFromClaims } from "@addressium/rbac";
 
 const clock = new SystemClock();
 
@@ -62,6 +63,40 @@ export interface UsageIngestEvent {
 export async function usageIngestHandler(event: UsageIngestEvent) {
   const record = await recordUsage(stores(), clock, event);
   return { ok: true, record };
+}
+
+/**
+ * POST AI analysis of a campaign (§4.8, #32). Requires reports:view. Loads the
+ * org's aiConfig, resolves the API key from Secrets Manager, and asks the
+ * configured LLM for a performance read + suggestions over AGGREGATE analytics
+ * only (no subscriber PII leaves the account).
+ */
+export async function analyzeHandler(event: {
+  body?: string;
+  requestContext?: { authorizer?: { jwt?: { claims?: Record<string, string> } } };
+}) {
+  try {
+    const { orgId, campaignId } = JSON.parse(event.body ?? "{}") as { orgId?: string; campaignId?: string };
+    if (!orgId || !campaignId) return { statusCode: 400, headers: {}, body: JSON.stringify({ error: "orgId and campaignId required" }) };
+    authorize(grantFromClaims(event.requestContext?.authorizer?.jwt?.claims ?? {}), "reports:view", orgId);
+
+    const s = stores();
+    const org = await s.organizations.get(orgId);
+    if (!org?.aiConfig) return { statusCode: 409, headers: {}, body: JSON.stringify({ error: "no AI provider configured for this org" }) };
+
+    const apiKey = await getSecret(org.aiConfig.apiKeySecretArn);
+    const advisor = new HttpLlmAdvisor(org.aiConfig, apiKey);
+    const { analysis } = await analyzeCampaign(s, advisor, orgId, campaignId);
+    return {
+      statusCode: 200,
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ vendor: analysis.vendor, model: analysis.model, analysis: analysis.text }),
+    };
+  } catch (e) {
+    const msg = (e as Error).message;
+    const forbidden = msg.startsWith("Forbidden");
+    return { statusCode: forbidden ? 403 : 400, headers: {}, body: JSON.stringify({ error: msg }) };
+  }
 }
 
 /** GET per-org usage: one period, or the full history when `period` is absent. */

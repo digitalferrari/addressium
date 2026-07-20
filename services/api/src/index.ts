@@ -10,6 +10,7 @@ import {
   EventBridgeScheduler,
   SesEmailSender,
   getSecret,
+  upsertSecret,
 } from "@addressium/adapters-aws";
 import { schemas } from "@addressium/core";
 import {
@@ -20,6 +21,7 @@ import {
   confirmOptIn,
   effectiveOneOffTime,
   manualSuppress,
+  setAiConfig,
   saveCampaignDraft,
   saveList,
   saveSegment,
@@ -310,6 +312,32 @@ export async function subscriberUnsubscribeHandler(event: HttpEvent): Promise<Ht
     if (!email) return json(400, { error: "email required for unsubscribe-all" });
     const n = await unsubscribeAll(stores(), clock, { orgId, subscriberId, email });
     return json(200, { status: "unsubscribed", scope: "all", lists: n });
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+/**
+ * POST /orgs/ai-config — set the org's LLM analytics provider (#32). The
+ * plaintext API key is written to Secrets Manager here; only the ARN + vendor/
+ * model are persisted on the org. Gated by identity:manage.
+ */
+export async function aiConfigHandler(event: HttpEvent): Promise<HttpResult> {
+  try {
+    const { orgId, vendor, model, apiKey } = JSON.parse(event.body ?? "{}") as {
+      orgId?: string;
+      vendor?: "anthropic" | "openai" | "gemini";
+      model?: string;
+      apiKey?: string;
+    };
+    if (!orgId || !vendor || !model || !apiKey) {
+      return json(400, { error: "orgId, vendor, model, apiKey required" });
+    }
+    requireGrant(event, "identity:manage", orgId);
+    const apiKeySecretArn = await upsertSecret(`addressium/${orgId}/ai-provider`, apiKey);
+    const org = await setAiConfig(stores(), orgId, { vendor, model, apiKeySecretArn });
+    // Never echo the key back.
+    return json(200, { orgId: org.orgId, aiConfig: { vendor, model, apiKeySecretArn } });
   } catch (e) {
     return fail(e);
   }

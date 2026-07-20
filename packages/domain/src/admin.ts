@@ -7,7 +7,7 @@
  * these; org scoping is enforced by the caller's grant and the orgId on each
  * entity. No AWS or HTTP concerns here.
  */
-import type { Campaign, HotCounters, List, ListVisibility, Segment } from "@addressium/core";
+import type { AiConfig, Campaign, HotCounters, List, ListVisibility, Organization, Segment } from "@addressium/core";
 import { schemas } from "@addressium/core";
 import type { Clock, Stores } from "./ports.js";
 
@@ -87,6 +87,19 @@ export async function saveSegment(stores: Stores, input: schemas.SaveSegmentInpu
   };
   await stores.segments.put(segment);
   return segment;
+}
+
+/** Set the org's LLM analytics provider (§4.8, #32). Key is already in Secrets Manager. */
+export async function setAiConfig(
+  stores: Stores,
+  orgId: string,
+  aiConfig: AiConfig,
+): Promise<Organization> {
+  const org = await stores.organizations.get(orgId);
+  if (!org) throw new Error("unknown org");
+  const updated: Organization = { ...org, aiConfig };
+  await stores.organizations.put(updated);
+  return updated;
 }
 
 /**

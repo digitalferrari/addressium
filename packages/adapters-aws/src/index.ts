@@ -8,12 +8,13 @@ export { SesEmailSender } from "./ses.js";
 export { KmsMagicLinkSigner, type KmsMagicLinkSignerConfig } from "./kms.js";
 export { SqsSendQueue } from "./sqs.js";
 export { EventBridgeScheduler, type EventBridgeSchedulerConfig } from "./scheduler.js";
-export { getSecret } from "./secrets.js";
+export { getSecret, upsertSecret } from "./secrets.js";
 export { KmsJwksProvider, spkiDerToJwk, type Jwk } from "./jwks.js";
 export { SnsAlertPublisher } from "./sns.js";
 export { AwsProvisioningProviders } from "./provisioning.js";
 export { S3AuditLog } from "./s3audit.js";
 export { OpenSearchBulkWriter } from "./opensearch.js";
+export { HttpLlmAdvisor } from "./llm.js";
 
 import { DynamoStores } from "./dynamo.js";
 import { SesEmailSender } from "./ses.js";

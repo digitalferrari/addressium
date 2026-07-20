@@ -78,7 +78,19 @@ export interface Organization {
    * bucket/display reporting. A recurring campaign may override it.
    */
   defaultTimezone: string;
+  /**
+   * Optional AI provider for LLM-assisted analytics (§4.8, #32). The API key is
+   * held in Secrets Manager; only the ARN + vendor/model live here.
+   */
+  aiConfig?: AiConfig;
   setupComplete: boolean;
+}
+
+export type AiVendor = "anthropic" | "openai" | "gemini";
+export interface AiConfig {
+  vendor: AiVendor;
+  model: string;
+  apiKeySecretArn: string;
 }
 
 export interface Subscriber {
