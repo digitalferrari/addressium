@@ -17,6 +17,7 @@ import type {
   AlertConfig,
   Campaign,
   CampaignSeries,
+  DripSequence,
   EmailArchive,
   EngagementEvent,
   EntitlementSync,
@@ -33,6 +34,7 @@ import type {
   ArchiveStore,
   CampaignSeriesStore,
   CampaignStore,
+  DripSequenceStore,
   EntitlementStore,
   EventStore,
   ListStore,
@@ -263,6 +265,17 @@ export class DynamoStores implements Stores {
   alerts: AlertConfigStore = {
     get: (orgId) => this.get<AlertConfig>(org(orgId), "#ALERTS"),
     put: (c) => this.put({ pk: org(c.orgId), sk: "#ALERTS", data: c }),
+  };
+
+  dripSequences: DripSequenceStore = {
+    get: (orgId, sequenceId) => this.get<DripSequence>(org(orgId), `DRIP#${sequenceId}`),
+    put: (s) => this.put({ pk: org(s.orgId), sk: `DRIP#${s.sequenceId}`, data: s }),
+    list: (orgId) =>
+      this.queryAll<DripSequence>({
+        TableName: this.tableName,
+        KeyConditionExpression: "pk = :pk AND begins_with(sk, :s)",
+        ExpressionAttributeValues: { ":pk": org(orgId), ":s": "DRIP#" },
+      }),
   };
 
   usage: UsageStore = {

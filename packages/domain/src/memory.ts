@@ -6,6 +6,7 @@ import type {
   AlertConfig,
   Campaign,
   CampaignSeries,
+  DripSequence,
   EmailArchive,
   EngagementEvent,
   EntitlementSync,
@@ -25,6 +26,7 @@ import type {
   CampaignScheduler,
   CampaignSeriesStore,
   CampaignStore,
+  DripSequenceStore,
   EmailSender,
   EntitlementStore,
   EventStore,
@@ -185,6 +187,19 @@ export class MemCampaignSeries implements CampaignSeriesStore {
   }
 }
 
+export class MemDripSequences implements DripSequenceStore {
+  private map = new Map<string, DripSequence>();
+  async get(orgId: string, sequenceId: string) {
+    return this.map.get(subKey(orgId, sequenceId));
+  }
+  async put(s: DripSequence) {
+    this.map.set(subKey(s.orgId, s.sequenceId), s);
+  }
+  async list(orgId: string) {
+    return [...this.map.values()].filter((s) => s.orgId === orgId);
+  }
+}
+
 export class MemAlertConfigs implements AlertConfigStore {
   private map = new Map<string, AlertConfig>();
   async get(orgId: string) {
@@ -274,5 +289,6 @@ export function memStores(): Stores {
     alerts: new MemAlertConfigs(),
     usage: new MemUsage(),
     segments: new MemSegments(),
+    dripSequences: new MemDripSequences(),
   };
 }

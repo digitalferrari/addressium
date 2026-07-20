@@ -213,6 +213,27 @@ export interface Feed {
   pullIntervalMins: number;
 }
 
+// ---- drip automations (§4.6) ----
+export interface DripStep {
+  stepId: string;
+  /** Delay before this step fires, relative to the previous step (seconds). */
+  waitSeconds: number;
+  listId: ListId;
+  templateId: TemplateId;
+  subject: string;
+  /** Optional gate: only send if the subscriber still has this entitlement. */
+  requireEntitlement?: Entitlement;
+}
+
+export interface DripSequence {
+  orgId: OrgId;
+  sequenceId: string;
+  name: string;
+  /** What enrolls a subscriber: a signup on a list, or manual enrollment. */
+  trigger: { kind: "signup"; listId: ListId } | { kind: "manual" };
+  steps: DripStep[];
+}
+
 // ---- engagement, suppression, archive ----
 export interface EngagementEvent {
   orgId: OrgId;

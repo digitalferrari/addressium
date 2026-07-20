@@ -16,7 +16,7 @@ import type {
   SendThrottle,
   Stores,
 } from "./ports.js";
-import { buildLinkMap, renderForRecipient } from "./render.js";
+import { buildLinkMap, renderForRecipient, type EmailTemplate } from "./render.js";
 
 /** Alias kept for readability; a campaign send takes a SendDescriptor. */
 export type SendCampaignInput = SendDescriptor;
@@ -72,6 +72,66 @@ export async function fanOutCampaign(
 function listUnsubscribeHeader(list: List, sub: string): string {
   // RFC 8058 one-click unsubscribe (docs/ARCHITECTURE.md §6).
   return `<https://unsub.${list.orgId}.example/u?sub=${sub}&list=${list.listId}>`;
+}
+
+export interface SendOneInput {
+  orgId: string;
+  /** Distinct id for this per-recipient send (idempotency + event grouping). */
+  campaignId: string;
+  subscriberId: string;
+  listId: string;
+  subject: string;
+  template: EmailTemplate;
+}
+
+export interface SendOneResult {
+  sent: boolean;
+  reason?: "unknown-subscriber" | "suppressed" | "already-sent";
+}
+
+/**
+ * Send one message to one subscriber (drip step / transactional, §4.6). Applies
+ * the same suppression gate, magic-link minting, render and sent-event append as
+ * a campaign send, with per-(campaign,subscriber) idempotency.
+ */
+export async function sendToSubscriber(
+  stores: Stores,
+  sender: EmailSender,
+  magic: MagicLinkSigner,
+  clock: Clock,
+  input: SendOneInput,
+): Promise<SendOneResult> {
+  const list = await stores.lists.get(input.orgId, input.listId);
+  if (!list) throw new Error("unknown list");
+  if (!(await stores.sendClaims.claim(input.orgId, `${input.campaignId}#${input.subscriberId}`))) {
+    return { sent: false, reason: "already-sent" };
+  }
+  const subscriber = await stores.subscribers.get(input.orgId, input.subscriberId);
+  if (!subscriber) return { sent: false, reason: "unknown-subscriber" };
+  if (await stores.suppression.isSuppressed(input.orgId, subscriber.email)) {
+    return { sent: false, reason: "suppressed" };
+  }
+  const token = await magic.mint({
+    orgId: subscriber.orgId,
+    sub: subscriber.sub,
+    entitlement: subscriber.entitlement,
+    entitlementAsof: subscriber.entitlementAsof,
+  });
+  await sender.send({
+    from: list.fromAddress,
+    to: subscriber.email,
+    subject: input.subject,
+    html: renderForRecipient(input.template, subscriber.attributes, token),
+    listUnsubscribe: listUnsubscribeHeader(list, subscriber.sub),
+  });
+  await stores.events.append({
+    orgId: input.orgId,
+    subscriberId: subscriber.sub,
+    campaignId: input.campaignId,
+    type: "sent",
+    at: clock.now().toISOString(),
+  });
+  return { sent: true };
 }
 
 export async function sendCampaign(

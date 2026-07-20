@@ -8,6 +8,7 @@ import type {
   AlertConfig,
   Campaign,
   CampaignSeries,
+  DripSequence,
   EmailArchive,
   EngagementEvent,
   EntitlementSync,
@@ -113,6 +114,13 @@ export interface CampaignSeriesStore {
   put(s: CampaignSeries): Promise<void>;
 }
 
+/** Drip/journey sequence definitions (§4.6). */
+export interface DripSequenceStore {
+  get(orgId: string, sequenceId: string): Promise<DripSequence | undefined>;
+  put(s: DripSequence): Promise<void>;
+  list(orgId: string): Promise<DripSequence[]>;
+}
+
 /** Per-org deliverability alert configuration (SNS topic + thresholds, §4.18). */
 export interface AlertConfigStore {
   get(orgId: string): Promise<AlertConfig | undefined>;
@@ -211,4 +219,5 @@ export interface Stores {
   alerts: AlertConfigStore;
   usage: UsageStore;
   segments: SegmentStore;
+  dripSequences: DripSequenceStore;
 }

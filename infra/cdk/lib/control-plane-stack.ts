@@ -32,6 +32,18 @@ import { LambdaSubscription } from "aws-cdk-lib/aws-sns-subscriptions";
 import { Secret } from "aws-cdk-lib/aws-secretsmanager";
 import { Role, ServicePrincipal, PolicyStatement } from "aws-cdk-lib/aws-iam";
 import { CfnScheduleGroup } from "aws-cdk-lib/aws-scheduler";
+import {
+  Choice,
+  Condition,
+  DefinitionBody,
+  JsonPath,
+  StateMachine,
+  Succeed,
+  TaskInput,
+  Wait,
+  WaitTime,
+} from "aws-cdk-lib/aws-stepfunctions";
+import { LambdaInvoke } from "aws-cdk-lib/aws-stepfunctions-tasks";
 import { StaticSite } from "./static-site.js";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../../..");
@@ -161,6 +173,51 @@ export class ControlPlaneStack extends Stack {
     const launchFn = fn("LaunchFn", svc("services/automations/src/index.ts"), "handler", {
       SEND_QUEUE_URL: sendQueue.queueUrl,
     });
+
+    // ---- drip automations state machine (§4.6, #23) ----
+    // Each step: Wait(waitSeconds) → Task(dripStepHandler) → Choice(done?) loop.
+    // The domain owns the per-step choice; the machine just orchestrates.
+    const dripStepFn = fn("DripStepFn", svc("services/automations/src/index.ts"), "dripStepHandler", {
+      SEND_QUEUE_URL: sendQueue.queueUrl,
+    });
+    dripStepFn.addToRolePolicy(
+      new PolicyStatement({
+        actions: ["kms:Sign"],
+        resources: ["*"],
+        conditions: { StringEquals: { "aws:ResourceTag/app": "addressium" } },
+      }),
+    );
+    dripStepFn.addToRolePolicy(
+      new PolicyStatement({ actions: ["ses:SendEmail"], resources: ["*"] }),
+    );
+
+    const waitStep = new Wait(this, "DripWait", {
+      time: WaitTime.secondsPath("$.nextWaitSeconds"),
+    });
+    // The handler echoes routing (orgId/sequenceId/subscriberId) + next-step
+    // fields, so the whole state is the loop carrier — no Pass needed.
+    const runStep = new LambdaInvoke(this, "DripRunStep", {
+      lambdaFunction: dripStepFn,
+      payload: TaskInput.fromObject({
+        orgId: JsonPath.stringAt("$.orgId"),
+        sequenceId: JsonPath.stringAt("$.sequenceId"),
+        subscriberId: JsonPath.stringAt("$.subscriberId"),
+        stepIndex: JsonPath.numberAt("$.nextStepIndex"),
+      }),
+      outputPath: "$.Payload",
+    });
+    const done = new Succeed(this, "DripDone");
+    runStep.next(
+      new Choice(this, "DripMore")
+        .when(Condition.booleanEquals("$.done", true), done)
+        .otherwise(waitStep.next(runStep)),
+    );
+    const dripStateMachine = new StateMachine(this, "DripStateMachine", {
+      definitionBody: DefinitionBody.fromChainable(runStep),
+      timeout: Duration.days(30),
+    });
+    table.grantReadWriteData(dripStepFn);
+    new CfnOutput(this, "DripStateMachineArn", { value: dripStateMachine.stateMachineArn });
 
     // ---- scheduling (EventBridge Scheduler, §4.6) ----
     const scheduleGroupName = `addressium-${props.stage}`;
