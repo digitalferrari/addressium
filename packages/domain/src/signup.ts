@@ -31,13 +31,16 @@ const CONFIRM_TTL_SECONDS = 60 * 60 * 24 * 3; // 3 days
 
 /**
  * Re-opt-in policy (#58): a suppressed address is normally rejected, but a prior
- * *user unsubscribe* (org scope) is self-clearable — a fresh double opt-in
- * re-establishes consent. Bounce / complaint / manual (erasure) stay blocked.
+ * *user unsubscribe* or an automated *inactive* sunset (both org scope) is
+ * self-clearable — a fresh double opt-in re-establishes consent. Bounce /
+ * complaint / manual (erasure) stay blocked.
  */
 async function clearOrRejectSuppression(stores: Stores, orgId: string, email: string): Promise<void> {
   const suppressions = await stores.suppression.entriesFor(orgId, email);
   if (suppressions.length === 0) return;
-  const clearable = suppressions.every((s) => s.source === "unsubscribe" && s.scope === "org");
+  const clearable = suppressions.every(
+    (s) => (s.source === "unsubscribe" || s.source === "inactive") && s.scope === "org",
+  );
   if (!clearable) throw new Error("address is suppressed");
   for (const s of suppressions) await stores.suppression.remove(s.orgId, s.email, s.scope);
 }

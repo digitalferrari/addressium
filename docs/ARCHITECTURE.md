@@ -578,6 +578,34 @@ Distinct future feature: **per-subscriber send-time optimization** (deliver in
 each *recipient's* local zone) — that keys off the subscriber's zone, not the
 org's, and is separate from this setting.
 
+### 4.22 Re-engagement & sunset automation
+
+Mailing addresses that never engage drag down deliverability — mailbox providers
+weight sender reputation on engagement, so a growing tail of dead addresses hurts
+inbox placement for *everyone* on the list. addressium closes the loop with an
+opt-in, per-org **win-back → sunset** automation (`Organization.reengagement`).
+
+- **Coldness is click-weighted.** Each subscriber carries a `lastEngagedAt`
+  stamp that the events processor advances on **clicks only**. Opens are
+  deliberately ignored: Apple Mail Privacy Protection (and similar proxies)
+  auto-open messages, so an open no longer proves a human looked. `coldnessAnchor`
+  falls back to the consent time when there's no click yet, and subscribers with
+  no anchor at all are left alone (never mailed → can't judge).
+- **Win-back sequence.** Once someone has not clicked for `coldAfterDays`
+  (default 180) and still has an active subscription, a daily sweep enrolls them
+  and sends `steps` win-back emails (default 3) spaced `stepIntervalDays` apart
+  (default 7). Each step is its own `reengagement:{list}#{n}` sub-campaign, so its
+  engagement aggregates separately and the send is idempotent.
+- **Graduate or sunset.** A click at any point during the sequence graduates the
+  subscriber back to engaged (enrollment cleared). If the sequence completes with
+  no click, they're **unsubscribed from every list** and suppressed with
+  `source: "inactive"` (org-scoped). Because that source is self-clearable (§4.13,
+  #58), a later genuine re-opt-in restores them.
+- **How it runs.** The decision is a pure per-subscriber state machine
+  (`decideReengagement`); the batch orchestrator (`runReengagementSweep`) is
+  invoked by the automations service on a recurring EventBridge schedule, the same
+  mechanism recurring editions and drip journeys use.
+
 ---
 
 ## 5. Data model

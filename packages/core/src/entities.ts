@@ -29,7 +29,7 @@ export type SubscriptionStatus =
   | "complained";
 export type Cadence = "one_off" | "daily" | "weekly" | "biweekly" | "monthly";
 export type TemplateMode = "visual" | "mjml" | "raw_html";
-export type SuppressionSource = "bounce" | "complaint" | "manual" | "unsubscribe";
+export type SuppressionSource = "bounce" | "complaint" | "manual" | "unsubscribe" | "inactive";
 export type SuppressionScope = "global" | "org";
 export type DeploymentSuppressionScope = "global" | "org" | "hybrid";
 export type MergeTagSource = "profile" | "feed" | "system" | "token_claim";
@@ -87,7 +87,28 @@ export interface Organization {
   branding?: Branding;
   /** Public-signup bot protection + optional post-verify account provisioning (#62). */
   signupProtection?: SignupProtection;
+  /** Engagement-based sunset / win-back automation policy (§4.22). Off unless enabled. */
+  reengagement?: ReengagementPolicy;
   setupComplete: boolean;
+}
+
+/**
+ * Engagement-based list hygiene. When enabled, subscribers who haven't clicked
+ * in `coldAfterDays` are enrolled into a win-back sequence of `steps` emails
+ * spaced `stepIntervalDays` apart; if they click during it they graduate, and
+ * if they never do they're unsubscribed from all lists and suppressed
+ * (`source: "inactive"`, re-opt-in-able). Clicks — not opens — reset the clock.
+ */
+export interface ReengagementPolicy {
+  enabled: boolean;
+  /** No click for this many days → cold, enroll into the win-back sequence. Default 180. */
+  coldAfterDays: number;
+  /** Win-back emails to send before sunsetting. Default 3. */
+  steps: number;
+  /** Days between win-back steps. Default 7. */
+  stepIntervalDays: number;
+  /** Suppression scope applied on sunset. Default "org". */
+  suppressScope?: SuppressionScope;
 }
 
 export interface SignupProtection {
@@ -149,6 +170,29 @@ export interface Subscriber {
   status: "active" | "suppressed";
   entitlement: Entitlement;
   entitlementAsof?: string;
+  /**
+   * Timestamp of this subscriber's last *meaningful* engagement — a click.
+   * Opens are deliberately NOT counted (Apple Mail Privacy Protection auto-opens
+   * make them noise), so recency here is click-weighted. Advanced monotonically
+   * by the events processor and used to detect cold subscribers for the
+   * re-engagement / sunset automation (§4.22).
+   */
+  lastEngagedAt?: string;
+  /** Win-back automation enrollment state, present only while enrolled (§4.22). */
+  reengagement?: ReengagementState;
+}
+
+/**
+ * Where a cold subscriber sits in the win-back sequence. Set when enrolled,
+ * advanced per step, and cleared on graduation (re-engaged) or sunset.
+ */
+export interface ReengagementState {
+  /** When the subscriber was enrolled (start of the win-back sequence). */
+  enrolledAt: string;
+  /** How many win-back emails have gone out so far. */
+  stepsSent: number;
+  /** When the most recent win-back step was sent (spacing gate). */
+  lastStepAt: string;
 }
 
 // ---- audience ----

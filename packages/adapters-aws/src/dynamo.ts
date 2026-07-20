@@ -12,6 +12,7 @@ import {
   GetCommand,
   PutCommand,
   QueryCommand,
+  UpdateCommand,
   type QueryCommandInput,
 } from "@aws-sdk/lib-dynamodb";
 import type {
@@ -154,6 +155,35 @@ export class DynamoStores implements Stores {
       });
       if (s.externalId) {
         await this.put({ pk: `${org(s.orgId)}#EXTID`, sk: `EXTID#${s.externalId}`, data: { sub: s.sub } });
+      }
+    },
+    // Subscriber items share the org partition; range over the SUBSCRIBER# sort
+    // prefix so #META / LIST# / SEGMENT# siblings are excluded. Paginated.
+    list: (orgId) =>
+      this.queryAll<Subscriber>({
+        TableName: this.tableName,
+        KeyConditionExpression: "pk = :pk AND begins_with(sk, :s)",
+        ExpressionAttributeValues: { ":pk": org(orgId), ":s": "SUBSCRIBER#" },
+      }),
+    // O(1) monotonic bump of a nested attribute — only advances, never rewinds,
+    // and the attribute_exists guard makes an unknown subscriber a silent no-op.
+    markEngaged: async (orgId, sub, at) => {
+      try {
+        await this.doc.send(
+          new UpdateCommand({
+            TableName: this.tableName,
+            Key: { pk: org(orgId), sk: `SUBSCRIBER#${sub}` },
+            UpdateExpression: "SET #d.#l = :at",
+            ConditionExpression:
+              "attribute_exists(pk) AND (attribute_not_exists(#d.#l) OR #d.#l < :at)",
+            ExpressionAttributeNames: { "#d": "data", "#l": "lastEngagedAt" },
+            ExpressionAttributeValues: { ":at": at },
+          }),
+        );
+      } catch (e) {
+        // ConditionalCheckFailed = unknown subscriber or a newer stamp already
+        // present; both are expected and safe to ignore.
+        if ((e as { name?: string }).name !== "ConditionalCheckFailedException") throw e;
       }
     },
   };

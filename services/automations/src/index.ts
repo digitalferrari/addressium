@@ -13,7 +13,9 @@ import {
   evaluateDripStep,
   nextStepIndex,
   planLaunchDescriptor,
+  runReengagementSweep,
   sendToSubscriber,
+  type EmailTemplate,
   type RecurringLaunchPayload,
   type SendDescriptor,
 } from "@addressium/domain";
@@ -115,4 +117,52 @@ export async function dripStepHandler(event: DripStepEvent) {
     nextStepIndex: next ?? null,
     nextWaitSeconds: next !== undefined ? (sequence.steps[next]?.waitSeconds ?? 0) : null,
   };
+}
+
+/**
+ * Re-engagement / sunset sweep (§4.22) — a recurring (daily) EventBridge schedule
+ * targets this with a per-org payload. Enrolls cold subscribers into the win-back
+ * sequence, advances or graduates the enrolled, and sunsets those who never
+ * click. No-op unless the org has `reengagement.enabled`.
+ */
+export interface ReengagementSweepEvent {
+  orgId: string;
+  /** Flagship list the win-back emails send under (sunset unsubscribes from all). */
+  listId: string;
+  subject?: string;
+  /** Optional custom win-back body; a plain "still want these?" block by default. */
+  template?: EmailTemplate;
+}
+
+export async function reengagementSweepHandler(event: ReengagementSweepEvent) {
+  const s = stores();
+  const org = await s.organizations.get(event.orgId);
+  if (!org) throw new Error(`unknown org ${event.orgId}`);
+  const magic = new KmsMagicLinkSigner(
+    {
+      keyId: org.magicLink.kmsKeyArn,
+      kid: org.magicLink.kid,
+      issuer: org.magicLink.issuer,
+      audience: org.magicLink.audience,
+      ttlSeconds: TTL,
+    },
+    clock,
+  );
+  const ses = new SesEmailSender(org.sesConfigSet);
+  const subject = event.subject ?? "Still want our newsletters?";
+  const template: EmailTemplate = event.template ?? {
+    blocks: [
+      {
+        kind: "text",
+        html: `<p>We've missed you. <a href="#">Yes, keep me subscribed</a> — otherwise we'll stop sending to keep your inbox tidy.</p>`,
+      },
+    ],
+  };
+  const result = await runReengagementSweep(s, ses, magic, clock, {
+    orgId: event.orgId,
+    listId: event.listId,
+    subject,
+    template,
+  });
+  return { ok: true, ...result };
 }
