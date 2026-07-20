@@ -1,16 +1,37 @@
 /**
- * addressium service: tokens
- * Magic-link JWT minting, KMS signing, JWKS endpoint
+ * addressium service: tokens — publishes each org's JWKS (§4.9, §12).
  *
- * See docs/ARCHITECTURE.md. This is a scaffold stub — the handler shape is in
- * place so infra can wire it; business logic is TODO.
+ * GET /{org}/jwks.json → the org's magic-link public key as a JWK set, so the
+ * operator's main website can verify magic-link tokens offline. Minting itself
+ * happens in the sender (per-org KMS key); this only publishes the public half.
  */
+import { DynamoStores, KmsJwksProvider } from "@addressium/adapters-aws";
 
-export interface HandlerEvent {
-  [key: string]: unknown;
+function env(name: string): string {
+  const v = process.env[name];
+  if (!v) throw new Error(`missing env ${name}`);
+  return v;
 }
 
-export async function handler(event: HandlerEvent): Promise<unknown> {
-  // TODO: implement — Magic-link JWT minting, KMS signing, JWKS endpoint
-  return { ok: true, service: "tokens", received: event };
+let _stores: DynamoStores | undefined;
+const stores = () => (_stores ??= new DynamoStores(env("TABLE_NAME")));
+const provider = new KmsJwksProvider();
+
+export interface JwksEvent {
+  pathParameters?: { org?: string } | null;
+  orgId?: string;
+}
+
+export async function handler(event: JwksEvent) {
+  const orgId = event.pathParameters?.org ?? event.orgId;
+  if (!orgId) return { statusCode: 400, headers: {}, body: JSON.stringify({ error: "org required" }) };
+  const org = await stores().organizations.get(orgId);
+  if (!org) return { statusCode: 404, headers: {}, body: JSON.stringify({ error: "unknown org" }) };
+
+  const jwks = await provider.jwks(org.magicLink.kmsKeyArn, org.magicLink.kid);
+  return {
+    statusCode: 200,
+    headers: { "content-type": "application/json", "cache-control": "public, max-age=300" },
+    body: JSON.stringify(jwks),
+  };
 }

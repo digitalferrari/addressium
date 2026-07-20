@@ -9,6 +9,7 @@ export { KmsMagicLinkSigner, type KmsMagicLinkSignerConfig } from "./kms.js";
 export { SqsSendQueue } from "./sqs.js";
 export { EventBridgeScheduler, type EventBridgeSchedulerConfig } from "./scheduler.js";
 export { getSecret } from "./secrets.js";
+export { KmsJwksProvider, spkiDerToJwk, type Jwk } from "./jwks.js";
 
 import { DynamoStores } from "./dynamo.js";
 import { SesEmailSender } from "./ses.js";
