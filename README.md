@@ -88,5 +88,6 @@ npm install       # all workspaces
 npm test          # build + unit (in-memory) + DynamoDB integration tests
 ```
 
-> **Status:** Early scaffold. The architecture document is the source of truth;
-> package/service stubs are in place and being filled in.
+> **Status:** Initial build complete. The architecture document is the source of
+> truth; the domain, AWS adapters, Lambda services, CDK infra, and the three web
+> apps are implemented and tested (`npm test`).
