@@ -4,9 +4,10 @@
  * Resolves opens/clicks to the domain, which redacts the magic-link token and
  * aggregates by link-id (docs/ARCHITECTURE.md §4.5, docs/SECURITY.md §4.7).
  */
-import { DynamoStores } from "@addressium/adapters-aws";
+import { DynamoStores, SnsAlertPublisher } from "@addressium/adapters-aws";
 import {
   SystemClock,
+  checkDeliverability,
   recordBounce,
   recordClick,
   recordComplaint,
@@ -34,6 +35,7 @@ function env(name: string): string {
 const clock = new SystemClock();
 let _stores: DynamoStores | undefined;
 const stores = () => (_stores ??= new DynamoStores(env("TABLE_NAME")));
+const alerts = new SnsAlertPublisher();
 
 export async function handler(notif: Notification) {
   const s = stores();
@@ -60,8 +62,9 @@ export async function handler(notif: Notification) {
     };
     if (notif.eventType === "Bounce") await recordBounce(s, clock, input);
     else await recordComplaint(s, clock, input);
-    // TODO: publish a deliverability alert to SNS when rates cross thresholds (§4.18).
-    return { ok: true };
+    // Evaluate the org's deliverability thresholds; publish to SNS + halt on breach (§4.18).
+    const result = await checkDeliverability(s, alerts, clock, notif.orgId, notif.campaignId);
+    return { ok: true, alert: result };
   }
   return { ok: true };
 }

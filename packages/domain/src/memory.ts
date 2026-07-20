@@ -3,6 +3,7 @@
  * SES implementations live in the services and satisfy the same interfaces.
  */
 import type {
+  AlertConfig,
   Campaign,
   CampaignSeries,
   EmailArchive,
@@ -15,6 +16,9 @@ import type {
   SuppressionEntry,
 } from "@addressium/core";
 import type {
+  AlertConfigStore,
+  AlertMessage,
+  AlertPublisher,
   ArchiveStore,
   CampaignScheduler,
   CampaignSeriesStore,
@@ -161,6 +165,24 @@ export class MemCampaignSeries implements CampaignSeriesStore {
   }
 }
 
+export class MemAlertConfigs implements AlertConfigStore {
+  private map = new Map<string, AlertConfig>();
+  async get(orgId: string) {
+    return this.map.get(orgId);
+  }
+  async put(config: AlertConfig) {
+    this.map.set(config.orgId, config);
+  }
+}
+
+/** Captures published alerts so tests can assert on breach payloads. */
+export class CaptureAlertPublisher implements AlertPublisher {
+  public published: Array<{ topicArn: string; message: AlertMessage }> = [];
+  async publish(topicArn: string, message: AlertMessage) {
+    this.published.push({ topicArn, message });
+  }
+}
+
 export class MemSendClaims implements SendClaimStore {
   private set = new Set<string>();
   async claim(orgId: string, campaignId: string) {
@@ -215,5 +237,6 @@ export function memStores(): Stores {
     sendClaims: new MemSendClaims(),
     campaigns: new MemCampaigns(),
     series: new MemCampaignSeries(),
+    alerts: new MemAlertConfigs(),
   };
 }

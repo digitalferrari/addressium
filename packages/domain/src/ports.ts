@@ -5,6 +5,7 @@
  * adapters in tests and against DynamoDB / SES / KMS in production — no rewrite.
  */
 import type {
+  AlertConfig,
   Campaign,
   CampaignSeries,
   EmailArchive,
@@ -89,6 +90,26 @@ export interface CampaignSeriesStore {
   put(s: CampaignSeries): Promise<void>;
 }
 
+/** Per-org deliverability alert configuration (SNS topic + thresholds, §4.18). */
+export interface AlertConfigStore {
+  get(orgId: string): Promise<AlertConfig | undefined>;
+  put(config: AlertConfig): Promise<void>;
+}
+
+/** The payload published to an org's SNS topic on a threshold breach. */
+export interface AlertMessage {
+  orgId: string;
+  campaignId: string;
+  at: string;
+  breaches: Array<{ metric: string; level: "warn" | "halt"; value: number; threshold: number }>;
+  action: "warned" | "halted";
+}
+
+/** Publishes deliverability alerts (SNS in prod; captured in tests). */
+export interface AlertPublisher {
+  publish(topicArn: string, message: AlertMessage): Promise<void>;
+}
+
 /** What actually puts mail on the wire (SES in prod; capture in tests). */
 export interface SentMessage {
   from: string;
@@ -157,4 +178,5 @@ export interface Stores {
   sendClaims: SendClaimStore;
   campaigns: CampaignStore;
   series: CampaignSeriesStore;
+  alerts: AlertConfigStore;
 }

@@ -10,6 +10,7 @@ export { SqsSendQueue } from "./sqs.js";
 export { EventBridgeScheduler, type EventBridgeSchedulerConfig } from "./scheduler.js";
 export { getSecret } from "./secrets.js";
 export { KmsJwksProvider, spkiDerToJwk, type Jwk } from "./jwks.js";
+export { SnsAlertPublisher } from "./sns.js";
 
 import { DynamoStores } from "./dynamo.js";
 import { SesEmailSender } from "./ses.js";

@@ -14,3 +14,5 @@ export * from "./scheduling.js";
 export * from "./transactional.js";
 export * from "./privacy.js";
 export * from "./importer.js";
+export * from "./reporting.js";
+export * from "./alerts.js";

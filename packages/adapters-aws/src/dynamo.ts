@@ -14,6 +14,7 @@ import {
   type QueryCommandInput,
 } from "@aws-sdk/lib-dynamodb";
 import type {
+  AlertConfig,
   Campaign,
   CampaignSeries,
   EmailArchive,
@@ -26,6 +27,7 @@ import type {
   SuppressionEntry,
 } from "@addressium/core";
 import type {
+  AlertConfigStore,
   ArchiveStore,
   CampaignSeriesStore,
   CampaignStore,
@@ -235,6 +237,11 @@ export class DynamoStores implements Stores {
   series: CampaignSeriesStore = {
     get: (orgId, seriesId) => this.get<CampaignSeries>(org(orgId), `SERIES#${seriesId}`),
     put: (s) => this.put({ pk: org(s.orgId), sk: `SERIES#${s.seriesId}`, data: s }),
+  };
+
+  alerts: AlertConfigStore = {
+    get: (orgId) => this.get<AlertConfig>(org(orgId), "#ALERTS"),
+    put: (c) => this.put({ pk: org(c.orgId), sk: "#ALERTS", data: c }),
   };
 
   sendClaims: SendClaimStore = {
