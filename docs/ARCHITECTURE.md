@@ -21,8 +21,13 @@ subscriber data and sending reputation.
 **addressium** fills that gap: a project **anyone can deploy into their own AWS
 account**. You own the data (DynamoDB), you own the sending reputation (your
 SES identity), and you pay AWS directly (~$0 at idle, ~$0.10 per 1,000 emails
-via SES). It is not a multi-tenant SaaS — each deployment is a single
-organization's system.
+via SES).
+
+A single deployment can run **multiple organizations (silos)** — e.g. several
+publications like Summit Daily and Vail Daily — each isolated in its own data
+partition, subscriber pool, signing key and sending identity (see §4.11). What
+it is **not** is a public multi-tenant SaaS you rent to unrelated third parties:
+every org in a deployment is operated by the same owner.
 
 ### Design principles
 
@@ -37,6 +42,9 @@ organization's system.
    email path is built and tested for v1.
 5. **One-command deploy** — `cdk deploy` plus a guided setup wizard. An operator
    should get to "verified domain, first list, first send" quickly.
+6. **Multi-org by design** — one deployment runs many isolated publications: a
+   shared control plane (admin, API, console) over per-org data, identity and
+   sending silos, with role-based access scoped to each org.
 
 ---
 
@@ -52,9 +60,24 @@ organization's system.
 - **Broadcasts**: send now, scheduled, and recurring campaigns
 - **Drip automations**: trigger-based sequences (welcome series, re-engagement)
   via Step Functions
+- **Multi-organization silos** (§4.11): one deployment runs many publications,
+  each isolated in its own data partition, subscriber pool, signing key and
+  sending identity — one AWS account, logical silos
+- **Role-based access** (§4.12): Developer Admin / Editor / Analyst (Sales) /
+  Support, enforced server-side and scoped per organization
 - **Segmentation** over subscriber attributes and engagement, via DynamoDB GSIs
   and materialized tags
-- **Templates** authored in MJML with merge variables and live preview
+- **Templates** in three authoring modes (§4.15) — a visual drag-and-drop builder
+  (GrapesJS→MJML), MJML source, and raw-HTML blasts — one responsive pipeline
+  with the compliance footer auto-injected
+- **Merge tags & ad tags** (§4.14): per-recipient merge variables, plus named
+  LiveIntent **ad slots** (bound at the series/template level for recurring
+  newsletters, per-campaign for one-offs) inserted verbatim and never tracked
+- **Campaign types & series reporting** (§4.16): one-off vs ongoing (daily /
+  weekly / biweekly), with aggregate reporting across a recurring series' editions
+- **Sandbox / test mode** (§4.17), **deliverability alerts to SNS** (§4.18),
+  **GDPR/CCPA export & erasure + audit log** (§4.19), and **A/B subject
+  testing** (§4.20)
 - **Engagement analytics & reporting dashboards**: sends, deliveries, opens,
   clicks, bounces, complaints, unsubscribes — real-time counters, queryable
   event history, per-campaign funnels, and link performance
@@ -82,11 +105,12 @@ organization's system.
 ### Out of scope (v1, designed for later)
 
 - SMS, push, voice, in-app channels (seams exist; not built)
-- Visual drag-and-drop template builder (template store is shaped for it)
 - Ad-hoc arbitrary segmentation at scale (OpenSearch mirror is a documented
   drop-in when needed)
 - Full visual journey builder (v1 ships code/config-defined drip automations)
-- Multi-tenant SaaS operation
+- **Public multi-tenant SaaS** (renting addressium to unrelated third parties);
+  multi-**org silos** for a single owner *are* supported (§4.11)
+- SSO / SAML for the admin pool (deferred; Cognito + MFA for now)
 
 ### Key decisions (locked)
 
@@ -109,6 +133,16 @@ organization's system.
 | Token posture | Long-lived, low-privilege (lite scope) | Best newsletter UX; forwarded links can only ever read content, never touch account |
 | Token redemption | Reusable within TTL, stateless | No callback to addressium; keeps the two systems decoupled |
 | Entitlement freshness | Synced from system of record | addressium's entitlement copy stays current; token also stamps `entitlement_asof` |
+| Tenancy | Multi-org, one AWS account, logical silos | Run many publications from one deployment; not account-per-org |
+| Org isolation | Per-org subscriber pool + KMS key + SES identity; pooled DynamoDB by `orgId` | Isolate identity/signing/sending; keep data infra cheap and shared |
+| Sending reputation | Per-org configuration sets; dedicated IP pool optional | Metrics isolated always; reputation isolation opt-in (added cost) |
+| Access control | RBAC, 4 roles, org-scoped, server-enforced | Sales read-only, Editor no delete/close, destructive = admin-only |
+| Suppression scope | Hybrid default (bounces/complaints global, unsubscribes per-org) | Protect shared reputation; keep unsubscribes brand-specific |
+| Template authoring | 3 modes: GrapesJS visual · MJML · raw HTML | Right tool per team; one MJML render pipeline; footer auto-injected |
+| Ad tags | Named slots, bound at series/template level (recurring) | LiveIntent HTML inserted verbatim, never tracked |
+| Campaign model | One-off vs ongoing series with aggregate reporting | Group recurring editions for trend reporting |
+| Alerts | Deliverability rules → operator SNS topic | Fan out to email/SMS/Slack/PagerDuty/Lambda; auto-halt thresholds |
+| Privacy | GDPR/CCPA export + erase-to-tombstone; immutable audit log | Compliance built in, not bolted on |
 | IaC / language | AWS CDK, TypeScript monorepo | One language across infra, backend, and frontend |
 
 ---
@@ -149,10 +183,13 @@ organization's system.
 - **Public plane** (unauthenticated, WAF-protected, rate-limited + CAPTCHA):
   signup, double-opt-in confirmation, one-click unsubscribe. Tokenized/signed so
   a request can only affect the acting subscriber.
-- **Subscriber plane** (Cognito-authenticated, shared pool): the subscriber logs
-  in with their own account to manage list preferences and attributes (§4.10).
-- **Admin plane** (Cognito-authenticated, operator): list/subscriber/segment/
-  campaign/template/automation management, analytics, and settings.
+- **Subscriber plane** (Cognito-authenticated, **per-org shared pool**): the
+  subscriber logs in with their own account to manage list preferences and
+  attributes (§4.10).
+- **Admin plane** (Cognito-authenticated via a **separate admin pool**, staff):
+  list/subscriber/segment/campaign/template/automation management, analytics, and
+  settings. Every request carries a **role + organization scope**, enforced
+  server-side (§4.12); all data access is partitioned by `orgId` (§4.11).
 - **Sending plane** (async): campaign launch → segment resolution → suppression
   filter → SQS fan-out → throttled SES send.
 - **Event plane** (async): SES events → SNS → SQS → processor → counters +
@@ -168,17 +205,23 @@ organization's system.
 
 ### 4.1 Admin console (`apps/admin-web`)
 
-React SPA hosted on S3 behind CloudFront, authenticated with Cognito
-(Authorization Code + PKCE). Surfaces:
+React SPA hosted on S3 behind CloudFront, authenticated against the **admin**
+Cognito pool (Authorization Code + PKCE), with an **organization switcher** that
+scopes everything to the active silo. Controls are shown/hidden by the member's
+role (convenience only — enforcement is server-side, §4.12). Surfaces:
 
-- Lists & subscribers (search, filter, detail, manual add/suppress)
-- Segments (build/save predicate; preview count)
-- Templates (MJML editor + live preview + test send)
-- Campaigns (compose, choose audience, schedule, review, launch)
-- Automations (define/enable drip sequences and triggers)
-- Analytics (per-campaign funnels, list growth, engagement)
-- Settings (sending domains, DKIM/DMARC status, from-addresses,
-  physical mailing address, opt-in policy, operators)
+- **Overview** — dashboard (KPIs, deliverability health) and analytics with the
+  click-map overlay and A/B results
+- **Audience** — newsletters (create, open/close signups), subscribers (detail +
+  manual unsubscribe/suppress), segments, and suppression (§4.13)
+- **Messaging** — campaigns (compose → audience → review; one-off vs series),
+  templates (3 authoring modes), automations
+- **Developer** — feeds, merge tags, ad tags, identity & pools, data & exports,
+  API keys & webhooks
+- **Configure** — organizations (silo management + setup), roles & access,
+  settings (domains/DKIM/DMARC, magic-link & entitlement, alerts & SNS,
+  privacy & data, team), audit log
+- A **Live/Sandbox** toggle (§4.17) is always visible in the top bar
 
 ### 4.2 Public site (`apps/public-web`)
 
@@ -359,27 +402,179 @@ website** — the single base identity everything associates to.
   magic-link token line up with the main site's own view of the user with no
   mapping layer.
 
+### 4.11 Multi-organization tenancy (silos)
+
+A single deployment hosts **multiple organizations** (e.g. Summit Daily, Vail
+Daily), each an isolated silo, all operated by the same owner.
+
+- **One AWS account, logical silos.** A shared control plane (one admin pool, one
+  API, one console, one CDK deployment) over per-org data and identity resources.
+- **Per-org (siloed):** subscriber Cognito pool (shared with that org's site),
+  sending domain(s) + SES identity + **configuration set**, **KMS signing key +
+  JWKS**, entitlement/billing sync, and all subscriber/list/campaign/archive/event
+  data.
+- **Shared (control plane):** the **admin** Cognito pool (staff), the console/API,
+  Lambdas, and the DynamoDB table.
+- **Data isolation:** DynamoDB is **pooled with a hard `orgId` partition prefix**
+  on every item; every query is org-scoped and enforced in the handler/IAM.
+  Table-per-org is a documented alternative for operators wanting physical
+  isolation.
+- **SES reputation caveat:** sending reputation and quota are **account-wide**.
+  Per-org **configuration sets** isolate metrics/events; an optional **per-org
+  dedicated IP pool** isolates reputation (opt-in, added cost). Bounces/complaints
+  additionally feed the shared account-protection path (§4.13).
+- **"Add organization" provisions a silo**, not just a row: it creates the
+  subscriber pool, KMS signing key, SES domain identity (DKIM/SPF/DMARC), JWKS
+  endpoint and config set — driven by the admin API via the AWS SDK (or a per-org
+  CDK stack). A per-org **setup checklist** tracks verification state; this is
+  what a fresh install walks through per org.
+
+### 4.12 Roles & access (RBAC)
+
+Staff live in the **separate admin Cognito pool**; each member holds a **role**,
+**scoped to one or more organizations**.
+
+| Role | Can | Cannot |
+|---|---|---|
+| **Developer Admin** | Everything, incl. delete contacts, close newsletters, identity/pools/orgs, API keys, suppression, alerts, roles | — |
+| **Editor** | Create/send/schedule campaigns, **modify send times / resend**, templates, segments, manage subscribers | Delete contacts, close newsletters, config/identity |
+| **Analyst (Sales)** | **Read-only** reporting & analytics | Any edit, send, delete or config |
+| **Support** | Manage individual subscribers (edit, manual unsubscribe, resend confirm) | Send campaigns, any config |
+
+Enforcement is **server-side** in the API (capability + org scope on every
+mutating handler); the console hides/disables controls only as a convenience,
+never as the security boundary. Destructive actions (delete contacts, close
+newsletters) are Developer-Admin-only by design. Custom roles = a named
+capability set. All privileged actions are recorded in the audit log (§4.19).
+
+### 4.13 Suppression model
+
+Suppression is enforced before every send (§4.4). Scope is configurable per
+deployment, defaulting to **hybrid**:
+
+- **Hybrid (default):** hard **bounces + complaints → global** list (they threaten
+  the account/IP reputation shared by all orgs), while **unsubscribes → per-org**
+  (brand-specific — leaving one publication shouldn't drop you from another).
+- **Global:** one shared list reused by every org.
+- **Per-organization:** each org keeps its own list.
+
+Entries carry `source` (bounce / complaint / manual / unsubscribe) and `scope`
+(global / org). GDPR erasure (§4.19) writes a hashed tombstone here so a forgotten
+address is never re-added.
+
+### 4.14 Merge tags & ad tags
+
+Two distinct replacement systems, both managed in the developer area:
+
+- **Merge tags** — per-recipient/per-campaign variables (`{{first_name}}`,
+  `{{editorial_url}}`, `{{entitlement}}`, `{{unsubscribe_url}}`…). Each declares a
+  **source** (profile attr / feed field / system / **token claim**), **scope**,
+  example and fallback. Token-claim tags ride in the magic link; per-recipient
+  tags resolve during bulk send; per-campaign tags are identical for everyone.
+- **Ad tags** — named **ad slots** declared by a template (e.g. `{{ad_top}}`,
+  `{{ad_inline_1..3}}`, `{{ad_native}}`, up to ~7), filled with **LiveIntent
+  HTML**. Fills are inserted **verbatim**, sanitized, and **never** tokenized or
+  click-tracked (excluded from the click map). **Binding:** for a **recurring
+  series** the template and its ad-tag fills are set **once at the series level**
+  and reused unchanged by every edition (only feed-driven article content varies);
+  for **one-off** campaigns they are set per campaign.
+
+### 4.15 Template authoring modes
+
+One responsive render pipeline (MJML → HTML), three authoring modes so each team
+uses the right tool:
+
+- **Visual builder** — **GrapesJS** + `grapesjs-mjml` (open-source, MIT, embedded
+  in the admin SPA), outputs MJML. For editors and ad reps building polished sends
+  without code.
+- **MJML source** — for developers; full control + live preview.
+- **Raw HTML blast** — paste advertiser-supplied HTML as-is; for one-off blasts.
+
+Regardless of mode, addressium **auto-injects** the compliance footer (physical
+address + unsubscribe) and `List-Unsubscribe` headers, and **sanitizes** pasted
+HTML — a rep cannot send a non-compliant blast. Raw HTML gets a responsiveness
+warning. Templates declare their **merge-tag and ad-slot** placeholders (§4.14).
+
+### 4.16 Campaign types & series reporting
+
+Every campaign is **one-off** or part of an **ongoing series** (daily / weekly /
+biweekly / recurring). A **CampaignSeries** groups all editions of an ongoing
+newsletter and **owns its template and ad-tag fills** (§4.14), so every edition is
+an idempotent send of the same shell with fresh feed content. Reporting
+**aggregates across editions** (edition count, avg open/click, trend over time) in
+addition to per-edition reports. Recurring sends run on **EventBridge Scheduler**;
+Editors can **reschedule** or **resend** an edition (role-permitting).
+
+### 4.17 Sandbox / test mode
+
+A deployment/org **sandbox toggle**. In sandbox, campaigns send **only to
+seed/test addresses**, real subscribers are never emailed, and stats are
+simulated. It is surfaced as a persistent banner in the console so it is
+unmistakable. This is distinct from the **SES account sandbox** (which the setup
+wizard helps exit); it lets developers and ad reps trial sends safely.
+
+### 4.18 Deliverability alerts (SNS)
+
+Alert rules on **complaint rate, bounce rate, send-failure spikes and SES
+reputation**, each with **warn** and **auto-halt** thresholds (auto-halt ties into
+the sender's complaint-rate protection, §6). Alerts publish to an
+operator-configured **Amazon SNS topic** — fan out to email/SMS/Slack/PagerDuty/
+Lambda — plus optional direct notify targets.
+
+### 4.19 Privacy (GDPR/CCPA) & audit log
+
+- **Data-subject requests:** export a person's full record (profile + events) as
+  JSON, or **erase / forget** — removing profile + events and writing a hashed
+  suppression tombstone (§4.13) so they are never re-added. Available per
+  subscriber and by email in Settings.
+- **Consent provenance** (timestamp / IP / source URL) and configurable **event
+  retention** (e.g. 13 / 25 months) support compliance.
+- **Audit log:** every privileged admin action (sends, closes, deletes, key
+  rotations, org provisioning, manual unsubscribes) is recorded **immutably** with
+  member + org + timestamp.
+
+### 4.20 A/B subject testing
+
+A campaign may define **two subject variants** sent to a holdout split;
+addressium picks the **winner** by open or click rate after a configurable window
+and auto-sends it to the remainder. Variant rates and the winner surface in the
+campaign report.
+
 ---
 
 ## 5. Data model
 
-DynamoDB **single-table** design with targeted GSIs. Entities:
+DynamoDB **single-table** design with targeted GSIs. **Every item carries an
+`orgId`** as (part of) its partition key so silos never intermix (§4.11).
+Entities:
 
 | Entity | Purpose | Key notes |
 |---|---|---|
-| **Subscriber** | Durable person record | **keyed by Cognito `sub`** (shared pool); email (normalized), attributes, locale, source, consent {timestamp, ip, url}, global status, `entitlement` (free/paid) + `entitlement_asof` |
-| **List** | A named audience | opt-in policy, from-address, reply-to, compliance footer, physical address |
+| **Organization** | A silo | name, domain(s), subscriber pool ID, KMS key ARN, SES config set, IP mode (shared/dedicated), suppression scope, setup state |
+| **AdminMember** | Staff ↔ role ↔ orgs | admin-pool `sub`, role, org-scope list, MFA state (in admin pool) |
+| **Role** | Capability set | named set of capabilities (built-in + custom) |
+| **Subscriber** | Durable person record | **keyed by (`orgId`, Cognito `sub`)**; email (normalized), attributes, locale, source, consent {timestamp, ip, url}, global status, `entitlement` (free/paid) + `entitlement_asof` |
+| **List (Newsletter)** | A named audience | opt-in policy, from-address, reply-to, compliance footer, physical address, **access** (free/paid), **visibility** (open/closed on the opt-in page) |
 | **Subscription** | Subscriber ↔ List join | per-list status: `pending`/`confirmed`/`unsubscribed`/`bounced`/`complained` |
 | **Segment** | Saved filter | predicate over attributes + engagement; resolved at send time |
-| **Campaign** | A send | content ref, audience (list/segment), schedule, sending config, hot counters |
-| **Template** | Reusable content | MJML source, merge variables, versioned; store shaped for future visual editor |
+| **CampaignSeries** | Recurring newsletter | cadence, **owns template + ad-tag fills**, aggregate counters across editions |
+| **Campaign** | A send (edition or one-off) | type (one-off / series edition), series ref, audience, schedule, sending config, A/B config, hot counters |
+| **Template** | Reusable content | authoring mode (visual/MJML/raw-HTML), MJML/HTML source, versioned, declared merge-tags + **ad slots** |
+| **MergeTag** | Replacement variable | source (profile/feed/system/token-claim), scope, example, fallback |
+| **AdSlotFill** | LiveIntent HTML in a slot | slot id, HTML, binding (series or campaign), edition/version |
+| **Feed** | Content source | RSS/Atom/JSON URL, field→merge-tag mapping, pull interval, target list |
+| **ABTest** | Subject test | variants, split, winner metric, decision window, result |
 | **Event** | Engagement log | append-only: sent/delivered/open/click/bounce/complaint/unsub, attributed by tags; magic-link tokens redacted |
-| **SuppressionEntry** | Do-not-send | source (hard-bounce/complaint/manual), enforced pre-send |
+| **SuppressionEntry** | Do-not-send | source (bounce/complaint/manual/unsubscribe), **scope** (global/org), enforced pre-send |
 | **EmailArchive** | Generic rendered copy | S3 pointer + link-map (`link-id → url template, position, label`); one per campaign/step |
-| **EntitlementSync** | Sync audit | last inbound entitlement update per subscriber (source, value, timestamp) for freshness/debugging |
+| **EntitlementSync** | Sync audit | last inbound entitlement update per subscriber (source, value, timestamp) |
+| **AlertConfig** | Deliverability alerts | SNS topic ARN, rules + warn/halt thresholds, notify targets |
+| **AuditEntry** | Immutable action log | member, org, action, target, timestamp |
 
 ### Access patterns → GSIs
 
+- **Org scoping**: `orgId` prefixes partition keys, so every access pattern is
+  implicitly silo-scoped; cross-org reads are impossible by construction.
 - List membership & status: GSI on `(listId, status)` → paginated list views and
   segment base sets.
 - Engagement recency: GSI on `(subscriberId, lastEngagedAt)` for
@@ -412,13 +607,14 @@ built in and enforced, not optional:
   `List-Unsubscribe-Post` headers on every campaign message.
 - **CAN-SPAM**: enforced physical mailing address and unsubscribe link in every
   template's footer; campaigns cannot send without them configured.
-- **Suppression**: account-level + list-level suppression enforced before every
-  send; hard bounces and complaints auto-suppress.
+- **Suppression**: enforced before every send with a configurable scope model
+  (hybrid default — §4.13); hard bounces and complaints auto-suppress.
 - **Complaint-rate protection**: monitor complaint/bounce rates and auto-throttle
-  or halt sending as they approach SES thresholds, protecting the operator's
-  reputation.
-- **Tracking**: SES configuration-set open/click tracking via an operator-owned
-  tracking domain.
+  or halt sending as they approach SES thresholds; breaches also fire alerts to
+  the operator's SNS topic (§4.18). Per-org configuration sets isolate metrics;
+  an optional per-org dedicated IP pool isolates reputation (§4.11).
+- **Tracking**: SES configuration-set open/click tracking on **editorial** links
+  via an operator-owned tracking domain; **ad tags are excluded** (§4.14).
 
 ---
 
@@ -449,6 +645,12 @@ available without an always-on analytics cluster.
   GDPR/audit; double opt-in default strengthens proof of consent.
 - **Data residency**: everything stays in the operator's account and chosen
   region.
+- **Server-side RBAC**: capability + org scope checked on every mutating handler
+  (§4.12); the console UI is a convenience, never the boundary.
+- **Tenant isolation**: `orgId`-partitioned data + per-org Cognito pools and KMS
+  signing keys mean silos can't read each other's data or verify each other's
+  tokens (§4.11).
+- **Immutable audit log** of privileged actions (§4.19).
 
 ### 8.1 Magic-link security model
 
@@ -511,8 +713,10 @@ link can ever grant, not from assuming it stays private:
 - **One-command deploy**: `cdk deploy`, then a **setup wizard** that walks the
   operator through SES domain verification (DKIM/SPF/DMARC), sandbox-exit
   guidance, the physical mailing address, and creating the first admin user.
-- **Environments**: a single deployment per organization/account; multiple
-  stacks (e.g., `dev`/`prod`) supported via CDK context.
+- **Environments**: one deployment hosts **multiple organizations** (§4.11);
+  `dev`/`prod` stacks via CDK context. Adding an org provisions its per-org
+  resources (pool, KMS key, SES identity, config set, JWKS) at runtime via the
+  `provisioning` service.
 - **Cost posture**: near-$0 at idle (on-demand DynamoDB, Lambda, S3, no
   always-on compute or DB). Dominant cost is SES (~$0.10 / 1,000 emails) plus
   egress. The optional OpenSearch mirror is the only component that adds a
@@ -528,17 +732,21 @@ addressium/
 │   └── public-web/        # embeddable signup snippet + hosted / confirm / unsubscribe pages
 ├── packages/
 │   ├── core/             # shared domain types + zod schemas
-│   └── segment/          # segment engine (GSI/tags impl; OpenSearch drop-in)
+│   ├── segment/          # segment engine (GSI/tags impl; OpenSearch drop-in)
+│   └── rbac/             # capability/role definitions + server-side authorization
 ├── services/
-│   ├── api/              # API Gateway Lambda handlers + entitlement-sync endpoint
-│   ├── sender/           # SQS consumers → SES SendBulkEmail (throttled) + archive/link-map
-│   ├── events/           # SES event processor → counters + link-agg + token redaction + Firehose
+│   ├── api/              # API Gateway handlers: entitlement-sync, RBAC enforcement, merge/ad tags, alerts
+│   ├── sender/           # SQS consumers → SES SendBulkEmail (throttled) + archive/link-map + ad-tag inject
+│   ├── events/           # SES event processor → counters + link-agg + token redaction + Firehose + alerts
 │   ├── automations/      # Step Functions drip/journey state machines
-│   ├── reporting/        # dashboards + click-overlay data (archive + link aggregation)
+│   ├── reporting/        # dashboards + click-overlay + series aggregation + A/B results
 │   ├── tokens/           # magic-link JWT minting + KMS signing + JWKS endpoint
+│   ├── provisioning/     # "Add organization" — creates per-org pool, KMS key, SES identity, config set, JWKS
+│   ├── feeds/            # RSS/Atom/JSON pull → merge-tag mapping
+│   ├── privacy/          # GDPR/CCPA export + erase-to-tombstone; audit log
 │   └── importer/         # Pinpoint / CSV migration importer
 ├── infra/
-│   └── cdk/              # all CDK stacks + setup wizard
+│   └── cdk/              # all CDK stacks + setup wizard (per-org provisioning)
 └── docs/
     └── ARCHITECTURE.md   # this document
 ```
@@ -547,16 +755,17 @@ addressium/
 
 ## 10. Roadmap (indicative)
 
-- **v1 — Core email platform**: lists, signup + double opt-in, subscribers,
-  MJML templates, broadcasts (send-now/scheduled/recurring), suppression,
-  deliverability (DKIM/DMARC/one-click unsubscribe), analytics + reporting
-  dashboards, email archive + click overlay, Cognito admin, Pinpoint/CSV
-  importer, CDK deploy + setup wizard.
+- **v1 — Core email platform**: multi-org silos + RBAC, lists (open/close),
+  signup + double opt-in, subscribers, templates (visual/MJML/raw-HTML),
+  merge tags + ad tags, broadcasts + ongoing series with aggregate reporting,
+  suppression (hybrid), deliverability (DKIM/DMARC/one-click unsubscribe) + SNS
+  alerts, analytics + click overlay + A/B, sandbox mode, GDPR/CCPA + audit log,
+  Pinpoint/CSV importer, CDK deploy + per-org provisioning.
 - **v1.x**: drip automations (Step Functions), materialized-tag segment builder,
   magic-link token service (JWKS + entitlement sync + lite-scope tokens),
-  preference center polish.
-- **v2 — Extensibility**: OpenSearch segmentation drop-in, visual template
-  block editor, visual automation/journey builder.
+  feeds → campaign auto-build, preference center polish.
+- **v2 — Extensibility**: OpenSearch segmentation drop-in, visual
+  automation/journey builder, SSO/SAML for the admin pool.
 - **v3 — Multichannel**: activate the channel-agnostic seams for SMS
   (SNS / AWS End User Messaging) and push.
 
@@ -564,10 +773,10 @@ addressium/
 
 ## 11. Open questions for later phases
 
-- **Sending IPs**: shared SES IPs by default; document dedicated-IP setup for
-  high-volume operators.
 - **Rendering fidelity**: whether to add a rendering-preview service (multiple
   client previews) or rely on test sends in v1.
+- **Per-org billing/usage metering**: optional, for operators who want to
+  chargeback sending cost across their publications.
 - **Backups/export**: point-in-time recovery on DynamoDB plus a scheduled full
   export to S3 for portability.
 - **Webhooks/API for operators**: an outbound webhook + public API so operators
