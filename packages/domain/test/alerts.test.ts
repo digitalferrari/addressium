@@ -24,7 +24,7 @@ const config: AlertConfig = {
     { metric: "bounce_rate", warnAt: 0.02, haltAt: 0.05, enabled: true },
     { metric: "reputation", warnAt: 0.1, haltAt: 0.2, enabled: false },
   ],
-  notifyTargets: ["ops@summitdaily.com"],
+  notifyTargets: ["ops@northwindtimes.example"],
 };
 
 const counters = (over: Partial<HotCounters>): HotCounters => ({

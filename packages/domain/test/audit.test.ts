@@ -32,7 +32,7 @@ test("cross-org (null orgId) entries are supported", async () => {
     orgId: null,
     memberSub: "admin-1",
     action: "org.provision",
-    target: "vail-daily",
+    target: "lakeside-ledger",
   });
   assert.equal(entry.orgId, null);
   assert.equal(log.entries[0]?.action, "org.provision");

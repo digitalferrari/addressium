@@ -24,7 +24,7 @@ const listInput = {
   listId: "ledger",
   name: "Ledger",
   optInPolicy: "double" as const,
-  fromAddress: "l@summitdaily.com",
+  fromAddress: "l@northwindtimes.example",
   access: "free" as const,
   visibility: "open" as const,
   complianceFooter: "footer",
@@ -91,8 +91,8 @@ test("setAiConfig stores the provider config (ARN only) on the org", async () =>
   const stores = memStores();
   const org: Organization = {
     orgId: ORG,
-    name: "Summit",
-    domains: ["summitdaily.com"],
+    name: "Northwind",
+    domains: ["northwindtimes.example"],
     subscriberPoolId: "pool",
     magicLink: { kmsKeyArn: "arn", kid: "k", issuer: "i", audience: "a" },
     sesConfigSet: "cs",

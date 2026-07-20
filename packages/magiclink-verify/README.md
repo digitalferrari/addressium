@@ -15,7 +15,7 @@ import { verifyMagicLinkToken } from "@addressium/magiclink-verify";
 const claims = await verifyMagicLinkToken(token, {
   jwksUri: "https://api.addressium.example/summit/jwks.json", // per-org
   issuer: "https://addressium.example/summit",
-  audience: "summitdaily.com",
+  audience: "northwindtimes.example",
 });
 // claims.sub  -> existing Cognito user in the shared pool
 // claims.entitlement -> "free" | "paid"

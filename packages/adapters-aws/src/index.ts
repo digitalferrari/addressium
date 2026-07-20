@@ -14,7 +14,13 @@ export { SnsAlertPublisher } from "./sns.js";
 export { AwsProvisioningProviders } from "./provisioning.js";
 export { S3AuditLog } from "./s3audit.js";
 export { OpenSearchBulkWriter } from "./opensearch.js";
-export { HttpLlmAdvisor } from "./llm.js";
+export {
+  HttpLlmAdvisor,
+  LlmAdvisorError,
+  DEFAULT_RETRY_POLICY,
+  type RetryPolicy,
+  type HttpLlmAdvisorDeps,
+} from "./llm.js";
 
 import { DynamoStores } from "./dynamo.js";
 import { SesEmailSender } from "./ses.js";

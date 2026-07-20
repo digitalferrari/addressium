@@ -25,7 +25,7 @@ import {
 const ORG = "summit";
 const LIST = "ledger";
 const template: EmailTemplate = {
-  blocks: [{ kind: "editorial", label: "read", url: "https://summitdaily.com/a" }],
+  blocks: [{ kind: "editorial", label: "read", url: "https://northwindtimes.example/a" }],
 };
 
 async function harness() {
@@ -43,7 +43,7 @@ async function harness() {
     listId: LIST,
     name: "Ledger",
     optInPolicy: "double",
-    fromAddress: "l@summitdaily.com",
+    fromAddress: "l@northwindtimes.example",
     access: "free",
     visibility: "open",
     complianceFooter: "f",
@@ -115,7 +115,7 @@ test("confirmation email carries the confirm link, from-address and footer", asy
   assert.ok(list);
   const msg = buildConfirmationEmail(list!, "jordan@example.com", "https://s.example/confirm?token=abc");
   assert.equal(msg.to, "jordan@example.com");
-  assert.equal(msg.from, "l@summitdaily.com");
+  assert.equal(msg.from, "l@northwindtimes.example");
   assert.match(msg.html, /confirm\?token=abc/);
   assert.match(msg.subject, /Confirm your subscription/);
 });

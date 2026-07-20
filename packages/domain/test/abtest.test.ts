@@ -46,7 +46,7 @@ async function harness(n: number) {
     listId: LIST,
     name: "Ledger",
     optInPolicy: "single",
-    fromAddress: "l@summitdaily.com",
+    fromAddress: "l@northwindtimes.example",
     access: "free",
     visibility: "open",
     complianceFooter: "f",

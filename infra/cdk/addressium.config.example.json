@@ -1,0 +1,6 @@
+{
+  "stage": "dev",
+  "region": "us-east-1",
+  "adminEmails": ["you@example.com"],
+  "adminHostedUiDomainPrefix": "addressium-admin"
+}

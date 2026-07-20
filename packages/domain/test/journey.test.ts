@@ -31,9 +31,9 @@ import {
 const ORG = "summit";
 const LIST = "ledger";
 const ISS = "https://addressium.example/summit";
-const AUD = "summitdaily.com";
+const AUD = "northwindtimes.example";
 const KID = "test-key-1";
-const ARTICLE = "https://summitdaily.com/markets/the-chart";
+const ARTICLE = "https://northwindtimes.example/markets/the-chart";
 
 const template: EmailTemplate = {
   blocks: [
@@ -65,11 +65,11 @@ async function harness() {
     listId: LIST,
     name: "The Morning Ledger",
     optInPolicy: "double",
-    fromAddress: "ledger@summitdaily.com",
+    fromAddress: "ledger@northwindtimes.example",
     access: "free",
     visibility: "open",
-    complianceFooter: "Summit Daily · 40 W Main St, Frisco CO",
-    physicalAddress: "40 W Main St, Frisco CO",
+    complianceFooter: "Northwind Times · 123 Main Street, Anytown, USA",
+    physicalAddress: "123 Main Street, Anytown, USA",
   };
   await stores.lists.put(list);
   return { stores, sender, clock, confirmSigner, magic, jwks };
@@ -88,7 +88,7 @@ test("signup → double opt-in → send, and the magic-link token verifies", asy
     email: "Jordan@Example.com",
     listId: LIST,
     attributes: { first_name: "Jordan" },
-    sourceUrl: "https://summitdaily.com/signup",
+    sourceUrl: "https://northwindtimes.example/signup",
   });
   assert.equal(res.subscription.status, "pending");
   assert.equal(res.subscriber.email, "jordan@example.com");
@@ -217,7 +217,7 @@ test("click map aggregates by link-id and the token is redacted at rest", async 
 });
 
 test("SSRF guard blocks internal targets and allows public ones", async () => {
-  await assert.rejects(() => assertPublicHttpsUrl("http://summitdaily.com/feed"), SsrfBlockedError); // not https
+  await assert.rejects(() => assertPublicHttpsUrl("http://northwindtimes.example/feed"), SsrfBlockedError); // not https
   await assert.rejects(() => assertPublicHttpsUrl("https://169.254.169.254/latest/meta-data/"), SsrfBlockedError);
   await assert.rejects(() => assertPublicHttpsUrl("https://10.0.0.5/feed"), SsrfBlockedError);
   await assert.rejects(() => assertPublicHttpsUrl("https://127.0.0.1/feed"), SsrfBlockedError);

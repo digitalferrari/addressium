@@ -24,7 +24,7 @@ SES identity), and you pay AWS directly (~$0 at idle, ~$0.10 per 1,000 emails
 via SES).
 
 A single deployment can run **multiple organizations (silos)** — e.g. several
-publications like Summit Daily and Vail Daily — each isolated in its own data
+publications like Northwind Times and Lakeside Ledger — each isolated in its own data
 partition, subscriber pool, signing key and sending identity (see §4.11). What
 it is **not** is a public multi-tenant SaaS you rent to unrelated third parties:
 every org in a deployment is operated by the same owner.
@@ -411,7 +411,7 @@ website** — the single base identity everything associates to.
 
 ### 4.11 Multi-organization tenancy (silos)
 
-A single deployment hosts **multiple organizations** (e.g. Summit Daily, Vail
+A single deployment hosts **multiple organizations** (e.g. Northwind Times, Lakeside
 Daily), each an isolated silo, all operated by the same owner.
 
 - **One AWS account, logical silos.** A shared control plane (one admin pool, one

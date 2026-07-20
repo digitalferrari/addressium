@@ -28,16 +28,16 @@ test("capability matrix: analyst is read-only, editor can't delete/close", () =>
 });
 
 test("authorize enforces capability AND org scope", () => {
-  const editorSummit = grantFromClaims({ "custom:role": "editor", "custom:orgs": "summit" });
+  const editorNorthwind = grantFromClaims({ "custom:role": "editor", "custom:orgs": "summit" });
 
   // allowed: editor may schedule for its own org
-  authorize(editorSummit, "campaigns:schedule", "summit");
+  authorize(editorNorthwind, "campaigns:schedule", "summit");
 
   // denied: wrong org (cross-tenant)
-  assert.throws(() => authorize(editorSummit, "campaigns:schedule", "vail"), ForbiddenError);
+  assert.throws(() => authorize(editorNorthwind, "campaigns:schedule", "vail"), ForbiddenError);
 
   // denied: capability the role lacks
-  assert.throws(() => authorize(editorSummit, "subscribers:delete", "summit"), ForbiddenError);
+  assert.throws(() => authorize(editorNorthwind, "subscribers:delete", "summit"), ForbiddenError);
 
   // analyst (read-only) cannot schedule even in-scope
   const analyst = grantFromClaims({ "custom:role": "analyst", "custom:orgs": "*" });

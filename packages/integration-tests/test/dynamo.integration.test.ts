@@ -40,7 +40,7 @@ const dynalite = require("dynalite") as (opts?: unknown) => any;
 const TABLE = "addressium";
 const ORG = "summit";
 const LIST = "ledger";
-const ARTICLE = "https://summitdaily.com/markets/the-chart";
+const ARTICLE = "https://northwindtimes.example/markets/the-chart";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let server: any;
@@ -121,14 +121,14 @@ test("signup → confirm → send → click → click map, then unsubscribe (on 
   // Organization store round-trips (get + list via gsi1 "ORGS").
   await stores.organizations.put({
     orgId: ORG,
-    name: "Summit Daily",
-    domains: ["summitdaily.com"],
+    name: "Northwind Times",
+    domains: ["northwindtimes.example"],
     subscriberPoolId: "us-east-1_Smt",
     magicLink: {
       kmsKeyArn: "arn:aws:kms:...:key/1",
       kid: "k1",
       issuer: "https://addressium/summit",
-      audience: "summitdaily.com",
+      audience: "northwindtimes.example",
     },
     sesConfigSet: "summit-cs",
     ipMode: "shared",
@@ -144,11 +144,11 @@ test("signup → confirm → send → click → click map, then unsubscribe (on 
     listId: LIST,
     name: "The Morning Ledger",
     optInPolicy: "double",
-    fromAddress: "ledger@summitdaily.com",
+    fromAddress: "ledger@northwindtimes.example",
     access: "free",
     visibility: "open",
-    complianceFooter: "Summit Daily",
-    physicalAddress: "40 W Main St, Frisco CO",
+    complianceFooter: "Northwind Times",
+    physicalAddress: "123 Main Street, Anytown, USA",
   };
   await stores.lists.put(list);
 
