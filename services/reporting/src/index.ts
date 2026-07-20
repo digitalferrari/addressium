@@ -7,7 +7,9 @@
  * tier wired in infra; this endpoint is the low-latency dashboard read.
  */
 import { DynamoStores } from "@addressium/adapters-aws";
-import { buildAbReport, buildCampaignReport } from "@addressium/domain";
+import { SystemClock, buildAbReport, buildCampaignReport, recordUsage } from "@addressium/domain";
+
+const clock = new SystemClock();
 
 function env(name: string): string {
   const v = process.env[name];
@@ -41,5 +43,41 @@ export async function handler(event: ReportEvent) {
     statusCode: 200,
     headers: { "content-type": "application/json", "cache-control": "private, max-age=15" },
     body: JSON.stringify({ ...report, abResults }),
+  };
+}
+
+/**
+ * Metering ingest (§11, #26). A scheduled job feeds per-org/period usage — email
+ * volume from our counters, storageBytes + dedicatedIps from AWS metrics — and
+ * we apply the cost model and persist the record for the Usage screen.
+ */
+export interface UsageIngestEvent {
+  orgId: string;
+  period: string; // "YYYY-MM"
+  emailsSent: number;
+  storageBytes: number;
+  dedicatedIps: number;
+}
+
+export async function usageIngestHandler(event: UsageIngestEvent) {
+  const record = await recordUsage(stores(), clock, event);
+  return { ok: true, record };
+}
+
+/** GET per-org usage: one period, or the full history when `period` is absent. */
+export async function usageHandler(event: {
+  pathParameters?: { org?: string; period?: string } | null;
+  orgId?: string;
+  period?: string;
+}) {
+  const orgId = event.pathParameters?.org ?? event.orgId;
+  if (!orgId) return { statusCode: 400, headers: {}, body: JSON.stringify({ error: "org required" }) };
+  const period = event.pathParameters?.period ?? event.period;
+  const s = stores();
+  const body = period ? await s.usage.get(orgId, period) : await s.usage.listByOrg(orgId);
+  return {
+    statusCode: 200,
+    headers: { "content-type": "application/json", "cache-control": "private, max-age=60" },
+    body: JSON.stringify(body ?? null),
   };
 }

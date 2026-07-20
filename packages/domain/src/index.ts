@@ -18,3 +18,4 @@ export * from "./reporting.js";
 export * from "./alerts.js";
 export * from "./throttle.js";
 export * from "./abtest.js";
+export * from "./usage.js";

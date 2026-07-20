@@ -25,6 +25,7 @@ import type {
   Subscriber,
   Subscription,
   SuppressionEntry,
+  UsageRecord,
 } from "@addressium/core";
 import type {
   AlertConfigStore,
@@ -40,6 +41,7 @@ import type {
   SubscriberStore,
   SubscriptionStore,
   SuppressionStore,
+  UsageStore,
 } from "@addressium/domain";
 import { randomUUID } from "node:crypto";
 
@@ -242,6 +244,17 @@ export class DynamoStores implements Stores {
   alerts: AlertConfigStore = {
     get: (orgId) => this.get<AlertConfig>(org(orgId), "#ALERTS"),
     put: (c) => this.put({ pk: org(c.orgId), sk: "#ALERTS", data: c }),
+  };
+
+  usage: UsageStore = {
+    get: (orgId, period) => this.get<UsageRecord>(org(orgId), `USAGE#${period}`),
+    put: (r) => this.put({ pk: org(r.orgId), sk: `USAGE#${r.period}`, data: r }),
+    listByOrg: (orgId) =>
+      this.queryAll<UsageRecord>({
+        TableName: this.tableName,
+        KeyConditionExpression: "pk = :pk AND begins_with(sk, :s)",
+        ExpressionAttributeValues: { ":pk": org(orgId), ":s": "USAGE#" },
+      }),
   };
 
   sendClaims: SendClaimStore = {

@@ -260,6 +260,24 @@ export interface AlertConfig {
   notifyTargets: string[];
 }
 
+/** Cost model inputs (USD) for per-org chargeback (§11). Operator-configurable. */
+export interface CostRates {
+  perEmail: number; // SES per-message
+  perGbStorageMonth: number; // S3 archive
+  perDedicatedIpMonth: number; // SES dedicated IP lease
+}
+
+/** Aggregated usage + estimated cost for one org over one billing period. */
+export interface UsageRecord {
+  orgId: OrgId;
+  period: string; // "YYYY-MM"
+  emailsSent: number;
+  storageBytes: number;
+  dedicatedIps: number;
+  cost: { email: number; storage: number; dedicatedIp: number; total: number };
+  computedAt: string;
+}
+
 export interface AuditEntry {
   orgId: OrgId | null; // null for cross-org actions (e.g. provisioning)
   memberSub: string;

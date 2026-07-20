@@ -16,6 +16,7 @@ import type {
   Subscriber,
   Subscription,
   SuppressionEntry,
+  UsageRecord,
 } from "@addressium/core";
 import type { EmailTemplate } from "./render.js";
 
@@ -124,6 +125,13 @@ export interface AlertPublisher {
   publish(topicArn: string, message: AlertMessage): Promise<void>;
 }
 
+/** Per-org usage/cost records for chargeback (§11). */
+export interface UsageStore {
+  get(orgId: string, period: string): Promise<UsageRecord | undefined>;
+  put(record: UsageRecord): Promise<void>;
+  listByOrg(orgId: string): Promise<UsageRecord[]>;
+}
+
 /** What actually puts mail on the wire (SES in prod; capture in tests). */
 export interface SentMessage {
   from: string;
@@ -193,4 +201,5 @@ export interface Stores {
   campaigns: CampaignStore;
   series: CampaignSeriesStore;
   alerts: AlertConfigStore;
+  usage: UsageStore;
 }

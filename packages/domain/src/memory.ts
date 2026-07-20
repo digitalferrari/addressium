@@ -14,6 +14,7 @@ import type {
   Subscriber,
   Subscription,
   SuppressionEntry,
+  UsageRecord,
 } from "@addressium/core";
 import type {
   AlertConfigStore,
@@ -36,6 +37,7 @@ import type {
   SubscriberStore,
   SubscriptionStore,
   SuppressionStore,
+  UsageStore,
 } from "./ports.js";
 
 const subKey = (o: string, s: string) => `${o}#${s}`;
@@ -175,6 +177,20 @@ export class MemAlertConfigs implements AlertConfigStore {
   }
 }
 
+export class MemUsage implements UsageStore {
+  private map = new Map<string, UsageRecord>();
+  private key = (o: string, p: string) => `${o}#${p}`;
+  async get(orgId: string, period: string) {
+    return this.map.get(this.key(orgId, period));
+  }
+  async put(record: UsageRecord) {
+    this.map.set(this.key(record.orgId, record.period), record);
+  }
+  async listByOrg(orgId: string) {
+    return [...this.map.values()].filter((r) => r.orgId === orgId);
+  }
+}
+
 /** Captures published alerts so tests can assert on breach payloads. */
 export class CaptureAlertPublisher implements AlertPublisher {
   public published: Array<{ topicArn: string; message: AlertMessage }> = [];
@@ -238,5 +254,6 @@ export function memStores(): Stores {
     campaigns: new MemCampaigns(),
     series: new MemCampaignSeries(),
     alerts: new MemAlertConfigs(),
+    usage: new MemUsage(),
   };
 }
