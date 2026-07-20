@@ -34,6 +34,8 @@ export interface SegmentEngine {
  * filter it. Engagement-recency predicates (`last_open_at`) are out of scope for
  * v1 — use the OpenSearch mirror (#28).
  */
+export * from "./opensearch.js";
+
 export class GsiSegmentEngine implements SegmentEngine {
   constructor(private readonly stores: Stores) {}
 

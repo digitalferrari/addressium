@@ -17,13 +17,15 @@ import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { Stack, type StackProps, RemovalPolicy, Duration, CfnOutput } from "aws-cdk-lib";
 import type { Construct } from "constructs";
-import { AttributeType, BillingMode, Table } from "aws-cdk-lib/aws-dynamodb";
+import { AttributeType, BillingMode, StreamViewType, Table } from "aws-cdk-lib/aws-dynamodb";
 import { Bucket, BlockPublicAccess, ObjectLockRetention } from "aws-cdk-lib/aws-s3";
 import { Queue } from "aws-cdk-lib/aws-sqs";
 import { Mfa, UserPool, UserPoolClient, CfnUserPoolUser } from "aws-cdk-lib/aws-cognito";
 import { Runtime } from "aws-cdk-lib/aws-lambda";
 import { NodejsFunction } from "aws-cdk-lib/aws-lambda-nodejs";
-import { SqsEventSource } from "aws-cdk-lib/aws-lambda-event-sources";
+import { SqsEventSource, DynamoEventSource } from "aws-cdk-lib/aws-lambda-event-sources";
+import { StartingPosition } from "aws-cdk-lib/aws-lambda";
+import { CfnCollection, CfnSecurityPolicy, CfnAccessPolicy } from "aws-cdk-lib/aws-opensearchserverless";
 import { HttpApi, HttpMethod } from "aws-cdk-lib/aws-apigatewayv2";
 import { HttpLambdaIntegration } from "aws-cdk-lib/aws-apigatewayv2-integrations";
 import { HttpUserPoolAuthorizer } from "aws-cdk-lib/aws-apigatewayv2-authorizers";
@@ -62,11 +64,17 @@ export class ControlPlaneStack extends Stack {
     super(scope, id, props);
 
     // ---- data plane ----
+    // OpenSearch segmentation mirror is opt-in (standing cost, #28). When on,
+    // the table streams changes to the indexer that mirrors to OpenSearch.
+    const mirrorCtx = this.node.tryGetContext("enableOpenSearchMirror") as boolean | string | undefined;
+    const enableOpenSearchMirror = mirrorCtx === true || mirrorCtx === "true";
+
     const table = new Table(this, "Table", {
       partitionKey: { name: "pk", type: AttributeType.STRING },
       sortKey: { name: "sk", type: AttributeType.STRING },
       billingMode: BillingMode.PAY_PER_REQUEST,
       pointInTimeRecovery: true,
+      stream: enableOpenSearchMirror ? StreamViewType.NEW_AND_OLD_IMAGES : undefined,
       removalPolicy: props.stage === "prod" ? RemovalPolicy.RETAIN : RemovalPolicy.DESTROY,
     });
     table.addGlobalSecondaryIndex({
@@ -353,6 +361,69 @@ export class ControlPlaneStack extends Stack {
       assoc.node.addDependency(stage);
     }
     const cfWebAcl = makeCloudFrontWebAcl(this, "CfWebAcl");
+
+    // ---- OpenSearch segmentation mirror (opt-in, §5, #28) ----
+    if (enableOpenSearchMirror) {
+      const collName = `addressium-${props.stage}`;
+      // Serverless collection needs an encryption + network policy before it
+      // can be created, and a data-access policy for the indexer role.
+      const encPolicy = new CfnSecurityPolicy(this, "OsEncPolicy", {
+        name: `${collName}-enc`,
+        type: "encryption",
+        policy: JSON.stringify({
+          Rules: [{ ResourceType: "collection", Resource: [`collection/${collName}`] }],
+          AWSOwnedKey: true,
+        }),
+      });
+      const netPolicy = new CfnSecurityPolicy(this, "OsNetPolicy", {
+        name: `${collName}-net`,
+        type: "network",
+        policy: JSON.stringify([
+          {
+            Rules: [
+              { ResourceType: "collection", Resource: [`collection/${collName}`] },
+              { ResourceType: "dashboard", Resource: [`collection/${collName}`] },
+            ],
+            AllowFromPublic: true,
+          },
+        ]),
+      });
+      const collection = new CfnCollection(this, "SegmentCollection", {
+        name: collName,
+        type: "SEARCH",
+      });
+      collection.addDependency(encPolicy);
+      collection.addDependency(netPolicy);
+
+      const indexerFn = fn("SegmentIndexerFn", svc("services/segment-indexer/src/index.ts"), "handler", {
+        OPENSEARCH_ENDPOINT: collection.attrCollectionEndpoint,
+      });
+      indexerFn.addEventSource(
+        new DynamoEventSource(table, {
+          startingPosition: StartingPosition.LATEST,
+          batchSize: 100,
+          retryAttempts: 3,
+        }),
+      );
+      indexerFn.addToRolePolicy(
+        new PolicyStatement({ actions: ["aoss:APIAccessAll"], resources: [collection.attrArn] }),
+      );
+      // Data-access policy: the indexer role may write documents to the index.
+      new CfnAccessPolicy(this, "OsDataAccess", {
+        name: `${collName}-access`,
+        type: "data",
+        policy: JSON.stringify([
+          {
+            Rules: [
+              { ResourceType: "index", Resource: [`index/${collName}/*`], Permission: ["aoss:*"] },
+              { ResourceType: "collection", Resource: [`collection/${collName}`], Permission: ["aoss:*"] },
+            ],
+            Principal: [indexerFn.role?.roleArn],
+          },
+        ]),
+      });
+      new CfnOutput(this, "SegmentCollectionEndpoint", { value: collection.attrCollectionEndpoint });
+    }
 
     // ---- frontends (static SPAs on S3 + CloudFront, §4.1–4.2) ----
     const prod = props.stage === "prod";
