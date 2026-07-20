@@ -67,6 +67,25 @@ export interface Grant {
   orgs: string[] | "*";
 }
 
+const ROLE_NAMES = new Set<RoleName>(["developer_admin", "editor", "analyst", "support"]);
+
+/**
+ * Build a Grant from admin-pool JWT claims (API Gateway JWT authorizer).
+ * Expects `custom:role` (a RoleName) and `custom:orgs` ("*" or a comma-separated
+ * list of orgIds). Throws if the role claim is missing/invalid.
+ */
+export function grantFromClaims(claims: Record<string, string | undefined>): Grant {
+  const role = claims["custom:role"];
+  if (!role || !ROLE_NAMES.has(role as RoleName)) {
+    throw new ForbiddenError("reports:view", "*");
+  }
+  const orgsRaw = (claims["custom:orgs"] ?? "").trim();
+  // Empty ⇒ no orgs (deny by default); "*" ⇒ all orgs.
+  const orgs: string[] | "*" =
+    orgsRaw === "*" ? "*" : orgsRaw.split(",").map((o) => o.trim()).filter(Boolean);
+  return { role: role as RoleName, orgs };
+}
+
 export function can(role: RoleName, capability: Capability): boolean {
   return ROLES[role].has(capability);
 }

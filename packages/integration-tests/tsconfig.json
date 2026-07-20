@@ -4,10 +4,21 @@
     "outDir": "dist",
     "rootDir": "."
   },
-  "include": ["test/**/*.ts"],
+  "include": [
+    "test/**/*.ts"
+  ],
   "references": [
-    { "path": "../core" },
-    { "path": "../domain" },
-    { "path": "../adapters-aws" }
+    {
+      "path": "../core"
+    },
+    {
+      "path": "../domain"
+    },
+    {
+      "path": "../adapters-aws"
+    },
+    {
+      "path": "../rbac"
+    }
   ]
 }

@@ -8,6 +8,7 @@ export { SesEmailSender } from "./ses.js";
 export { KmsMagicLinkSigner, type KmsMagicLinkSignerConfig } from "./kms.js";
 export { SqsSendQueue } from "./sqs.js";
 export { EventBridgeScheduler, type EventBridgeSchedulerConfig } from "./scheduler.js";
+export { getSecret } from "./secrets.js";
 
 import { DynamoStores } from "./dynamo.js";
 import { SesEmailSender } from "./ses.js";

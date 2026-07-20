@@ -3,9 +3,9 @@
  *
  * Handlers validate/authorize, then call pure functions from @addressium/domain
  * against DynamoDB-backed stores (@addressium/adapters-aws). No business logic
- * lives here. See docs/ARCHITECTURE.md §4.2–4.3.
+ * lives here. See docs/ARCHITECTURE.md §4.2–4.3, §4.12.
  */
-import { DynamoStores, EventBridgeScheduler, SqsSendQueue } from "@addressium/adapters-aws";
+import { DynamoStores, EventBridgeScheduler, getSecret } from "@addressium/adapters-aws";
 import {
   HmacConfirmationSigner,
   SystemClock,
@@ -17,11 +17,18 @@ import {
   verifyWebhookSignature,
   type SendDescriptor,
 } from "@addressium/domain";
+import {
+  ForbiddenError,
+  authorize,
+  grantFromClaims,
+  type Capability,
+} from "@addressium/rbac";
 
 export interface HttpEvent {
   body?: string | null;
   headers?: Record<string, string | undefined>;
   queryStringParameters?: Record<string, string | undefined> | null;
+  requestContext?: { authorizer?: { jwt?: { claims?: Record<string, string | undefined> } } };
 }
 export interface HttpResult {
   statusCode: number;
@@ -39,14 +46,29 @@ const json = (statusCode: number, obj: unknown): HttpResult => ({
   headers: { "content-type": "application/json" },
   body: JSON.stringify(obj),
 });
+const fail = (e: unknown): HttpResult =>
+  e instanceof ForbiddenError
+    ? json(403, { error: e.message })
+    : json(400, { error: (e as Error).message });
+
+/** Server-side RBAC: derive the caller's grant from JWT claims and check it. */
+function requireGrant(event: HttpEvent, capability: Capability, orgId: string): void {
+  const claims = event.requestContext?.authorizer?.jwt?.claims ?? {};
+  authorize(grantFromClaims(claims), capability, orgId);
+}
 
 const clock = new SystemClock();
 let _stores: DynamoStores | undefined;
 const stores = () => (_stores ??= new DynamoStores(env("TABLE_NAME")));
-let _confirm: HmacConfirmationSigner | undefined;
-const confirmSigner = () => (_confirm ??= new HmacConfirmationSigner(env("CONFIRM_SECRET")));
-let _queue: SqsSendQueue | undefined;
-const queue = () => (_queue ??= new SqsSendQueue(env("SEND_QUEUE_URL")));
+
+let _confirmSigner: HmacConfirmationSigner | undefined;
+async function confirmSigner(): Promise<HmacConfirmationSigner> {
+  if (!_confirmSigner) {
+    _confirmSigner = new HmacConfirmationSigner(await getSecret(env("CONFIRM_SECRET_ARN")));
+  }
+  return _confirmSigner;
+}
+
 let _scheduler: EventBridgeScheduler | undefined;
 const scheduler = () =>
   (_scheduler ??= new EventBridgeScheduler({
@@ -60,11 +82,11 @@ const scheduler = () =>
 export async function signupHandler(event: HttpEvent): Promise<HttpResult> {
   try {
     const input = JSON.parse(event.body ?? "{}") as unknown;
-    const res = await signup(stores(), confirmSigner(), clock, input);
-    // TODO: enqueue the confirmation email carrying res.confirmationToken.
+    const res = await signup(stores(), await confirmSigner(), clock, input);
+    // TODO: enqueue the confirmation email carrying res.confirmationToken (#7).
     return json(202, { subscriberId: res.subscriber.sub, status: res.subscription.status });
   } catch (e) {
-    return json(400, { error: (e as Error).message });
+    return fail(e);
   }
 }
 
@@ -72,10 +94,10 @@ export async function signupHandler(event: HttpEvent): Promise<HttpResult> {
 export async function confirmHandler(event: HttpEvent): Promise<HttpResult> {
   try {
     const token = event.queryStringParameters?.token ?? "";
-    const sub = await confirmOptIn(stores(), confirmSigner(), clock, token);
+    const sub = await confirmOptIn(stores(), await confirmSigner(), clock, token);
     return json(200, { status: sub.status });
   } catch (e) {
-    return json(400, { error: (e as Error).message });
+    return fail(e);
   }
 }
 
@@ -90,6 +112,7 @@ export interface ScheduleBody extends SendDescriptor {
 export async function scheduleCampaignHandler(event: HttpEvent): Promise<HttpResult> {
   try {
     const body = JSON.parse(event.body ?? "{}") as ScheduleBody;
+    requireGrant(event, "campaigns:schedule", body.orgId); // admin-only (§4.12)
     const descriptor: SendDescriptor = {
       orgId: body.orgId,
       campaignId: body.campaignId,
@@ -127,7 +150,7 @@ export async function scheduleCampaignHandler(event: HttpEvent): Promise<HttpRes
         return json(400, { error: "unknown schedule type" });
     }
   } catch (e) {
-    return json(400, { error: (e as Error).message });
+    return fail(e);
   }
 }
 
@@ -139,10 +162,11 @@ export async function cancelCampaignHandler(event: HttpEvent): Promise<HttpResul
       campaignId: string;
     };
     if (!orgId || !campaignId) return json(400, { error: "orgId and campaignId required" });
+    requireGrant(event, "campaigns:schedule", orgId);
     await scheduler().cancel(`camp-${orgId}-${campaignId}`);
     return json(200, { status: "cancelled" });
   } catch (e) {
-    return json(400, { error: (e as Error).message });
+    return fail(e);
   }
 }
 
@@ -153,11 +177,11 @@ export async function unsubscribeHandler(event: HttpEvent): Promise<HttpResult> 
       event.queryStringParameters?.token ??
       new URLSearchParams(event.body ?? "").get("token") ??
       "";
-    const { orgId, sub, listId } = confirmSigner().verify(token);
+    const { orgId, sub, listId } = (await confirmSigner()).verify(token);
     await unsubscribeFromList(stores(), clock, { orgId, subscriberId: sub, listId });
     return json(200, { status: "unsubscribed" });
   } catch (e) {
-    return json(400, { error: (e as Error).message });
+    return fail(e);
   }
 }
 
@@ -166,12 +190,13 @@ export async function entitlementSyncHandler(event: HttpEvent): Promise<HttpResu
   try {
     const raw = event.body ?? "";
     const sig = event.headers?.["x-addressium-signature"] ?? "";
-    if (!verifyWebhookSignature(env("WEBHOOK_SECRET"), raw, sig)) {
+    const secret = await getSecret(env("WEBHOOK_SECRET_ARN"));
+    if (!verifyWebhookSignature(secret, raw, sig)) {
       return json(401, { error: "bad signature" });
     }
     const updated = await applyEntitlementSync(stores(), clock, JSON.parse(raw) as unknown);
     return json(200, { entitlement: updated.entitlement });
   } catch (e) {
-    return json(400, { error: (e as Error).message });
+    return fail(e);
   }
 }

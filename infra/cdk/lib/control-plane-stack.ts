@@ -26,6 +26,7 @@ import { NodejsFunction } from "aws-cdk-lib/aws-lambda-nodejs";
 import { SqsEventSource } from "aws-cdk-lib/aws-lambda-event-sources";
 import { HttpApi, HttpMethod } from "aws-cdk-lib/aws-apigatewayv2";
 import { HttpLambdaIntegration } from "aws-cdk-lib/aws-apigatewayv2-integrations";
+import { HttpUserPoolAuthorizer } from "aws-cdk-lib/aws-apigatewayv2-authorizers";
 import { Topic } from "aws-cdk-lib/aws-sns";
 import { LambdaSubscription } from "aws-cdk-lib/aws-sns-subscriptions";
 import { Secret } from "aws-cdk-lib/aws-secretsmanager";
@@ -218,15 +219,22 @@ export class ControlPlaneStack extends Stack {
       methods: [HttpMethod.POST],
       integration: new HttpLambdaIntegration("UnsubscribeInt", unsubscribeFn),
     });
+    // Admin routes require a valid admin-pool JWT; the handler then enforces
+    // role + org scope from the claims (§4.12).
+    const adminAuth = new HttpUserPoolAuthorizer("AdminAuthorizer", adminPool, {
+      userPoolClients: [adminClient],
+    });
     api.addRoutes({
       path: "/campaigns/schedule",
       methods: [HttpMethod.POST],
       integration: new HttpLambdaIntegration("ScheduleInt", scheduleFn),
+      authorizer: adminAuth,
     });
     api.addRoutes({
       path: "/campaigns/cancel",
       methods: [HttpMethod.POST],
       integration: new HttpLambdaIntegration("CancelInt", cancelFn),
+      authorizer: adminAuth,
     });
     api.addRoutes({
       path: "/webhooks/entitlement",
