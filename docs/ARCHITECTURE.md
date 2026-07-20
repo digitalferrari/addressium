@@ -641,6 +641,10 @@ available without an always-on analytics cluster.
 
 ## 8. Security & compliance
 
+> Full threat model, standards mapping (OWASP ASVS / API Top 10, NIST 800-63B,
+> RFC 8725, CIS, SLSA), and the hardened magic-link reference verifier live in
+> [`SECURITY.md`](./SECURITY.md). This section is the summary.
+
 - **Least-privilege IAM** per Lambda; no shared broad roles.
 - **Encryption** at rest (KMS) and in transit throughout.
 - **WAF** on public endpoints; per-IP rate limiting and CAPTCHA on signup to

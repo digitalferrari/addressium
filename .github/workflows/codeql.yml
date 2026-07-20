@@ -1,0 +1,30 @@
+# CodeQL static analysis (docs/SECURITY.md §7).
+# NOTE: before 1.0, pin each `uses:` to a full commit SHA (SLSA / OpenSSF
+# Scorecard requirement). Tags are used here for readability of the scaffold.
+name: codeql
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+  schedule:
+    - cron: "27 3 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    name: analyze (javascript-typescript)
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: github/codeql-action/init@v3
+        with:
+          languages: javascript-typescript
+      - uses: github/codeql-action/analyze@v3

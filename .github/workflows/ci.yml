@@ -1,0 +1,54 @@
+# Build + typecheck + SBOM. Least-privilege by default (docs/SECURITY.md §7).
+# NOTE: before 1.0, pin each `uses:` to a full commit SHA (SLSA / Scorecard).
+name: ci
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+      - run: npm ci
+      - run: npm run build
+      - run: npm test --if-present
+
+  sbom:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - run: npm ci
+      # CycloneDX SBOM published as a build artifact (docs/SECURITY.md §7).
+      - run: npx --yes @cyclonedx/cyclonedx-npm --output-file sbom.cdx.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: sbom.cdx.json
+
+  # Deploys use OIDC to assume a scoped AWS role — NO long-lived access keys.
+  # Wired on tagged releases; commented until the role ARN exists.
+  #
+  # deploy:
+  #   permissions:
+  #     id-token: write        # OIDC
+  #     contents: read
+  #   steps:
+  #     - uses: aws-actions/configure-aws-credentials@v4
+  #       with:
+  #         role-to-assume: arn:aws:iam::<acct>:role/addressium-deploy
+  #         aws-region: us-east-1

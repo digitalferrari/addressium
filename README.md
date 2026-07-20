@@ -31,8 +31,19 @@ owner's AWS account.
 ## Documentation
 
 - [Architecture & Design](docs/ARCHITECTURE.md) — the canonical system design.
+- [Security Design & Threat Model](docs/SECURITY.md) — STRIDE model, standards
+  mapping, and the hardened magic-link reference verifier.
+- [Security Policy](SECURITY.md) — how to report a vulnerability.
 - [Clickable UI prototype](docs/prototype/addressium-prototype.html) — the
   admin console + subscriber site design reference (open in a browser).
+
+## Security
+
+addressium is built to public standards — OWASP ASVS (L2) & API Top 10, NIST
+SP 800-63B, RFC 8725 (JWT), CIS AWS Foundations, and SLSA/OpenSSF for the supply
+chain. The most security-sensitive integration point, the magic-link verifier,
+ships as a hardened, copy-paste module: `packages/magiclink-verify`. See
+[docs/SECURITY.md](docs/SECURITY.md).
 
 ## Repository layout
 
