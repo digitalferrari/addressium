@@ -80,6 +80,15 @@ export class MemSubscribers implements SubscriberStore {
   async put(sub: Subscriber) {
     this.byId.set(subKey(sub.orgId, sub.sub), sub);
   }
+  async list(orgId: string) {
+    return [...this.byId.values()].filter((s) => s.orgId === orgId);
+  }
+  async markEngaged(orgId: string, sub: string, at: string) {
+    const s = this.byId.get(subKey(orgId, sub));
+    if (s && (!s.lastEngagedAt || s.lastEngagedAt < at)) {
+      this.byId.set(subKey(orgId, sub), { ...s, lastEngagedAt: at });
+    }
+  }
 }
 
 export class MemSubscriptions implements SubscriptionStore {

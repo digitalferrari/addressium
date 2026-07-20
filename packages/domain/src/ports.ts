@@ -58,6 +58,13 @@ export interface SubscriberStore {
   /** Resolve by the external pool's Cognito `sub` (the stable identity join key). */
   findByExternalId(orgId: string, externalId: string): Promise<Subscriber | undefined>;
   put(sub: Subscriber): Promise<void>;
+  /** Enumerate every subscriber for an org — batch sweeps (re-engagement, reporting). */
+  list(orgId: string): Promise<Subscriber[]>;
+  /**
+   * Advance `lastEngagedAt` to `at` if it's newer (monotonic). Called on a CLICK
+   * only — opens don't count. No-op if the subscriber is unknown. O(1) update.
+   */
+  markEngaged(orgId: string, sub: string, at: string): Promise<void>;
 }
 
 export interface SubscriptionStore {

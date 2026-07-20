@@ -64,6 +64,9 @@ export async function recordClick(
     at: clock.now().toISOString(),
   };
   await stores.events.append(evt);
+  // Clicks are the engagement signal that resets the sunset clock (opens are not
+  // counted — they're auto-fired by privacy proxies). Monotonic, best-effort.
+  await stores.subscribers.markEngaged(input.orgId, input.subscriberId, evt.at);
   return linkId;
 }
 

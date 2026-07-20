@@ -6,7 +6,7 @@
  * needed and other newsletters are unaffected. "Unsubscribe from all" flips
  * every subscription and records an org-scoped suppression entry.
  */
-import type { Subscription } from "@addressium/core";
+import type { Subscription, SuppressionSource } from "@addressium/core";
 import type { Clock, Stores } from "./ports.js";
 
 export async function unsubscribeFromList(
@@ -29,6 +29,12 @@ export async function unsubscribeAll(
   stores: Stores,
   clock: Clock,
   input: { orgId: string; subscriberId: string; email: string },
+  /**
+   * Why the address is being suppressed: a subscriber-initiated `"unsubscribe"`
+   * (default) or an automated `"inactive"` sunset. Both are org-scoped and
+   * self-clearable, so the person can re-opt-in later (#58).
+   */
+  source: Extract<SuppressionSource, "unsubscribe" | "inactive"> = "unsubscribe",
 ): Promise<number> {
   const subs = await stores.subscriptions.listBySubscriber(input.orgId, input.subscriberId);
   const now = clock.now().toISOString();
@@ -41,7 +47,7 @@ export async function unsubscribeAll(
   await stores.suppression.add({
     orgId: input.orgId,
     email: input.email.toLowerCase(),
-    source: "unsubscribe",
+    source,
     scope: "org",
     addedAt: now,
   });
