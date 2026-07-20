@@ -14,6 +14,8 @@ import {
   type QueryCommandInput,
 } from "@aws-sdk/lib-dynamodb";
 import type {
+  Campaign,
+  CampaignSeries,
   EmailArchive,
   EngagementEvent,
   EntitlementSync,
@@ -25,6 +27,8 @@ import type {
 } from "@addressium/core";
 import type {
   ArchiveStore,
+  CampaignSeriesStore,
+  CampaignStore,
   EntitlementStore,
   EventStore,
   ListStore,
@@ -220,6 +224,17 @@ export class DynamoStores implements Stores {
       this.put({ pk: org(e.orgId), sk: `ENTITLEMENT#${e.subscriberId}`, data: e }),
     latest: (orgId, subscriberId) =>
       this.get<EntitlementSync>(org(orgId), `ENTITLEMENT#${subscriberId}`),
+  };
+
+  campaigns: CampaignStore = {
+    get: (orgId, campaignId) =>
+      this.get<Campaign>(org(orgId), `CAMPAIGNREC#${campaignId}`),
+    put: (c) => this.put({ pk: org(c.orgId), sk: `CAMPAIGNREC#${c.campaignId}`, data: c }),
+  };
+
+  series: CampaignSeriesStore = {
+    get: (orgId, seriesId) => this.get<CampaignSeries>(org(orgId), `SERIES#${seriesId}`),
+    put: (s) => this.put({ pk: org(s.orgId), sk: `SERIES#${s.seriesId}`, data: s }),
   };
 
   sendClaims: SendClaimStore = {

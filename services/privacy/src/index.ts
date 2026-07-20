@@ -1,16 +1,37 @@
 /**
- * addressium service: privacy
- * GDPR/CCPA export + erase-to-tombstone; audit log
+ * addressium service: privacy — GDPR/CCPA data-subject requests (§4.19).
  *
- * See docs/ARCHITECTURE.md. This is a scaffold stub — the handler shape is in
- * place so infra can wire it; business logic is TODO.
+ * export → returns the person's record; erase → anonymizes profile,
+ * unsubscribes everywhere, writes a suppression tombstone. Admin-invoked.
  */
+import { DynamoStores } from "@addressium/adapters-aws";
+import { SystemClock, eraseSubscriber, exportSubscriber } from "@addressium/domain";
 
-export interface HandlerEvent {
-  [key: string]: unknown;
+function env(name: string): string {
+  const v = process.env[name];
+  if (!v) throw new Error(`missing env ${name}`);
+  return v;
 }
 
-export async function handler(event: HandlerEvent): Promise<unknown> {
-  // TODO: implement — GDPR/CCPA export + erase-to-tombstone; audit log
-  return { ok: true, service: "privacy", received: event };
+const clock = new SystemClock();
+let _stores: DynamoStores | undefined;
+const stores = () => (_stores ??= new DynamoStores(env("TABLE_NAME")));
+
+export interface PrivacyEvent {
+  action: "export" | "erase";
+  orgId: string;
+  email: string;
+}
+
+export async function handler(event: PrivacyEvent) {
+  const s = stores();
+  if (event.action === "export") {
+    const data = await exportSubscriber(s, event.orgId, event.email);
+    return { ok: true, found: data !== undefined, data };
+  }
+  if (event.action === "erase") {
+    const erased = await eraseSubscriber(s, clock, event.orgId, event.email);
+    return { ok: true, erased };
+  }
+  throw new Error(`unknown action ${String((event as { action?: string }).action)}`);
 }

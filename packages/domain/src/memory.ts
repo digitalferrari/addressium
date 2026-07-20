@@ -3,6 +3,8 @@
  * SES implementations live in the services and satisfy the same interfaces.
  */
 import type {
+  Campaign,
+  CampaignSeries,
   EmailArchive,
   EngagementEvent,
   EntitlementSync,
@@ -15,6 +17,8 @@ import type {
 import type {
   ArchiveStore,
   CampaignScheduler,
+  CampaignSeriesStore,
+  CampaignStore,
   EmailSender,
   EntitlementStore,
   EventStore,
@@ -137,6 +141,26 @@ export class MemEntitlements implements EntitlementStore {
   }
 }
 
+export class MemCampaigns implements CampaignStore {
+  private map = new Map<string, Campaign>();
+  async get(orgId: string, campaignId: string) {
+    return this.map.get(subKey(orgId, campaignId));
+  }
+  async put(c: Campaign) {
+    this.map.set(subKey(c.orgId, c.campaignId), c);
+  }
+}
+
+export class MemCampaignSeries implements CampaignSeriesStore {
+  private map = new Map<string, CampaignSeries>();
+  async get(orgId: string, seriesId: string) {
+    return this.map.get(subKey(orgId, seriesId));
+  }
+  async put(s: CampaignSeries) {
+    this.map.set(subKey(s.orgId, s.seriesId), s);
+  }
+}
+
 export class MemSendClaims implements SendClaimStore {
   private set = new Set<string>();
   async claim(orgId: string, campaignId: string) {
@@ -189,5 +213,7 @@ export function memStores(): Stores {
     events: new MemEvents(),
     entitlements: new MemEntitlements(),
     sendClaims: new MemSendClaims(),
+    campaigns: new MemCampaigns(),
+    series: new MemCampaignSeries(),
   };
 }

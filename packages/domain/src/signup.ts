@@ -29,6 +29,10 @@ export async function signup(
   const list = await stores.lists.get(input.orgId, input.listId);
   if (!list) throw new Error("unknown list");
   if (list.visibility === "closed") throw new Error("list is closed to signups");
+  // Respect suppression (hard bounce / complaint / erasure tombstone).
+  if (await stores.suppression.isSuppressed(input.orgId, email)) {
+    throw new Error("address is suppressed");
+  }
 
   // Reuse an existing subscriber (same person, keyed by Cognito sub) or create.
   let subscriber = await stores.subscribers.findByEmail(input.orgId, email);

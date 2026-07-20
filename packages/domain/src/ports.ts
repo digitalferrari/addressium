@@ -5,6 +5,8 @@
  * adapters in tests and against DynamoDB / SES / KMS in production — no rewrite.
  */
 import type {
+  Campaign,
+  CampaignSeries,
   EmailArchive,
   EngagementEvent,
   EntitlementSync,
@@ -77,6 +79,16 @@ export interface SendClaimStore {
   claim(orgId: string, campaignId: string): Promise<boolean>;
 }
 
+export interface CampaignStore {
+  get(orgId: string, campaignId: string): Promise<Campaign | undefined>;
+  put(c: Campaign): Promise<void>;
+}
+
+export interface CampaignSeriesStore {
+  get(orgId: string, seriesId: string): Promise<CampaignSeries | undefined>;
+  put(s: CampaignSeries): Promise<void>;
+}
+
 /** What actually puts mail on the wire (SES in prod; capture in tests). */
 export interface SentMessage {
   from: string;
@@ -143,4 +155,6 @@ export interface Stores {
   events: EventStore;
   entitlements: EntitlementStore;
   sendClaims: SendClaimStore;
+  campaigns: CampaignStore;
+  series: CampaignSeriesStore;
 }
