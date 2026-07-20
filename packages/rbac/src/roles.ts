@@ -15,6 +15,7 @@ export type Capability =
   | "subscribers:manage" // add / edit / manual unsubscribe
   | "subscribers:delete" // delete contacts (destructive)
   | "newsletters:close" // close / reopen (destructive)
+  | "branding:manage" // subscriber-site branding + presentation toggles
   | "suppression:manage"
   | "alerts:manage"
   | "identity:manage" // pools, organizations
@@ -30,6 +31,7 @@ const EDITOR: Capability[] = [
   "templates:manage",
   "segments:manage",
   "subscribers:manage",
+  "branding:manage",
 ];
 
 const ANALYST: Capability[] = ["reports:view"];
@@ -45,6 +47,7 @@ const ALL: Capability[] = [
   "subscribers:manage",
   "subscribers:delete",
   "newsletters:close",
+  "branding:manage",
   "suppression:manage",
   "alerts:manage",
   "identity:manage",

@@ -83,6 +83,8 @@ export interface Organization {
    * held in Secrets Manager; only the ARN + vendor/model live here.
    */
   aiConfig?: AiConfig;
+  /** Subscriber-site branding/theme (§4.10, #31). */
+  branding?: Branding;
   setupComplete: boolean;
 }
 
@@ -91,6 +93,28 @@ export interface AiConfig {
   vendor: AiVendor;
   model: string;
   apiKeySecretArn: string;
+}
+
+/** Subscriber-site branding/theme (§4.10, #31). */
+export type Background =
+  | { type: "solid"; color: string }
+  | { type: "gradient"; from: string; to: string; angle: number };
+export interface Branding {
+  logoUrl?: string;
+  primaryColor: string;
+  secondaryColor: string;
+  background: Background;
+}
+
+/** Per-list subscriber-site presentation toggles (§4.10, #33). */
+export interface ListPresentation {
+  showFrequency: boolean;
+  showSendTime: boolean;
+  showDescription: boolean;
+  showReaderCount: boolean;
+  showFreePaidCount: boolean;
+  frequencyLabel?: string;
+  sendTimeLabel?: string;
 }
 
 export interface Subscriber {
@@ -121,6 +145,8 @@ export interface List {
   visibility: ListVisibility;
   complianceFooter: string;
   physicalAddress: string;
+  /** Subscriber-site presentation toggles (§4.10, #33). */
+  presentation?: ListPresentation;
 }
 
 export interface Subscription {

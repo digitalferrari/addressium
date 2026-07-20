@@ -21,7 +21,10 @@ import {
   confirmOptIn,
   effectiveOneOffTime,
   manualSuppress,
+  publicListView,
   setAiConfig,
+  setBranding,
+  setListPresentation,
   saveCampaignDraft,
   saveList,
   saveSegment,
@@ -312,6 +315,58 @@ export async function subscriberUnsubscribeHandler(event: HttpEvent): Promise<Ht
     if (!email) return json(400, { error: "email required for unsubscribe-all" });
     const n = await unsubscribeAll(stores(), clock, { orgId, subscriberId, email });
     return json(200, { status: "unsubscribed", scope: "all", lists: n });
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+/** POST /orgs/branding — set subscriber-site branding/theme (#31). GET is public. */
+export async function brandingHandler(event: HttpEvent): Promise<HttpResult> {
+  try {
+    const method = event.requestContext?.http?.method ?? (event.body ? "POST" : "GET");
+    if (method === "GET") {
+      // Public: the subscriber site reads branding to theme itself.
+      const orgId = event.pathParameters?.org ?? "";
+      const org = await stores().organizations.get(orgId);
+      return json(200, org?.branding ?? null);
+    }
+    const { orgId, branding } = JSON.parse(event.body ?? "{}") as {
+      orgId?: string;
+      branding?: import("@addressium/core").Branding;
+    };
+    if (!orgId || !branding) return json(400, { error: "orgId and branding required" });
+    requireGrant(event, "branding:manage", orgId);
+    const org = await setBranding(stores(), orgId, branding);
+    return json(200, org.branding);
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+/** POST /lists/presentation — set a list's subscriber-site toggles (#33). */
+export async function listPresentationHandler(event: HttpEvent): Promise<HttpResult> {
+  try {
+    const { orgId, listId, presentation } = JSON.parse(event.body ?? "{}") as {
+      orgId?: string;
+      listId?: string;
+      presentation?: import("@addressium/core").ListPresentation;
+    };
+    if (!orgId || !listId || !presentation) return json(400, { error: "orgId, listId, presentation required" });
+    requireGrant(event, "branding:manage", orgId);
+    return json(200, await setListPresentation(stores(), orgId, listId, presentation));
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+/** GET /orgs/{org}/lists/{list}/public — public list view honoring toggles (#33). */
+export async function publicListHandler(event: HttpEvent): Promise<HttpResult> {
+  try {
+    const orgId = event.pathParameters?.org ?? "";
+    const listId = event.pathParameters?.list ?? "";
+    if (!orgId || !listId) return json(400, { error: "org and list required" });
+    const view = await publicListView(stores(), orgId, listId);
+    return view ? json(200, view) : json(404, { error: "not found" });
   } catch (e) {
     return fail(e);
   }

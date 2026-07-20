@@ -7,7 +7,17 @@
  * these; org scoping is enforced by the caller's grant and the orgId on each
  * entity. No AWS or HTTP concerns here.
  */
-import type { AiConfig, Campaign, HotCounters, List, ListVisibility, Organization, Segment } from "@addressium/core";
+import type {
+  AiConfig,
+  Branding,
+  Campaign,
+  HotCounters,
+  List,
+  ListPresentation,
+  ListVisibility,
+  Organization,
+  Segment,
+} from "@addressium/core";
 import { schemas } from "@addressium/core";
 import type { Clock, Stores } from "./ports.js";
 
@@ -87,6 +97,96 @@ export async function saveSegment(stores: Stores, input: schemas.SaveSegmentInpu
   };
   await stores.segments.put(segment);
   return segment;
+}
+
+/** Set the org's subscriber-site branding/theme (§4.10, #31). */
+export async function setBranding(
+  stores: Stores,
+  orgId: string,
+  branding: Branding,
+): Promise<Organization> {
+  const org = await stores.organizations.get(orgId);
+  if (!org) throw new Error("unknown org");
+  const updated: Organization = { ...org, branding };
+  await stores.organizations.put(updated);
+  return updated;
+}
+
+/** Set a list's subscriber-site presentation toggles (§4.10, #33). */
+export async function setListPresentation(
+  stores: Stores,
+  orgId: string,
+  listId: string,
+  presentation: ListPresentation,
+): Promise<List> {
+  const list = await stores.lists.get(orgId, listId);
+  if (!list) throw new Error("unknown list");
+  const updated: List = { ...list, presentation };
+  await stores.lists.put(updated);
+  return updated;
+}
+
+export interface AudienceCounts {
+  total: number;
+  free: number;
+  paid: number;
+}
+
+/** Confirmed-subscriber counts for a list, split by entitlement (reader/free/paid). */
+export async function listAudienceCounts(
+  stores: Stores,
+  orgId: string,
+  listId: string,
+): Promise<AudienceCounts> {
+  const confirmed = await stores.subscriptions.listConfirmed(orgId, listId);
+  const counts: AudienceCounts = { total: confirmed.length, free: 0, paid: 0 };
+  for (const sub of confirmed) {
+    const subscriber = await stores.subscribers.get(orgId, sub.subscriberId);
+    if (subscriber?.entitlement === "paid") counts.paid++;
+    else counts.free++;
+  }
+  return counts;
+}
+
+/**
+ * Public subscriber-site view of a list: description + presentation toggles, and
+ * the aggregate counts ONLY when their toggle is on (never a subscriber roster).
+ */
+export async function publicListView(
+  stores: Stores,
+  orgId: string,
+  listId: string,
+): Promise<{
+  listId: string;
+  name: string;
+  description?: string;
+  presentation: ListPresentation;
+  frequencyLabel?: string;
+  sendTimeLabel?: string;
+  readerCount?: number;
+  freePaidCount?: { free: number; paid: number };
+} | undefined> {
+  const list = await stores.lists.get(orgId, listId);
+  if (!list) return undefined;
+  const p: ListPresentation = list.presentation ?? {
+    showFrequency: false,
+    showSendTime: false,
+    showDescription: true,
+    showReaderCount: false,
+    showFreePaidCount: false,
+  };
+  const needCounts = p.showReaderCount || p.showFreePaidCount;
+  const counts = needCounts ? await listAudienceCounts(stores, orgId, listId) : undefined;
+  return {
+    listId: list.listId,
+    name: list.name,
+    description: p.showDescription ? list.description : undefined,
+    presentation: p,
+    frequencyLabel: p.showFrequency ? p.frequencyLabel : undefined,
+    sendTimeLabel: p.showSendTime ? p.sendTimeLabel : undefined,
+    readerCount: p.showReaderCount ? counts?.total : undefined,
+    freePaidCount: p.showFreePaidCount && counts ? { free: counts.free, paid: counts.paid } : undefined,
+  };
 }
 
 /** Set the org's LLM analytics provider (§4.8, #32). Key is already in Secrets Manager. */
