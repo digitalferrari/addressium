@@ -55,8 +55,17 @@ organization's system.
 - **Segmentation** over subscriber attributes and engagement, via DynamoDB GSIs
   and materialized tags
 - **Templates** authored in MJML with merge variables and live preview
-- **Engagement analytics**: sends, deliveries, opens, clicks, bounces,
-  complaints, unsubscribes — real-time counters + queryable event history
+- **Engagement analytics & reporting dashboards**: sends, deliveries, opens,
+  clicks, bounces, complaints, unsubscribes — real-time counters, queryable
+  event history, per-campaign funnels, and link performance
+- **Email archive + click overlay**: a copy of every generic (per-campaign)
+  rendered email is stored, so reporting can overlay per-link click data on the
+  actual email — a click map
+- **Magic-link SSO tokens**: newsletter links can carry a signed token that logs
+  the reader into a *lite, content-only* session on the operator's main website
+  (paywall/registration-wall bypass), carrying selected profile claims including
+  an `entitlement`. addressium mints and signs the token; the main site verifies
+  it and establishes the session (that sign-in logic is out of scope — see §12)
 - **Migration importer**: Pinpoint export and CSV ingest (endpoints, segments,
   suppression lists)
 - **Admin console** (React SPA) protected by Cognito
@@ -83,6 +92,11 @@ organization's system.
 | Opt-in | Double opt-in default (per-list configurable) | Deliverability + consent provenance |
 | Templating | MJML now, block editor later | Robust responsive email; store shaped for a visual editor |
 | Migration | First-class Pinpoint + CSV importer | Adoption hook for the "Pinpoint is ending" moment |
+| Email archive | Generic copy per campaign | Powers the click overlay; tiny storage; no recipient PII or tokens at rest |
+| Magic-link token | Asymmetric JWT + JWKS | Main site verifies offline; no shared secret; clean system separation |
+| Token posture | Long-lived, low-privilege (lite scope) | Best newsletter UX; forwarded links can only ever read content, never touch account |
+| Token redemption | Reusable within TTL, stateless | No callback to addressium; keeps the two systems decoupled |
+| Entitlement freshness | Synced from system of record | addressium's entitlement copy stays current; token also stamps `entitlement_asof` |
 | IaC / language | AWS CDK, TypeScript monorepo | One language across infra, backend, and frontend |
 
 ---
@@ -128,7 +142,11 @@ organization's system.
 - **Sending plane** (async): campaign launch → segment resolution → suppression
   filter → SQS fan-out → throttled SES send.
 - **Event plane** (async): SES events → SNS → SQS → processor → counters +
-  suppression + Firehose.
+  suppression + link aggregation + Firehose (magic-link tokens redacted).
+- **Archive/reporting plane**: sender writes a generic rendered copy + link-map
+  to S3/DynamoDB; the admin SPA paints the click overlay and dashboards from it.
+- **Token plane**: the token service mints KMS-signed magic-link JWTs and serves
+  a JWKS endpoint the operator's main website verifies against (§12).
 
 ---
 
@@ -172,6 +190,14 @@ API Gateway HTTP API → Lambda. Two authorizer scopes:
 Handlers are thin: validate (zod schemas from `packages/core`), authorize,
 mutate DynamoDB, enqueue async work. No business logic in the frontend.
 
+- **Entitlement sync endpoint**: a dedicated, authenticated **operator API /
+  webhook** receives entitlement updates from the operator's billing /
+  subscription **system of record** and writes `entitlement` + `entitlement_asof`
+  onto the subscriber. This keeps the value addressium mints into magic-link
+  tokens near-real-time. Authenticated with a scoped machine credential (API
+  key / signed webhook), separate from the Cognito operator auth. Idempotent by
+  `(subscriber, source, version)`.
+
 ### 4.4 Sender (`services/sender`)
 
 - Campaign launch resolves the target segment to a recipient stream.
@@ -184,6 +210,15 @@ mutate DynamoDB, enqueue async work. No business logic in the frontend.
   quota so the sandbox/production sending limits are never exceeded.
 - Every message is tagged (campaign id, subscriber id) via SES message tags so
   events can be attributed.
+- **Archive at render time** (once per campaign): the first render produces the
+  **generic body** — the template rendered with merge fields and the magic-link
+  token left as placeholders — which is written to the archive S3 bucket, and
+  each `<a>` is assigned a stable **link-id**. This is what the click overlay is
+  painted on (see §4.8). No per-recipient copies are stored.
+- **Magic-link tokens are minted per recipient** (see §4.9) and passed as a
+  per-destination `ReplacementTemplateData` merge variable, so `SendBulkEmail`
+  still batches 50 at a time. The token is the only per-recipient difference in
+  the link; the link's identity for reporting is its link-id, not its full URL.
 
 ### 4.5 Events processor (`services/events`)
 
@@ -192,6 +227,14 @@ events → SNS → SQS → Lambda. The processor:
 
 - Appends to the **Events** table (append-only engagement log).
 - Updates **hot counters** on the campaign and subscriber records.
+- **Aggregates clicks by link-id** (resolving the clicked URL back to the
+  link-id assigned at archive time) so the click overlay has per-link totals and
+  unique counts.
+- **Redacts magic-link tokens before persistence.** SES click tracking reports
+  the full destination URL, which for a magic link includes the bearer token in
+  its query string. The processor **strips the token parameter** before writing
+  to the Events table or Firehose, so magic-link credentials never land at rest
+  in the analytics pipeline.
 - Streams events to **Firehose → S3** for Athena querying.
 - On **hard bounce / complaint**, adds the address to the **suppression list**
   and flips the subscription status; monitors complaint rate and **auto-throttles**
@@ -217,6 +260,57 @@ Ingests **Amazon Pinpoint exports** and **CSV** files:
 Runs as an async job (S3 upload → Lambda/Step Functions) with a dry-run
 preview, dedupe, and an import report (created/updated/skipped/errored).
 
+### 4.8 Reporting & email archive (`services/reporting` + `apps/admin-web`)
+
+Powers the full reporting dashboards and the click-map overlay.
+
+- **Email archive**: the generic rendered body written by the sender (§4.4)
+  lives in an immutable, encrypted S3 bucket, one object per campaign /
+  automation step. A DynamoDB **EmailArchive** record points to it and stores
+  the **link-map** (`link-id → { url template, position, label }`).
+- **Click overlay**: the admin SPA renders the archived body in a sandboxed
+  iframe and paints per-link badges — total clicks, unique clicks, CTR — from
+  the link-id aggregation produced by the events processor (§4.5). This is the
+  Mailchimp-style click map.
+- **Dashboards**: campaign funnels (sent → delivered → open → click →
+  unsub/complaint), link performance tables, list-growth trends, deliverability
+  (bounce/complaint) trends, and per-subscriber activity timelines. Real-time
+  numbers come from the hot counters; deeper cuts come from Athena over the S3
+  event lake (§7).
+- **Retention**: archive objects follow an operator-configurable S3 lifecycle
+  policy. Because archived bodies are generic (no baked-in recipient PII or
+  tokens), they are safe to retain for the life of the reporting window.
+
+### 4.9 Magic-link token service (`services/tokens`)
+
+Mints the signed tokens embedded in newsletter links. **Scope boundary:**
+addressium *issues and signs* tokens and *publishes the verification keys*; the
+operator's main website *verifies* them and *establishes the session*. The
+sign-in / Cognito session-exchange logic on the main site is **out of scope**
+(see §12 for the contract).
+
+- **Signing**: an **asymmetric key in KMS** (ES256/RS256). addressium exposes a
+  **JWKS endpoint** (via API Gateway/CloudFront) so the main website verifies
+  offline, with no shared secret and no callback.
+- **Token shape** (JWT claims):
+  - `sub` — stable subscriber id
+  - `scope: "content:read"` — **lite** access only
+  - `amr: ["magic_link"]` — marks the session's origin so the main site can
+    treat it as lite and force a step-up before anything sensitive
+  - `entitlement` — coarse content tier / feature flags from the profile
+  - `entitlement_asof` — freshness stamp for the entitlement value
+  - `aud` (main site), `iss` (this deployment), `exp` (long-lived, per §11)
+  - additional profile claims from an **operator-configurable whitelist**
+- **Claim minimisation**: only whitelisted, coarse values ride in the token —
+  never private account detail — because the token travels in a URL.
+- **Statelessness**: tokens are reusable within their TTL; addressium keeps no
+  redemption state, keeping the two systems decoupled. Safety comes from the
+  lite scope + bounded TTL, not from single-use tracking.
+- **Issued only to confirmed subscribers.**
+
+See §8 for the security model (why lite + forwardable is safe) and §12 for the
+main-site integration contract.
+
 ---
 
 ## 5. Data model
@@ -225,14 +319,16 @@ DynamoDB **single-table** design with targeted GSIs. Entities:
 
 | Entity | Purpose | Key notes |
 |---|---|---|
-| **Subscriber** | Durable person record | email (normalized), attributes, locale, source, consent {timestamp, ip, url}, global status |
+| **Subscriber** | Durable person record | email (normalized), attributes, locale, source, consent {timestamp, ip, url}, global status, `entitlement` + `entitlement_asof` |
 | **List** | A named audience | opt-in policy, from-address, reply-to, compliance footer, physical address |
 | **Subscription** | Subscriber ↔ List join | per-list status: `pending`/`confirmed`/`unsubscribed`/`bounced`/`complained` |
 | **Segment** | Saved filter | predicate over attributes + engagement; resolved at send time |
 | **Campaign** | A send | content ref, audience (list/segment), schedule, sending config, hot counters |
 | **Template** | Reusable content | MJML source, merge variables, versioned; store shaped for future visual editor |
-| **Event** | Engagement log | append-only: sent/delivered/open/click/bounce/complaint/unsub, attributed by tags |
+| **Event** | Engagement log | append-only: sent/delivered/open/click/bounce/complaint/unsub, attributed by tags; magic-link tokens redacted |
 | **SuppressionEntry** | Do-not-send | source (hard-bounce/complaint/manual), enforced pre-send |
+| **EmailArchive** | Generic rendered copy | S3 pointer + link-map (`link-id → url template, position, label`); one per campaign/step |
+| **EntitlementSync** | Sync audit | last inbound entitlement update per subscriber (source, value, timestamp) for freshness/debugging |
 
 ### Access patterns → GSIs
 
@@ -306,6 +402,36 @@ available without an always-on analytics cluster.
 - **Data residency**: everything stays in the operator's account and chosen
   region.
 
+### 8.1 Magic-link security model
+
+A login link sitting in an inbox is a **bearer credential**, and email is
+forwardable, so the design assumes a magic link *will* sometimes reach someone
+other than the intended subscriber. Safety comes from strictly limiting what the
+link can ever grant, not from assuming it stays private:
+
+- **Lite scope, enforced by the main site.** The token asserts
+  `scope: "content:read"` and `amr: ["magic_link"]`. A magic-link session may
+  log the reader in and unlock paywalled/registration-wall **content only**. It
+  must **never** reach the profile / private-account pages — those require a
+  **step-up to full authentication**. addressium *declares* lite in the token;
+  the main website *enforces* lite. This split is the core forwarding
+  protection: even a forwarded link can only ever read content, never expose or
+  change the original subscriber's account.
+- **Entitlement is content-only.** The `entitlement` claim unlocks content
+  tiers, never account control, so a stale or forwarded entitlement cannot cause
+  real harm; `entitlement_asof` lets the main site re-validate for anything
+  high-value.
+- **Asymmetric signing.** Tokens are signed by a KMS-held private key; the main
+  site verifies via the JWKS endpoint. addressium never shares a secret, and the
+  signing key never leaves KMS.
+- **No tokens at rest in analytics.** The events processor redacts the token
+  query parameter before persisting click events (§4.5).
+- **Claim minimisation + whitelist.** Only coarse, operator-whitelisted profile
+  values ride in the URL-borne token.
+- **Confirmed subscribers only**, and tokens carry a bounded `exp`. Because the
+  scope is lite, a longer TTL is an acceptable UX/security trade (§11); an
+  operator who wants a tighter posture can shorten the TTL.
+
 ---
 
 ## 9. Deployment & operations
@@ -333,10 +459,12 @@ addressium/
 │   ├── core/             # shared domain types + zod schemas
 │   └── segment/          # segment engine (GSI/tags impl; OpenSearch drop-in)
 ├── services/
-│   ├── api/              # API Gateway Lambda handlers
-│   ├── sender/           # SQS consumers → SES SendBulkEmail (throttled)
-│   ├── events/           # SES event processor → counters + suppression + Firehose
+│   ├── api/              # API Gateway Lambda handlers + entitlement-sync endpoint
+│   ├── sender/           # SQS consumers → SES SendBulkEmail (throttled) + archive/link-map
+│   ├── events/           # SES event processor → counters + link-agg + token redaction + Firehose
 │   ├── automations/      # Step Functions drip/journey state machines
+│   ├── reporting/        # dashboards + click-overlay data (archive + link aggregation)
+│   ├── tokens/           # magic-link JWT minting + KMS signing + JWKS endpoint
 │   └── importer/         # Pinpoint / CSV migration importer
 ├── infra/
 │   └── cdk/              # all CDK stacks + setup wizard
@@ -350,9 +478,11 @@ addressium/
 
 - **v1 — Core email platform**: lists, signup + double opt-in, subscribers,
   MJML templates, broadcasts (send-now/scheduled/recurring), suppression,
-  deliverability (DKIM/DMARC/one-click unsubscribe), analytics, Cognito admin,
-  Pinpoint/CSV importer, CDK deploy + setup wizard.
+  deliverability (DKIM/DMARC/one-click unsubscribe), analytics + reporting
+  dashboards, email archive + click overlay, Cognito admin, Pinpoint/CSV
+  importer, CDK deploy + setup wizard.
 - **v1.x**: drip automations (Step Functions), materialized-tag segment builder,
+  magic-link token service (JWKS + entitlement sync + lite-scope tokens),
   preference center polish.
 - **v2 — Extensibility**: OpenSearch segmentation drop-in, visual template
   block editor, visual automation/journey builder.
@@ -371,6 +501,40 @@ addressium/
   export to S3 for portability.
 - **Webhooks/API for operators**: an outbound webhook + public API so operators
   can integrate addressium with their own systems.
+- **Magic-link TTL default**: ship a sensible default (e.g. 7–30 days) with a
+  clear knob; revisit once real forwarding/abuse data exists.
+
+---
+
+## 12. Main-site integration contract (magic-link, out of scope to build)
+
+addressium's responsibility ends at **minting a signed token and publishing the
+keys to verify it**. The operator's main website implements the other half. This
+section defines the boundary so both sides can be built independently.
+
+**addressium provides:**
+- Newsletter links containing a magic-link JWT (per §4.9), signed by a KMS
+  asymmetric key.
+- A **JWKS endpoint** for offline verification, with key rotation.
+- A published **claim contract**: `sub`, `scope: "content:read"`,
+  `amr: ["magic_link"]`, `entitlement`, `entitlement_asof`, `aud`, `iss`, `exp`,
+  plus whitelisted profile claims.
+
+**The main website implements (out of scope here):**
+1. Read the token from the inbound URL client-side.
+2. Verify signature/`exp`/`aud`/`iss` against the JWKS.
+3. Establish a session — e.g. a **Cognito custom-auth (`CUSTOM_AUTH`) challenge**
+   whose Define/Verify Auth Challenge Lambdas validate the token — mapping `sub`
+   to the site's own user (JIT-provisioning if needed).
+4. **Enforce lite scope**: grant content/paywall read only; gate profile and
+   private-account pages behind a **step-up to full authentication**; never
+   elevate a `magic_link`-origin session.
+5. Optionally **re-validate `entitlement`** against its own source of truth for
+   high-value actions, using `entitlement_asof` to decide when.
+
+This contract is the reason a forwarded newsletter is safe: the token can only
+ever mint a lite content session, and the private profile page is unreachable
+without a real login the forwardee does not have.
 
 ---
 
