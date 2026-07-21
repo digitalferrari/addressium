@@ -22,7 +22,7 @@
     "@aws-sdk/client-scheduler": "^3.600.0",
     "@aws-sdk/client-secrets-manager": "^3.600.0",
     "@aws-sdk/client-sesv2": "^3.600.0",
-    "@aws-sdk/client-sns": "^3.600.0",
+    "@aws-sdk/client-sns": "^3.1091.0",
     "@aws-sdk/client-sqs": "^3.600.0",
     "@aws-sdk/lib-dynamodb": "^3.600.0",
     "@smithy/protocol-http": "^4.0.0",
