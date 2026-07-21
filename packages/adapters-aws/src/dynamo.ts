@@ -3,7 +3,9 @@
  *
  * Every item is `{ pk, sk, gsi1pk?, gsi1sk?, data }` where `data` is the domain
  * entity. Keys are prefixed with the org so silos never intermix
- * (docs/ARCHITECTURE.md §4.11, §5). Pagination is elided in this slice (TODO).
+ * (docs/ARCHITECTURE.md §4.11, §5). Unbounded reads go through `queryAll`, which
+ * follows `LastEvaluatedKey` so large result sets aren't truncated at the ~1MB
+ * single-page cap (see the pagination integration test, #97).
  */
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import {
@@ -320,6 +322,12 @@ export class DynamoStores implements Stores {
     get: (orgId, campaignId) =>
       this.get<Campaign>(org(orgId), `CAMPAIGNREC#${campaignId}`),
     put: (c) => this.put({ pk: org(c.orgId), sk: `CAMPAIGNREC#${c.campaignId}`, data: c }),
+    list: (orgId) =>
+      this.queryAll<Campaign>({
+        TableName: this.tableName,
+        KeyConditionExpression: "pk = :pk AND begins_with(sk, :s)",
+        ExpressionAttributeValues: { ":pk": org(orgId), ":s": "CAMPAIGNREC#" },
+      }),
   };
 
   series: CampaignSeriesStore = {

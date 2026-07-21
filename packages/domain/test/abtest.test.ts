@@ -15,10 +15,12 @@ import {
   startAbTest,
   decideAbWinner,
   sendAbWinnerToRemainder,
+  finalizeAbTest,
   recordOpen,
   abCampaignId,
   type EmailTemplate,
 } from "@addressium/domain";
+import type { Campaign } from "@addressium/core";
 import { generateKeyPair } from "jose";
 
 const ORG = "summit";
@@ -123,4 +125,42 @@ test("decideAbWinner breaks a tie toward A", async () => {
   await startAbTest(h.stores, h.sender, h.magic, h.clock, descriptor, abTest);
   const decision = await decideAbWinner(h.stores, "tie", ORG, abTest); // 0-0
   assert.equal(decision.winner, "A");
+});
+
+test("finalizeAbTest persists the winner, sends the remainder once, and is idempotent", async () => {
+  const h = await harness(100);
+  const descriptor = { orgId: ORG, campaignId: "promo2", listId: LIST, subject: "ignored", template };
+  const campaign: Campaign = {
+    orgId: ORG,
+    campaignId: "promo2",
+    type: "one_off",
+    subject: "ignored",
+    templateId: "t1",
+    audience: { listId: LIST },
+    abTest,
+    status: "sending",
+    counters: { sent: 0, delivered: 0, opens: 0, clicks: 0, bounces: 0, complaints: 0, unsubscribes: 0 },
+  };
+  await h.stores.campaigns.put(campaign);
+
+  const { split } = await startAbTest(h.stores, h.sender, h.magic, h.clock, descriptor, abTest);
+  assert.deepEqual(split.remainder, { offset: 20, limit: 80 });
+  // B wins on opens.
+  await recordOpen(h.stores, h.clock, ORG, abCampaignId("promo2", "B"), "s10");
+  h.sender.sent.length = 0;
+
+  const first = await finalizeAbTest(h.stores, h.sender, h.magic, h.clock, descriptor, abTest);
+  assert.equal(first.alreadyFinalized, false);
+  assert.equal(first.decision.winner, "B");
+  assert.equal(first.remainder?.sent, 80);
+  assert.ok(h.sender.sent.every((m) => m.subject === "Subject B"));
+  // Winner persisted on the campaign for the report.
+  assert.equal((await h.stores.campaigns.get(ORG, "promo2"))?.abTest?.winner, "B");
+
+  // A re-fired schedule must not double-send.
+  h.sender.sent.length = 0;
+  const second = await finalizeAbTest(h.stores, h.sender, h.magic, h.clock, descriptor, abTest);
+  assert.equal(second.alreadyFinalized, true);
+  assert.equal(second.remainder, null);
+  assert.equal(h.sender.sent.length, 0);
 });

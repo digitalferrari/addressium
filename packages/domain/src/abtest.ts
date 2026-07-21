@@ -130,6 +130,63 @@ export async function sendAbWinnerToRemainder(
   );
 }
 
+export interface AbFinalizeResult {
+  decision: AbDecision;
+  remainder: SendResult | null;
+  alreadyFinalized: boolean;
+}
+
+/**
+ * Phase-2 orchestration (#25, #96): after the decision window, resolve the
+ * winner, persist it on the campaign, and send the winning subject to the
+ * remainder — exactly once. Intended as the target of an EventBridge Scheduler
+ * one-off set `test.decisionWindowMins` after phase 1 (mirrors how one-off and
+ * recurring sends are scheduled).
+ *
+ * Idempotency: the remainder send is guarded by a send-claim on the `final`
+ * sub-campaign id, so a retried trigger re-derives the (now-persisted) winner
+ * but does not double-send. The remainder is attributed under the same base
+ * campaign's `#ab-final` id so reporting rolls up correctly.
+ */
+export async function finalizeAbTest(
+  stores: Stores,
+  sender: EmailSender,
+  magic: MagicLinkSigner,
+  clock: Clock,
+  descriptor: SendDescriptor,
+  test: AbTest,
+  opts: SendOptions = {},
+): Promise<AbFinalizeResult> {
+  const decision = await decideAbWinner(stores, descriptor.campaignId, descriptor.orgId, test);
+
+  // Persist the resolved winner on the campaign so the report and any retry see
+  // a stable decision (buildAbReport reads test.winner).
+  const campaign = await stores.campaigns.get(descriptor.orgId, descriptor.campaignId);
+  if (campaign?.abTest && campaign.abTest.winner !== decision.winner) {
+    await stores.campaigns.put({ ...campaign, abTest: { ...campaign.abTest, winner: decision.winner } });
+  }
+
+  // Claim the remainder send so a re-fired schedule can't double-send it.
+  const finalId = abCampaignId(descriptor.campaignId, "final");
+  const fresh = await stores.sendClaims.claim(descriptor.orgId, finalId);
+  if (!fresh) return { decision, remainder: null, alreadyFinalized: true };
+
+  const confirmed = await stores.subscriptions.listConfirmed(descriptor.orgId, descriptor.listId);
+  const split = planAbSplit(confirmed.length, test.splitPct);
+  const remainder = await sendAbWinnerToRemainder(
+    stores,
+    sender,
+    magic,
+    clock,
+    descriptor,
+    test,
+    split,
+    decision.winner,
+    opts,
+  );
+  return { decision, remainder, alreadyFinalized: false };
+}
+
 export interface AbReport {
   aScore: number;
   bScore: number;
