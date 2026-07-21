@@ -12,6 +12,7 @@ import {
   GoogleRecaptchaVerifier,
   SesEmailSender,
   getSecret,
+  sanitizeEmailHtml,
   upsertSecret,
 } from "@addressium/adapters-aws";
 import { schemas } from "@addressium/core";
@@ -28,13 +29,13 @@ import {
   isHoneypotTripped,
   markScheduleActive,
   transitionSchedule,
+  type EmailTemplate,
   provisionSubscriberAccount,
   manualSuppress,
   publicListView,
   setAiConfig,
   setBranding,
   setListPresentation,
-  sanitizeEmailHtml,
   saveCampaignDraft,
   saveList,
   saveSegment,
@@ -205,9 +206,12 @@ export async function scheduleCampaignHandler(event: HttpEvent): Promise<HttpRes
   try {
     const body = schemas.scheduleCampaignSchema.parse(JSON.parse(event.body ?? "{}"));
     requireGrant(event, "campaigns:schedule", body.orgId); // admin-only (§4.12)
-    // Raw-HTML bodies get the baseline sanitizer before they're stored/sent.
-    const template = "html" in body.template
-      ? { html: sanitizeEmailHtml(body.template.html) }
+    // Body resolution (§4.15): raw HTML is hard-sanitized; MJML our SPA compiled
+    // is trusted as-is (its Outlook conditional comments must survive); blocks
+    // pass through.
+    const template: EmailTemplate =
+      "html" in body.template ? { html: sanitizeEmailHtml(body.template.html) }
+      : "mjmlHtml" in body.template ? { html: body.template.mjmlHtml }
       : body.template;
     const descriptor: SendDescriptor = {
       orgId: body.orgId,
@@ -404,7 +408,11 @@ export async function templatesHandler(event: HttpEvent): Promise<HttpResult> {
     if (method === "POST") {
       const input = schemas.saveTemplateSchema.parse(JSON.parse(event.body ?? "{}"));
       requireGrant(event, "campaigns:manage", input.orgId);
-      return json(200, await saveTemplate(stores(), input));
+      // Raw-HTML templates are hard-sanitized at save; MJML source is stored as-is.
+      const toSave = input.mode === "raw_html"
+        ? { ...input, source: sanitizeEmailHtml(input.source) }
+        : input;
+      return json(200, await saveTemplate(stores(), toSave));
     }
     const orgId = event.pathParameters?.org ?? "";
     requireGrant(event, "reports:view", orgId);

@@ -377,13 +377,23 @@ function Templates({ org }: { org: string }) {
   const [name, setName] = useState("");
   const [mode, setMode] = useState<TemplateMode>("raw_html");
   const [source, setSource] = useState("");
+  const [preview, setPreview] = useState<{ html: string; errors: string[] } | null>(null);
   const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState(false);
 
-  const edit = (t: Template) => {
-    setTemplateId(t.templateId); setName(t.name); setMode(t.mode); setSource(t.source); setMsg("");
+  const compile = async () => {
+    try {
+      const { default: mjml2html } = await import("mjml-browser");
+      const r = mjml2html(source);
+      setPreview({ html: r.html, errors: r.errors.map((e) => e.formattedMessage ?? e.message) });
+    } catch (e) {
+      setPreview({ html: "", errors: [String(e)] });
+    }
   };
-  const reset = () => { setTemplateId(""); setName(""); setMode("raw_html"); setSource(""); setMsg(""); };
+  const edit = (t: Template) => {
+    setTemplateId(t.templateId); setName(t.name); setMode(t.mode); setSource(t.source); setMsg(""); setPreview(null);
+  };
+  const reset = () => { setTemplateId(""); setName(""); setMode("raw_html"); setSource(""); setMsg(""); setPreview(null); };
 
   const save = async () => {
     setMsg(""); setBusy(true);
@@ -435,9 +445,20 @@ function Templates({ org }: { org: string }) {
           </select>
         </div>
         <label style={{ marginTop: 12 }}>{mode === "mjml" ? "MJML source" : "HTML source"} — {"{{merge}}"} tags allowed</label>
-        <textarea value={source} onChange={(e) => setSource(e.target.value)} rows={12}
+        <textarea value={source} onChange={(e) => { setSource(e.target.value); setPreview(null); }} rows={12}
           placeholder={mode === "mjml" ? "<mjml>…</mjml>" : "<h1>Hello {{first_name}}</h1>\n<a href=\"https://…\">Read more</a>"}
           style={{ width: "100%", fontFamily: "monospace" }} />
+        {mode === "mjml" && (
+          <div style={{ marginTop: 8 }}>
+            <button className="btn ghost" onClick={compile} disabled={!source.trim()}>Compile &amp; preview</button>
+            {preview && preview.errors.length > 0 && (
+              <p className="err" style={{ margin: "6px 0 0" }}>{preview.errors.length} MJML issue(s): {preview.errors[0]}</p>
+            )}
+            {preview && (
+              <iframe title="preview" srcDoc={preview.html} style={{ width: "100%", height: 320, marginTop: 8, border: "1px solid #ddd", background: "#fff" }} />
+            )}
+          </div>
+        )}
         <div style={{ display: "flex", gap: 10, alignItems: "center", marginTop: 8 }}>
           <button className="btn" disabled={!valid || busy} onClick={save}>{busy ? "Saving…" : "Save template"}</button>
           {templateId && <button className="btn ghost" onClick={reset} disabled={busy}>New</button>}
@@ -456,8 +477,9 @@ function Compose({ org, onScheduled }: { org: string; onScheduled: () => void })
   const [listId, setListId] = useState("");
   const [campaignId, setCampaignId] = useState("");
   const [subject, setSubject] = useState("");
-  const [bodyMode, setBodyMode] = useState<"blocks" | "html">("blocks");
+  const [bodyMode, setBodyMode] = useState<"blocks" | "html" | "mjml">("blocks");
   const [html, setHtml] = useState("");
+  const [mjml, setMjml] = useState("");
   const [blocks, setBlocks] = useState<DraftBlock[]>([{ kind: "text", html: "", label: "", url: "" }]);
   const [when, setWhen] = useState<"now" | "at" | "recurring">("now");
   const [at, setAt] = useState("");
@@ -480,12 +502,13 @@ function Compose({ org, onScheduled }: { org: string; onScheduled: () => void })
   const blocksValid = blocks.length > 0 && blocks.every((b) =>
     b.kind === "text" ? b.html.trim() !== "" : b.label.trim() !== "" && /^https?:\/\//.test(b.url.trim()),
   );
-  const bodyValid = bodyMode === "blocks" ? blocksValid : html.trim() !== "";
+  const bodyValid = bodyMode === "blocks" ? blocksValid : bodyMode === "html" ? html.trim() !== "" : mjml.trim() !== "";
   const valid =
     !!listId && campaignId.trim() !== "" && subject.trim() !== "" && bodyValid &&
     (when !== "at" || at !== "") && (when !== "recurring" || cron.trim() !== "");
 
   const htmlTemplates = (templates.data ?? []).filter((t) => t.mode === "raw_html");
+  const mjmlTemplates = (templates.data ?? []).filter((t) => t.mode === "mjml");
 
   const submit = async () => {
     setMsg(""); setBusy(true);
@@ -494,13 +517,25 @@ function Compose({ org, onScheduled }: { org: string; onScheduled: () => void })
         when === "now" ? { type: "now" }
         : when === "at" ? { type: "at", at: new Date(at).toISOString() }
         : { type: "recurring", cron: cron.trim(), ...(timezone.trim() ? { timezone: timezone.trim() } : {}) };
-      const template = bodyMode === "html"
-        ? { html }
-        : {
-            blocks: blocks.map((b): EmailBlock =>
-              b.kind === "text" ? { kind: "text", html: b.html } : { kind: "editorial", label: b.label, url: b.url.trim() },
-            ),
-          };
+      let template;
+      if (bodyMode === "html") {
+        template = { html };
+      } else if (bodyMode === "mjml") {
+        const { default: mjml2html } = await import("mjml-browser");
+        const compiled = mjml2html(mjml);
+        if (compiled.errors.length > 0) {
+          setMsg(`MJML has ${compiled.errors.length} issue(s): ${compiled.errors[0]?.formattedMessage ?? compiled.errors[0]?.message}`);
+          setBusy(false);
+          return;
+        }
+        template = { mjmlHtml: compiled.html };
+      } else {
+        template = {
+          blocks: blocks.map((b): EmailBlock =>
+            b.kind === "text" ? { kind: "text", html: b.html } : { kind: "editorial", label: b.label, url: b.url.trim() },
+          ),
+        };
+      }
       const res = await api.scheduleCampaign({ orgId: org, campaignId: campaignId.trim(), listId, subject, template, when: whenPayload });
       setMsg(`Scheduled "${res.scheduleId}" (${res.status}${res.at ? ` · ${new Date(res.at).toLocaleString()}` : ""}${res.timezone ? ` · ${res.timezone}` : ""}).`);
       onScheduled();
@@ -538,15 +573,36 @@ function Compose({ org, onScheduled }: { org: string; onScheduled: () => void })
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
           <span className="muted">Body</span>
           <span style={{ display: "flex", gap: 12 }}>
-            {(["blocks", "html"] as const).map((m) => (
+            {(["blocks", "html", "mjml"] as const).map((m) => (
               <label key={m} style={{ display: "flex", gap: 6, alignItems: "center" }}>
                 <input type="radio" name="bodyMode" checked={bodyMode === m} onChange={() => setBodyMode(m)} />
-                {m === "blocks" ? "Blocks" : "Raw HTML"}
+                {m === "blocks" ? "Blocks" : m === "html" ? "Raw HTML" : "MJML"}
               </label>
             ))}
           </span>
         </div>
-        {bodyMode === "html" ? (
+        {bodyMode === "mjml" ? (
+          <div>
+            {mjmlTemplates.length > 0 && (
+              <div style={{ marginBottom: 8 }}>
+                <label>Load a saved MJML template</label>
+                <select defaultValue="" onChange={(e) => {
+                  const t = mjmlTemplates.find((x) => x.templateId === e.target.value);
+                  if (t) setMjml(t.source);
+                }} style={{ width: "100%" }}>
+                  <option value="" disabled>Choose a template…</option>
+                  {mjmlTemplates.map((t) => (<option key={t.templateId} value={t.templateId}>{t.name} ({t.templateId})</option>))}
+                </select>
+              </div>
+            )}
+            <textarea value={mjml} onChange={(e) => setMjml(e.target.value)} rows={12}
+              placeholder={"<mjml><mj-body><mj-section><mj-column>\n  <mj-text>Hi {{first_name}} <a href=\"https://…\">read</a></mj-text>\n</mj-column></mj-section></mj-body></mjml>"}
+              style={{ width: "100%", fontFamily: "monospace" }} />
+            <p className="muted" style={{ margin: "6px 0 0" }}>
+              Compiled to responsive HTML in your browser on schedule; merge tags escaped and links tokenized server-side.
+            </p>
+          </div>
+        ) : bodyMode === "html" ? (
           <div>
             {htmlTemplates.length > 0 && (
               <div style={{ marginBottom: 8 }}>

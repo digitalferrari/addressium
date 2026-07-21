@@ -28,6 +28,10 @@
     "@smithy/protocol-http": "^4.0.0",
     "@smithy/signature-v4": "^4.0.0",
     "@addressium/segment": "0.1.0",
-    "@aws-sdk/credential-provider-node": "^3.600.0"
+    "@aws-sdk/credential-provider-node": "^3.600.0",
+    "sanitize-html": "^2.13.0"
+  },
+  "devDependencies": {
+    "@types/sanitize-html": "^2.13.0"
   }
 }

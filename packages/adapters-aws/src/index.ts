@@ -22,6 +22,7 @@ export {
   type HttpLlmAdvisorDeps,
 } from "./llm.js";
 export { GoogleRecaptchaVerifier } from "./recaptcha.js";
+export { sanitizeEmailHtml } from "./sanitize.js";
 export { CognitoSubscriberAccounts } from "./cognito-accounts.js";
 
 import { DynamoStores } from "./dynamo.js";
