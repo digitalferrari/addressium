@@ -26,7 +26,7 @@
     "@aws-sdk/client-sqs": "^3.600.0",
     "@aws-sdk/lib-dynamodb": "^3.1091.0",
     "@smithy/protocol-http": "^4.0.0",
-    "@smithy/signature-v4": "^4.0.0",
+    "@smithy/signature-v4": "^5.6.7",
     "@addressium/segment": "0.1.0",
     "@aws-sdk/credential-provider-node": "^3.600.0",
     "sanitize-html": "^2.13.0"
