@@ -107,10 +107,15 @@ widget operators paste into any page:
 3. Add the org's sending domain and publish the **DKIM/SPF/DMARC** DNS records the
    provisioning step returns. Wait for SES verification to go green.
 4. Create lists, and you're ready to collect signups (double opt-in) and send.
-5. Use **Compose & schedule** to build a send (subject + text/editorial-link
-   blocks) and dispatch it now, at a time, or on a recurring cron. It then
-   appears under **Schedules**, where you can start, pause or archive it — sends
-   are never deleted.
+5. Optionally save reusable message templates under **Templates** — paste **raw
+   HTML** (sanitized on save, rendered per recipient with escaped merge tags and
+   tokenized links) or store **MJML** source. (The GrapesJS visual builder and
+   MJML compile land in a follow-up.)
+6. Use **Compose & schedule** to build a send — subject plus either
+   text/editorial-link **blocks** or a **raw-HTML** body (optionally loaded from a
+   saved template) — and dispatch it now, at a time, or on a recurring cron. It
+   then appears under **Schedules**, where you can start, pause or archive it —
+   sends are never deleted.
 
 > **Dev / test organizations.** To rehearse real campaigns against production
 > workflows without risk, add an org with `environment: "dev"`. Give it a full

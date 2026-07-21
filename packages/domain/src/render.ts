@@ -14,7 +14,15 @@ export type Block =
   | { kind: "ad"; slot: string; html: string };
 
 export interface EmailTemplate {
-  blocks: Block[];
+  /** Structured block body (the visual/slice model). Mutually exclusive with `html`. */
+  blocks?: Block[];
+  /**
+   * Raw HTML body (raw_html mode, or MJML compiled to HTML later). When present,
+   * the HTML render pipeline is used instead of the block renderer: merge tags
+   * are escaped-substituted, `<a>` links are tokenized + given a link-id for the
+   * click map. Mutually exclusive with `blocks`.
+   */
+  html?: string;
 }
 
 export function escapeHtml(s: string): string {
@@ -34,10 +42,11 @@ function applyMerge(html: string, attrs: Record<string, string>): string {
 
 /** Deterministic link-map for the archive (same for every recipient). */
 export function buildLinkMap(t: EmailTemplate): EmailArchive["linkMap"] {
+  if (t.html != null) return buildHtmlLinkMap(t.html);
   const map: EmailArchive["linkMap"] = {};
   let position = 0;
   let li = 0;
-  for (const block of t.blocks) {
+  for (const block of t.blocks ?? []) {
     position++;
     if (block.kind === "editorial") {
       map[`l${li}`] = {
@@ -58,9 +67,10 @@ export function renderForRecipient(
   attrs: Record<string, string>,
   magicToken: string,
 ): string {
+  if (t.html != null) return renderHtmlForRecipient(t.html, attrs, magicToken);
   const parts: string[] = [];
   let li = 0;
-  for (const block of t.blocks) {
+  for (const block of t.blocks ?? []) {
     if (block.kind === "text") {
       parts.push(`<p>${applyMerge(block.html, attrs)}</p>`);
     } else if (block.kind === "editorial") {
@@ -76,4 +86,73 @@ export function renderForRecipient(
     }
   }
   return parts.join("\n");
+}
+
+// ---- raw-HTML render pipeline (raw_html mode / compiled MJML) ----
+
+/** Matches an anchor, capturing (attrs-before-href)(href)(attrs-after-href)(inner). */
+const ANCHOR_RE = /<a\b([^>]*?)\shref="([^"]*)"([^>]*)>([\s\S]*?)<\/a>/gi;
+
+/** Drop any existing fragment so we can append the per-recipient `#tok=…`. */
+function baseUrl(u: string): string {
+  const i = u.indexOf("#");
+  return i >= 0 ? u.slice(0, i) : u;
+}
+function stripTags(s: string): string {
+  return s.replace(/<[^>]*>/g, "").replace(/\s+/g, " ").trim();
+}
+
+/**
+ * Baseline defense-in-depth for admin-authored HTML: strip active content and
+ * javascript:/data: URLs. Templates are authored by trusted operators (RBAC)
+ * and per-recipient merge values are HTML-escaped separately, so this is a
+ * belt-and-suspenders pass — NOT a substitute for a hardened DOM sanitizer,
+ * which lands with the visual builder (Phase 2). See docs/SECURITY.md.
+ */
+export function sanitizeEmailHtml(html: string): string {
+  return html
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, "")
+    .replace(/<\/?(?:iframe|object|embed|base|meta|link)\b[^>]*>/gi, "")
+    .replace(/\son\w+\s*=\s*"[^"]*"/gi, "")
+    .replace(/\son\w+\s*=\s*'[^']*'/gi, "")
+    .replace(/\son\w+\s*=\s*[^\s>]+/gi, "")
+    .replace(/(href|src)\s*=\s*"(?:\s*(?:javascript|data|vbscript):)[^"]*"/gi, '$1="#"')
+    .replace(/(href|src)\s*=\s*'(?:\s*(?:javascript|data|vbscript):)[^']*'/gi, "$1='#'");
+}
+
+/** Generic (per-campaign) link map for an HTML body — editorial anchors in order. */
+export function buildHtmlLinkMap(html: string): EmailArchive["linkMap"] {
+  const map: EmailArchive["linkMap"] = {};
+  let li = 0;
+  let position = 0;
+  for (const m of html.matchAll(ANCHOR_RE)) {
+    position++;
+    map[`l${li}`] = {
+      urlTemplate: baseUrl(m[2] ?? ""),
+      position,
+      label: stripTags(m[4] ?? ""),
+      class: "editorial",
+    };
+    li++;
+  }
+  return map;
+}
+
+/**
+ * Render an HTML body for one recipient: escape-substitute merge tags, then
+ * tokenize each `<a>` (per-recipient magic token in the fragment) and stamp a
+ * stable `data-linkid` matching {@link buildHtmlLinkMap} for click tracking.
+ */
+export function renderHtmlForRecipient(
+  html: string,
+  attrs: Record<string, string>,
+  magicToken: string,
+): string {
+  const merged = applyMerge(html, attrs);
+  let li = 0;
+  return merged.replace(ANCHOR_RE, (_full, pre: string, href: string, post: string, inner: string) => {
+    const linkId = `l${li++}`;
+    const target = `${baseUrl(href)}#tok=${magicToken}`;
+    return `<a${pre} data-linkid="${linkId}" href="${escapeHtml(target)}"${post}>${inner}</a>`;
+  });
 }

@@ -30,6 +30,7 @@ import type {
   Subscriber,
   Subscription,
   SuppressionEntry,
+  Template,
   UsageRecord,
 } from "@addressium/core";
 import type {
@@ -46,6 +47,7 @@ import type {
   SendClaimStore,
   SendScheduleStore,
   Stores,
+  TemplateStore,
   SubscriberStore,
   SubscriptionStore,
   SuppressionStore,
@@ -334,6 +336,17 @@ export class DynamoStores implements Stores {
         TableName: this.tableName,
         KeyConditionExpression: "pk = :pk AND begins_with(sk, :s)",
         ExpressionAttributeValues: { ":pk": org(orgId), ":s": "SCHEDULE#" },
+      }),
+  };
+
+  templates: TemplateStore = {
+    get: (orgId, templateId) => this.get<Template>(org(orgId), `TEMPLATE#${templateId}`),
+    put: (t) => this.put({ pk: org(t.orgId), sk: `TEMPLATE#${t.templateId}`, data: t }),
+    list: (orgId) =>
+      this.queryAll<Template>({
+        TableName: this.tableName,
+        KeyConditionExpression: "pk = :pk AND begins_with(sk, :s)",
+        ExpressionAttributeValues: { ":pk": org(orgId), ":s": "TEMPLATE#" },
       }),
   };
 

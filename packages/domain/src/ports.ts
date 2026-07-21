@@ -17,6 +17,7 @@ import type {
   Segment,
   SendScheduleState,
   Subscriber,
+  Template,
   Subscription,
   SuppressionEntry,
   SuppressionScope,
@@ -136,6 +137,13 @@ export interface SendScheduleStore {
   list(orgId: string): Promise<SendScheduleState[]>;
 }
 
+/** Reusable templates (§4.15): visual (MJML), MJML source, or raw HTML. */
+export interface TemplateStore {
+  get(orgId: string, templateId: string): Promise<Template | undefined>;
+  put(t: Template): Promise<void>;
+  list(orgId: string): Promise<Template[]>;
+}
+
 /** Drip/journey sequence definitions (§4.6). */
 export interface DripSequenceStore {
   get(orgId: string, sequenceId: string): Promise<DripSequence | undefined>;
@@ -209,7 +217,7 @@ export interface SubscriberAccountProvisioner {
   ensureAccount(poolId: string, email: string): Promise<{ externalId: string }>;
 }
 
-/** Mints the per-recipient magic-link JWT for editorial links (§4.9). */
+/** Mints the per-recipient magic-link JWT for editorial links (§4.15). */
 export interface MagicLinkSigner {
   /** Returns a signed ES256 JWT for the given subscriber. */
   mint(input: {
@@ -259,6 +267,7 @@ export interface Stores {
   campaigns: CampaignStore;
   series: CampaignSeriesStore;
   schedules: SendScheduleStore;
+  templates: TemplateStore;
   alerts: AlertConfigStore;
   usage: UsageStore;
   segments: SegmentStore;

@@ -37,6 +37,14 @@ test("valid compose payloads parse for now / at / recurring", () => {
   );
 });
 
+test("a raw-HTML body is accepted; an empty html string is rejected", () => {
+  assert.equal(
+    schemas.scheduleCampaignSchema.safeParse({ ...good, template: { html: "<p>Hi {{first_name}}</p>" } }).success,
+    true,
+  );
+  assert.equal(schemas.scheduleCampaignSchema.safeParse({ ...good, template: { html: "" } }).success, false);
+});
+
 test("empty body, missing subject/list, and bad editorial URL are rejected", () => {
   assert.equal(schemas.scheduleCampaignSchema.safeParse({ ...good, template: { blocks: [] } }).success, false);
   assert.equal(schemas.scheduleCampaignSchema.safeParse({ ...good, subject: "" }).success, false);

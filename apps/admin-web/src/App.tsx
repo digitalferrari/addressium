@@ -8,9 +8,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { completeLoginIfPresent, decodeClaims, getTokens, login, logout } from "./auth.js";
 import { grantFromClaims, can, type Grant } from "./rbac.js";
-import { api, type Branding, type CampaignReport, type EmailBlock, type ListPresentation, type ScheduleWhen, type SendScheduleState, type SetupState, type UsageRecord } from "./api.js";
+import { api, type Branding, type CampaignReport, type EmailBlock, type ListPresentation, type ScheduleWhen, type SendScheduleState, type SetupState, type Template, type TemplateMode, type UsageRecord } from "./api.js";
 
-type View = "dashboard" | "setup" | "compose" | "report" | "usage" | "schedules" | "branding" | "presentation" | "subscribers" | "settings";
+type View = "dashboard" | "setup" | "templates" | "compose" | "report" | "usage" | "schedules" | "branding" | "presentation" | "subscribers" | "settings";
 
 export function App() {
   const [ready, setReady] = useState(false);
@@ -110,6 +110,7 @@ function Console() {
         <nav className="nav" style={{ marginTop: 16 }}>
           <NavItem id="dashboard" label="Dashboard" />
           <NavItem id="setup" label="Setup" />
+          <NavItem id="templates" label="Templates" cap="campaigns:manage" />
           <NavItem id="compose" label="Compose & schedule" cap="campaigns:schedule" />
           <NavItem id="report" label="Campaign report" cap="reports:view" />
           <NavItem id="schedules" label="Schedules" cap="campaigns:schedule" />
@@ -129,6 +130,7 @@ function Console() {
       <main className="main">
         {view === "dashboard" && <Dashboard org={org} onGoToSetup={() => setView("setup")} />}
         {view === "setup" && <Setup org={org} />}
+        {view === "templates" && <Templates org={org} />}
         {view === "compose" && <Compose org={org} onScheduled={() => setView("schedules")} />}
         {view === "report" && <Report org={org} grant={grant} />}
         {view === "schedules" && <Schedules org={org} grant={grant} />}
@@ -367,13 +369,95 @@ function Usage({ org }: { org: string }) {
   );
 }
 
+function Templates({ org }: { org: string }) {
+  const { data, error, loading } = useAsync(() => api.templates(org), [org]);
+  const [rev, setRev] = useState(0);
+  const list = useAsync(() => api.templates(org), [org, rev]);
+  const [templateId, setTemplateId] = useState("");
+  const [name, setName] = useState("");
+  const [mode, setMode] = useState<TemplateMode>("raw_html");
+  const [source, setSource] = useState("");
+  const [msg, setMsg] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const edit = (t: Template) => {
+    setTemplateId(t.templateId); setName(t.name); setMode(t.mode); setSource(t.source); setMsg("");
+  };
+  const reset = () => { setTemplateId(""); setName(""); setMode("raw_html"); setSource(""); setMsg(""); };
+
+  const save = async () => {
+    setMsg(""); setBusy(true);
+    try {
+      const saved = await api.saveTemplate({ orgId: org, templateId: templateId.trim(), name: name.trim(), mode, source });
+      setMsg(`Saved "${saved.templateId}" (v${saved.version}).`);
+      setRev((n) => n + 1);
+    } catch (e) { setMsg(String(e)); }
+    finally { setBusy(false); }
+  };
+  const valid = templateId.trim() && name.trim() && source.trim();
+  const rows = list.data ?? data ?? [];
+
+  return (
+    <div>
+      <h1 className="h1">Templates · {org || "—"}</h1>
+      <p className="muted" style={{ marginTop: -8 }}>
+        Reusable message templates. <strong>Raw HTML</strong> is sanitized on save and rendered per
+        recipient (merge tags escaped, links tokenized for click tracking). MJML source is stored now;
+        MJML compile + the GrapesJS visual builder land next.
+      </p>
+      {(loading || list.loading) && <div className="card muted">Loading…</div>}
+      {(error || list.error) && <p className="err">{error || list.error}</p>}
+      {rows.length > 0 && (
+        <div className="card">
+          <table>
+            <thead><tr><th>Template</th><th>Mode</th><th>Version</th><th></th></tr></thead>
+            <tbody>
+              {rows.map((t) => (
+                <tr key={t.templateId}>
+                  <td className="t-strong">{t.name} <span className="muted">({t.templateId})</span></td>
+                  <td>{t.mode}</td>
+                  <td>v{t.version}</td>
+                  <td><button className="btn ghost" onClick={() => edit(t)}>Edit</button></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      <div className="card">
+        <div className="muted" style={{ marginBottom: 8 }}>{templateId ? `Editing ${templateId}` : "New template"}</div>
+        <div style={{ display: "flex", gap: 8 }}>
+          <input value={templateId} onChange={(e) => setTemplateId(e.target.value)} placeholder="template id" style={{ flex: 1 }} disabled={busy} />
+          <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Display name" style={{ flex: 2 }} disabled={busy} />
+          <select value={mode} onChange={(e) => setMode(e.target.value as TemplateMode)} disabled={busy}>
+            <option value="raw_html">raw_html</option>
+            <option value="mjml">mjml</option>
+          </select>
+        </div>
+        <label style={{ marginTop: 12 }}>{mode === "mjml" ? "MJML source" : "HTML source"} — {"{{merge}}"} tags allowed</label>
+        <textarea value={source} onChange={(e) => setSource(e.target.value)} rows={12}
+          placeholder={mode === "mjml" ? "<mjml>…</mjml>" : "<h1>Hello {{first_name}}</h1>\n<a href=\"https://…\">Read more</a>"}
+          style={{ width: "100%", fontFamily: "monospace" }} />
+        <div style={{ display: "flex", gap: 10, alignItems: "center", marginTop: 8 }}>
+          <button className="btn" disabled={!valid || busy} onClick={save}>{busy ? "Saving…" : "Save template"}</button>
+          {templateId && <button className="btn ghost" onClick={reset} disabled={busy}>New</button>}
+          {msg && <span className={msg.startsWith("Saved") ? "muted" : "err"}>{msg}</span>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 interface DraftBlock { kind: "text" | "editorial"; html: string; label: string; url: string }
 
 function Compose({ org, onScheduled }: { org: string; onScheduled: () => void }) {
   const lists = useAsync(() => api.lists(org), [org]);
+  const templates = useAsync(() => api.templates(org), [org]);
   const [listId, setListId] = useState("");
   const [campaignId, setCampaignId] = useState("");
   const [subject, setSubject] = useState("");
+  const [bodyMode, setBodyMode] = useState<"blocks" | "html">("blocks");
+  const [html, setHtml] = useState("");
   const [blocks, setBlocks] = useState<DraftBlock[]>([{ kind: "text", html: "", label: "", url: "" }]);
   const [when, setWhen] = useState<"now" | "at" | "recurring">("now");
   const [at, setAt] = useState("");
@@ -396,9 +480,12 @@ function Compose({ org, onScheduled }: { org: string; onScheduled: () => void })
   const blocksValid = blocks.length > 0 && blocks.every((b) =>
     b.kind === "text" ? b.html.trim() !== "" : b.label.trim() !== "" && /^https?:\/\//.test(b.url.trim()),
   );
+  const bodyValid = bodyMode === "blocks" ? blocksValid : html.trim() !== "";
   const valid =
-    !!listId && campaignId.trim() !== "" && subject.trim() !== "" && blocksValid &&
+    !!listId && campaignId.trim() !== "" && subject.trim() !== "" && bodyValid &&
     (when !== "at" || at !== "") && (when !== "recurring" || cron.trim() !== "");
+
+  const htmlTemplates = (templates.data ?? []).filter((t) => t.mode === "raw_html");
 
   const submit = async () => {
     setMsg(""); setBusy(true);
@@ -407,11 +494,13 @@ function Compose({ org, onScheduled }: { org: string; onScheduled: () => void })
         when === "now" ? { type: "now" }
         : when === "at" ? { type: "at", at: new Date(at).toISOString() }
         : { type: "recurring", cron: cron.trim(), ...(timezone.trim() ? { timezone: timezone.trim() } : {}) };
-      const template = {
-        blocks: blocks.map((b): EmailBlock =>
-          b.kind === "text" ? { kind: "text", html: b.html } : { kind: "editorial", label: b.label, url: b.url.trim() },
-        ),
-      };
+      const template = bodyMode === "html"
+        ? { html }
+        : {
+            blocks: blocks.map((b): EmailBlock =>
+              b.kind === "text" ? { kind: "text", html: b.html } : { kind: "editorial", label: b.label, url: b.url.trim() },
+            ),
+          };
       const res = await api.scheduleCampaign({ orgId: org, campaignId: campaignId.trim(), listId, subject, template, when: whenPayload });
       setMsg(`Scheduled "${res.scheduleId}" (${res.status}${res.at ? ` · ${new Date(res.at).toLocaleString()}` : ""}${res.timezone ? ` · ${res.timezone}` : ""}).`);
       onScheduled();
@@ -446,7 +535,46 @@ function Compose({ org, onScheduled }: { org: string; onScheduled: () => void })
       </div>
 
       <div className="card">
-        <div className="muted" style={{ marginBottom: 8 }}>Body</div>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+          <span className="muted">Body</span>
+          <span style={{ display: "flex", gap: 12 }}>
+            {(["blocks", "html"] as const).map((m) => (
+              <label key={m} style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                <input type="radio" name="bodyMode" checked={bodyMode === m} onChange={() => setBodyMode(m)} />
+                {m === "blocks" ? "Blocks" : "Raw HTML"}
+              </label>
+            ))}
+          </span>
+        </div>
+        {bodyMode === "html" ? (
+          <div>
+            {htmlTemplates.length > 0 && (
+              <div style={{ marginBottom: 8 }}>
+                <label>Load a saved HTML template</label>
+                <select
+                  defaultValue=""
+                  onChange={(e) => {
+                    const t = htmlTemplates.find((x) => x.templateId === e.target.value);
+                    if (t) setHtml(t.source);
+                  }}
+                  style={{ width: "100%" }}
+                >
+                  <option value="" disabled>Choose a template…</option>
+                  {htmlTemplates.map((t) => (
+                    <option key={t.templateId} value={t.templateId}>{t.name} ({t.templateId})</option>
+                  ))}
+                </select>
+              </div>
+            )}
+            <textarea value={html} onChange={(e) => setHtml(e.target.value)} rows={12}
+              placeholder={"<h1>Hello {{first_name}}</h1>\n<a href=\"https://…\">Read more</a>"}
+              style={{ width: "100%", fontFamily: "monospace" }} />
+            <p className="muted" style={{ margin: "6px 0 0" }}>
+              Sanitized on schedule. Merge tags are escaped; every {"<a>"} is tokenized per recipient and tracked.
+            </p>
+          </div>
+        ) : (
+          <>
         {blocks.map((b, i) => (
           <div key={i} style={{ borderTop: i ? "1px solid #eee" : "none", paddingTop: i ? 10 : 0, marginTop: i ? 10 : 0 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -470,6 +598,8 @@ function Compose({ org, onScheduled }: { org: string; onScheduled: () => void })
           <button className="btn ghost" onClick={() => addBlock("text")}>+ Text</button>
           <button className="btn ghost" onClick={() => addBlock("editorial")}>+ Editorial link</button>
         </div>
+          </>
+        )}
       </div>
 
       <div className="card">

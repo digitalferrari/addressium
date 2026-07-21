@@ -80,7 +80,23 @@ export const emailBlockSchema = z.union([
   z.object({ kind: z.literal("editorial"), label: z.string().min(1), url: z.string().url() }),
   z.object({ kind: z.literal("ad"), slot: z.string().min(1), html: z.string() }),
 ]);
-export const emailTemplateSchema = z.object({ blocks: z.array(emailBlockSchema).min(1) });
+/** A send body is either structured blocks or a raw-HTML string — never both. */
+export const emailTemplateSchema = z.union([
+  z.object({ blocks: z.array(emailBlockSchema).min(1) }),
+  z.object({ html: z.string().min(1) }),
+]);
+
+/** Create/update a reusable template (§4.15). Source is MJML for visual/mjml, HTML for raw_html. */
+export const saveTemplateSchema = z.object({
+  orgId: z.string().min(1),
+  templateId: z.string().min(1),
+  name: z.string().min(1),
+  mode: templateMode,
+  source: z.string().min(1),
+  mergeTags: z.array(z.string()).default([]),
+  adSlots: z.array(z.string()).default([]),
+});
+export type SaveTemplateInput = z.infer<typeof saveTemplateSchema>;
 
 /** Compose + schedule payload (§4.6): send now, at an instant, or recurring cron. */
 export const scheduleCampaignSchema = z.object({
