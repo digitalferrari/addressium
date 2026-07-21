@@ -133,6 +133,7 @@ function Console() {
         </button>
       </aside>
       <main className="main">
+        <div className="view" key={view}>
         {view === "dashboard" && <Dashboard org={org} onGoToSetup={() => setView("setup")} />}
         {view === "setup" && <Setup org={org} />}
         {view === "templates" && <Templates org={org} />}
@@ -148,6 +149,7 @@ function Console() {
         {view === "branding" && <BrandingEditor org={org} />}
         {view === "presentation" && <PresentationEditor org={org} />}
         {view === "settings" && <AiSettings org={org} />}
+        </div>
       </main>
     </div>
   );
@@ -186,7 +188,7 @@ function Dashboard({ org, onGoToSetup }: { org: string; onGoToSetup: () => void 
       )}
       <div className="card">
         <div className="muted">Newsletters</div>
-        {loading && <p className="muted">Loading…</p>}
+        {loading && <div className="skeleton sk-kpi" style={{ width: 140, marginTop: 8 }} aria-label="Loading…" />}
         {error && <p className="err">{error}</p>}
         {data && <p className="kpi"><span className="n">{data.length}</span> <span className="l">lists</span></p>}
       </div>

@@ -14,3 +14,15 @@ pre { background: #0e1116; color: #e6e9ee; padding: 14px; border-radius: 10px; o
 .addressium-embed { border: 1px solid var(--line); border-radius: 12px; padding: 16px; max-width: 420px; background: #fff; }
 .addressium-embed .row { display: flex; gap: 8px; }
 .addressium-embed input { flex: 1; }
+
+/* ---- Motion (#119) — subtle, reduced-motion aware ---- */
+:root { --dur-1: 140ms; --dur-2: 260ms; --ease: cubic-bezier(0.2, 0.7, 0.2, 1); }
+@keyframes fadeUp { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+.card, .addressium-embed { animation: fadeUp var(--dur-2) var(--ease) both; }
+button { transition: transform var(--dur-1) var(--ease), filter var(--dur-1) var(--ease), opacity var(--dur-1) var(--ease); }
+button:hover:not(:disabled) { transform: translateY(-1px); filter: brightness(1.05); }
+button:active:not(:disabled) { transform: translateY(0) scale(0.98); }
+button:disabled { opacity: 0.55; cursor: not-allowed; }
+input { transition: border-color var(--dur-1) var(--ease), box-shadow var(--dur-1) var(--ease); }
+input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent); }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: 0.001ms !important; animation-iteration-count: 1 !important; transition-duration: 0.001ms !important; } }

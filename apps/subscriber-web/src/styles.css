@@ -25,3 +25,22 @@ button.ghost { background: transparent; border: 1px solid var(--line); color: va
 .err { color: #d64550; font-size: 13px; }
 nav a { color: var(--ink-2); margin-right: 14px; text-decoration: none; cursor: pointer; }
 nav a.active { color: var(--brand-primary); font-weight: 600; }
+
+/* ---- Motion (#119) — subtle, reduced-motion aware ---- */
+:root { --dur-1: 140ms; --dur-2: 260ms; --ease: cubic-bezier(0.2, 0.7, 0.2, 1); }
+@keyframes fadeUp { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+header { animation: fadeUp var(--dur-2) var(--ease) both; }
+.card { animation: fadeUp var(--dur-2) var(--ease) both; }
+.card:nth-child(2) { animation-delay: 45ms; }
+.card:nth-child(3) { animation-delay: 90ms; }
+.card:nth-child(4) { animation-delay: 135ms; }
+.card:nth-child(5) { animation-delay: 180ms; }
+.card:nth-child(n+6) { animation-delay: 220ms; }
+button { transition: transform var(--dur-1) var(--ease), filter var(--dur-1) var(--ease), opacity var(--dur-1) var(--ease); }
+button:hover:not(:disabled) { transform: translateY(-1px); filter: brightness(1.05); }
+button:active:not(:disabled) { transform: translateY(0) scale(0.98); }
+button:disabled { opacity: 0.55; cursor: not-allowed; }
+input { transition: border-color var(--dur-1) var(--ease), box-shadow var(--dur-1) var(--ease); }
+input:focus { outline: none; border-color: var(--brand-primary); box-shadow: 0 0 0 3px color-mix(in srgb, var(--brand-primary) 18%, transparent); }
+nav a { transition: color var(--dur-1) var(--ease); }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: 0.001ms !important; animation-iteration-count: 1 !important; transition-duration: 0.001ms !important; } }
