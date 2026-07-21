@@ -15,7 +15,7 @@ import {
   SystemClock,
 } from "@addressium/domain";
 
-const rates: CostRates = { perEmail: 0.0001, perGbStorageMonth: 0.023, perDedicatedIpMonth: 24.95 };
+const rates: CostRates = { perEmail: 0.0001, perGbStorageMonth: 0.023, perDedicatedIpMonth: 24.95, perTbScanned: 5.0 };
 
 test("estimateCost applies each rate and totals them", () => {
   const cost = estimateCost(
@@ -25,7 +25,17 @@ test("estimateCost applies each rate and totals them", () => {
   assert.equal(cost.email, 100); // 1M * 0.0001
   assert.ok(Math.abs(cost.storage - 0.046) < 1e-9); // 2 GB * 0.023
   assert.equal(cost.dedicatedIp, 49.9); // 2 * 24.95
+  assert.equal(cost.athena, 0); // no scan reported
   assert.ok(Math.abs(cost.total - (100 + 0.046 + 49.9)) < 1e-9);
+});
+
+test("estimateCost charges Athena per TB scanned", () => {
+  const cost = estimateCost(
+    { orgId: "o", period: "2026-07", emailsSent: 0, storageBytes: 0, dedicatedIps: 0, athenaBytesScanned: 2 * 1_099_511_627_776 },
+    rates,
+  );
+  assert.equal(cost.athena, 10); // 2 TB * $5
+  assert.equal(cost.total, 10);
 });
 
 test("sumEmailsSent rolls up campaign hot counters", () => {

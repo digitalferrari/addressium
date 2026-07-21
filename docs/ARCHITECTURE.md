@@ -821,8 +821,11 @@ link can ever grant, not from assuming it stays private:
   `provisioning` service.
 - **Cost posture**: near-$0 at idle (on-demand DynamoDB, Lambda, S3, no
   always-on compute or DB). Dominant cost is SES (~$0.10 / 1,000 emails) plus
-  egress. The optional OpenSearch mirror is the only component that adds a
-  standing cost, and it is opt-in.
+  egress. Two components add cost only when opted in: the OpenSearch mirror
+  (§4.11, standing) and the reporting read-model (§4.23 — Kinesis, Firehose,
+  Athena scan at ~$5/TB, and the lake's own S3). Athena scan is bounded by a
+  per-query bytes-scanned cutoff on the workgroup so a bad query can't run up a
+  bill, and all of these drivers are metered per org (see §11).
 
 ### 9.1 Bootstrapping the admin pool & first login
 
@@ -901,8 +904,14 @@ addressium/
 
 - **Rendering fidelity**: whether to add a rendering-preview service (multiple
   client previews) or rely on test sends in v1.
-- **Per-org billing/usage metering**: optional, for operators who want to
-  chargeback sending cost across their publications.
+- **Per-org billing/usage metering** *(implemented)*: a per-org/period cost
+  model (`estimateCost`/`recordUsage`) meters **email** (SES), **storage** (S3),
+  **dedicated IPs**, and **Athena bytes scanned** (§4.23); a scheduled job feeds
+  the AWS-metric drivers and the admin **Usage & cost** screen surfaces the
+  breakdown + history. Rates are per-deployment overridable (`CostRates`).
+  *Not yet split out:* Kinesis/Firehose throughput and the analytics lake's own
+  S3 storage (folded into the streaming/storage lines for now) — tracked in the
+  backlog.
 - **Backups/export**: point-in-time recovery on DynamoDB plus a scheduled full
   export to S3 for portability.
 - **Webhooks/API for operators**: an outbound webhook + public API so operators
