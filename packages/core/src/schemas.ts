@@ -25,7 +25,7 @@ export const signupSchema = z.object({
   orgId: z.string().min(1),
   email: z.string().email(),
   listId: z.string().min(1),
-  attributes: z.record(z.string()).optional(),
+  attributes: z.record(z.string(), z.string()).optional(),
   sourceUrl: z.string().url().optional(),
 });
 export type SignupInput = z.infer<typeof signupSchema>;
@@ -35,7 +35,7 @@ export const signupManySchema = z.object({
   orgId: z.string().min(1),
   email: z.string().email(),
   listIds: z.array(z.string().min(1)).min(1),
-  attributes: z.record(z.string()).optional(),
+  attributes: z.record(z.string(), z.string()).optional(),
   sourceUrl: z.string().url().optional(),
 });
 export type SignupManyInput = z.infer<typeof signupManySchema>;
@@ -157,7 +157,7 @@ export const identitySyncSchema = z
     externalId: z.string().min(1),
     action: z.enum(["upsert", "delete"]).default("upsert"),
     email: z.string().email().optional(),
-    attributes: z.record(z.string()).optional(),
+    attributes: z.record(z.string(), z.string()).optional(),
     source: z.string().min(1).default("user-pool"),
   })
   .refine((d) => d.action === "delete" || !!d.email, {
