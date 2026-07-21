@@ -108,6 +108,23 @@ widget operators paste into any page:
    provisioning step returns. Wait for SES verification to go green.
 4. Create lists, and you're ready to collect signups (double opt-in) and send.
 
+### First-run setup checklist
+
+The console's **Setup** screen (and a Dashboard banner) tracks the essentials and
+flips the org's `setupComplete` flag once the **required** steps pass. It's
+computed live from your config, so it stays accurate as you go:
+
+| Step | Required | Done when |
+|---|---|---|
+| **Sending domain** | ✅ | the org has a verified sending domain |
+| **First newsletter** | ✅ | at least one list exists |
+| **Compliance footer & address** | ✅ | every list has a physical mailing address + footer (CAN-SPAM) |
+| **Subscriber-site branding** | recommended | colors/logo are set |
+
+SES domain verification and **sandbox exit** are AWS-side actions the checklist
+points you to but can't complete for you — request SES production access before
+sending to unverified recipients.
+
 ---
 
 ## 7. Configuring features

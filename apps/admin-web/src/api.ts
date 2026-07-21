@@ -62,9 +62,24 @@ export interface UsageRecord {
   computedAt: string;
 }
 
+export interface SetupStep {
+  id: string;
+  label: string;
+  done: boolean;
+  required: boolean;
+  hint: string;
+}
+export interface SetupState {
+  steps: SetupStep[];
+  requiredDone: number;
+  requiredTotal: number;
+  complete: boolean;
+}
+
 export const api = {
   lists: (org: string) => call<unknown[]>("GET", `/orgs/${org}/lists`),
   usage: (org: string) => call<UsageRecord[] | null>("GET", `/orgs/${org}/usage`),
+  setup: (org: string) => call<SetupState>("GET", `/orgs/${org}/setup`),
   saveList: (input: unknown) => call<unknown>("POST", `/lists`, input),
   setVisibility: (orgId: string, listId: string, visibility: "open" | "closed") =>
     call<unknown>("POST", `/lists/visibility`, { orgId, listId, visibility }),

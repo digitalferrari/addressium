@@ -24,6 +24,7 @@ import {
   buildBatchConfirmationEmail,
   confirmOptInAny,
   effectiveOneOffTime,
+  evaluateSetup,
   isHoneypotTripped,
   provisionSubscriberAccount,
   manualSuppress,
@@ -294,6 +295,17 @@ export async function listsHandler(event: HttpEvent): Promise<HttpResult> {
     const orgId = event.pathParameters?.org ?? "";
     requireGrant(event, "reports:view", orgId);
     return json(200, await stores().lists.list(orgId));
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+/** GET /orgs/{org}/setup — onboarding checklist state for the setup wizard (§9). */
+export async function setupStateHandler(event: HttpEvent): Promise<HttpResult> {
+  try {
+    const orgId = event.pathParameters?.org ?? "";
+    requireGrant(event, "reports:view", orgId);
+    return json(200, await evaluateSetup(stores(), orgId));
   } catch (e) {
     return fail(e);
   }
