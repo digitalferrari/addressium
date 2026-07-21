@@ -1,3 +1,11 @@
+<!-- Google tag (gtag.js) -->
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-SQTKSB4ESL"></script>
+<script>
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+  gtag('js', new Date());
+  gtag('config', 'G-SQTKSB4ESL');
+</script>
 <title>addressium — clickable prototype</title>
 <style>
   :root{
@@ -1533,6 +1541,7 @@
     document.getElementById('frame-'+w).classList.add('on');
     document.querySelectorAll('#worldseg button').forEach(function(b){b.classList.toggle('on',b.dataset.world===w)});
     window.scrollTo(0,0);
+    gtag('event','demo_world',{world:w});
   }
   document.querySelectorAll('#worldseg button').forEach(function(b){
     b.addEventListener('click',function(){setWorld(b.dataset.world)});
@@ -1548,6 +1557,7 @@
     var c=document.getElementById('crumb');if(c)c.textContent=crumbNames[screen]||screen;
     closeSide();
     window.scrollTo(0,0);
+    gtag('event','demo_screen_view',{screen:screen,screen_name:crumbNames[screen]||screen});
   }
   function toggleSide(){
     document.querySelector('#frame-admin .side').classList.toggle('open');
@@ -1570,6 +1580,7 @@
     document.querySelectorAll('.pubscreen').forEach(function(s){s.style.display=s.dataset.sub===name?'block':'none'});
     document.querySelectorAll('[data-sub]').forEach(function(b){if(b.tagName==='BUTTON')b.classList.toggle('on',b.dataset.sub===name)});
     window.scrollTo(0,0);
+    gtag('event','demo_subscriber_view',{sub:name});
   }
   function showUnsubDone(){
     var d=document.getElementById('unsub-done');
@@ -1636,4 +1647,19 @@
     document.getElementById('crumbOrg').textContent=name;
     closeModal();nav('dashboard');
   }
+
+  // GA4: one delegated handler for any button/link/nav click (#106). Capture
+  // phase so it still fires for links that call return false / preventDefault.
+  document.addEventListener('click',function(e){
+    var el=e.target.closest('button, a, [data-screen], [data-world], [data-sub], .navlink');
+    if(!el) return;
+    var label=el.getAttribute('data-screen')||el.getAttribute('data-world')||el.getAttribute('data-sub')||el.getAttribute('aria-label')||(el.textContent||'').replace(/\s+/g,' ').trim().slice(0,80)||el.tagName.toLowerCase();
+    gtag('event','demo_click',{
+      element_type:el.tagName.toLowerCase(),
+      label:label,
+      screen:el.getAttribute('data-screen')||undefined,
+      world:el.getAttribute('data-world')||undefined,
+      href:el.tagName==='A'?el.getAttribute('href'):undefined
+    });
+  },true);
 </script>
