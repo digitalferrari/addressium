@@ -9,9 +9,9 @@ import { useEffect, useMemo, useState } from "react";
 import { completeLoginIfPresent, decodeClaims, getTokens, login, logout } from "./auth.js";
 import { grantFromClaims, can, type Grant } from "./rbac.js";
 import { VisualEditor } from "./VisualEditor.js";
-import { api, type Branding, type CampaignReport, type EmailBlock, type ListPresentation, type ScheduleWhen, type SendScheduleState, type SetupState, type Template, type TemplateMode, type UsageRecord } from "./api.js";
+import { api, type Branding, type CampaignReport, type DripStepDef, type EmailBlock, type ListPresentation, type ScheduleWhen, type SendScheduleState, type SetupState, type Template, type TemplateMode, type UsageRecord } from "./api.js";
 
-type View = "dashboard" | "setup" | "templates" | "compose" | "report" | "usage" | "schedules" | "branding" | "presentation" | "subscribers" | "settings";
+type View = "dashboard" | "setup" | "templates" | "compose" | "report" | "usage" | "schedules" | "branding" | "presentation" | "subscribers" | "segments" | "import" | "privacy" | "drips" | "settings";
 
 export function App() {
   const [ready, setReady] = useState(false);
@@ -115,8 +115,12 @@ function Console() {
           <NavItem id="compose" label="Compose & schedule" cap="campaigns:schedule" />
           <NavItem id="report" label="Campaign report" cap="reports:view" />
           <NavItem id="schedules" label="Schedules" cap="campaigns:schedule" />
+          <NavItem id="drips" label="Drip sequences" cap="campaigns:manage" />
+          <NavItem id="segments" label="Segments" cap="segments:manage" />
           <NavItem id="usage" label="Usage & cost" cap="reports:view" />
           <NavItem id="subscribers" label="Subscribers" cap="subscribers:manage" />
+          <NavItem id="import" label="Import" cap="subscribers:manage" />
+          <NavItem id="privacy" label="Data requests" cap="subscribers:manage" />
           <NavItem id="branding" label="Branding" cap="branding:manage" />
           <NavItem id="presentation" label="Presentation" cap="branding:manage" />
           <NavItem id="settings" label="AI settings" cap="identity:manage" />
@@ -137,6 +141,10 @@ function Console() {
         {view === "schedules" && <Schedules org={org} grant={grant} />}
         {view === "usage" && <Usage org={org} />}
         {view === "subscribers" && <Subscribers org={org} />}
+        {view === "segments" && <Segments org={org} />}
+        {view === "import" && <ImportSubscribers org={org} />}
+        {view === "privacy" && <Privacy org={org} />}
+        {view === "drips" && <Drips org={org} />}
         {view === "branding" && <BrandingEditor org={org} />}
         {view === "presentation" && <PresentationEditor org={org} />}
         {view === "settings" && <AiSettings org={org} />}
@@ -224,6 +232,7 @@ function Setup({ org }: { org: string }) {
 }
 
 function Report({ org, grant }: { org: string; grant: Grant | null }) {
+  const campaigns = useAsync(() => api.campaigns(org), [org]);
   const [campaign, setCampaign] = useState("");
   const [report, setReport] = useState<CampaignReport | null>(null);
   const [err, setErr] = useState("");
@@ -255,7 +264,12 @@ function Report({ org, grant }: { org: string; grant: Grant | null }) {
     <div>
       <h1 className="h1">Campaign report</h1>
       <div className="card row">
-        <input placeholder="campaign id" value={campaign} onChange={(e) => setCampaign(e.target.value)} />
+        <select value={campaign} onChange={(e) => setCampaign(e.target.value)}>
+          <option value="">Choose a campaign…</option>
+          {(campaigns.data ?? []).map((c) => (
+            <option key={c.campaignId} value={c.campaignId}>{c.subject} ({c.campaignId})</option>
+          ))}
+        </select>
         <button className="btn" onClick={() => void load()} disabled={!campaign}>Load</button>
         {report && (
           <button className="btn ghost" onClick={() => void analyze()} disabled={busy}>
@@ -413,8 +427,8 @@ function Templates({ org }: { org: string }) {
       <h1 className="h1">Templates · {org || "—"}</h1>
       <p className="muted" style={{ marginTop: -8 }}>
         Reusable message templates. <strong>Raw HTML</strong> is sanitized on save and rendered per
-        recipient (merge tags escaped, links tokenized for click tracking). MJML source is stored now;
-        MJML compile + the GrapesJS visual builder land next.
+        recipient (merge tags escaped, links tokenized for click tracking). <strong>MJML</strong> and the
+        <strong> visual builder</strong> compile to responsive HTML in your browser before scheduling.
       </p>
       {(loading || list.loading) && <div className="card muted">Loading…</div>}
       {(error || list.error) && <p className="err">{error || list.error}</p>}
@@ -486,7 +500,9 @@ interface DraftBlock { kind: "text" | "editorial"; html: string; label: string; 
 function Compose({ org, onScheduled }: { org: string; onScheduled: () => void }) {
   const lists = useAsync(() => api.lists(org), [org]);
   const templates = useAsync(() => api.templates(org), [org]);
+  const segments = useAsync(() => api.segments(org), [org]);
   const [listId, setListId] = useState("");
+  const [segmentId, setSegmentId] = useState("");
   const [campaignId, setCampaignId] = useState("");
   const [subject, setSubject] = useState("");
   const [bodyMode, setBodyMode] = useState<"blocks" | "html" | "mjml">("blocks");
@@ -575,6 +591,18 @@ function Compose({ org, onScheduled }: { org: string; onScheduled: () => void })
             <option key={l.listId} value={l.listId}>{l.name} ({l.listId})</option>
           ))}
         </select>
+        <label style={{ marginTop: 12 }}>Segment (optional — targets within the list)</label>
+        <select value={segmentId} onChange={(e) => setSegmentId(e.target.value)} style={{ width: "100%" }}>
+          <option value="">Whole list (no segment)</option>
+          {(segments.data ?? []).map((s) => (
+            <option key={s.segmentId} value={s.segmentId}>{s.name} ({s.segmentId})</option>
+          ))}
+        </select>
+        {segmentId && (
+          <p className="muted" style={{ margin: "6px 0 0" }}>
+            Segment targeting applies when the campaign is saved as a draft.
+          </p>
+        )}
         <label style={{ marginTop: 12 }}>Campaign id</label>
         <input value={campaignId} onChange={(e) => setCampaignId(e.target.value)} placeholder="e.g. daily-2026-07-21" style={{ width: "100%" }} />
         <label style={{ marginTop: 12 }}>Subject</label>
@@ -793,23 +821,412 @@ function Schedules({ org, grant }: { org: string; grant: Grant | null }) {
 }
 
 function Subscribers({ org }: { org: string }) {
+  const [q, setQ] = useState("");
+  const [query, setQuery] = useState("");
+  const [rev, setRev] = useState(0);
+  const subs = useAsync(() => api.subscribers(org, query || undefined), [org, query, rev]);
+  const supps = useAsync(() => api.suppressions(org), [org, rev]);
   const [email, setEmail] = useState("");
   const [msg, setMsg] = useState("");
+  const reload = () => setRev((n) => n + 1);
+
   const suppress = async () => {
     setMsg("");
-    try { await api.suppress(org, email); setMsg(`Suppressed ${email}`); }
+    try { await api.suppress(org, email); setMsg(`Suppressed ${email}`); reload(); }
     catch (e) { setMsg(String(e)); }
   };
+  const unsubscribeAll = async (sub: string, subEmail: string) => {
+    setMsg("");
+    try { await api.adminUnsubscribe(org, sub, subEmail); setMsg(`Unsubscribed ${subEmail} from all lists`); reload(); }
+    catch (e) { setMsg(String(e)); }
+  };
+  const lift = async (liftEmail: string) => {
+    setMsg("");
+    try { await api.unsuppress(org, liftEmail); setMsg(`Lifted suppression for ${liftEmail}`); reload(); }
+    catch (e) { setMsg(String(e)); }
+  };
+
   return (
     <div>
-      <h1 className="h1">Subscribers</h1>
+      <h1 className="h1">Subscribers · {org || "—"}</h1>
+      {msg && <p className="muted">{msg}</p>}
+
+      <div className="card">
+        <div className="row">
+          <input placeholder="Search by email…" value={q} onChange={(e) => setQ(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") setQuery(q.trim()); }} style={{ flex: 1 }} />
+          <button className="btn" onClick={() => setQuery(q.trim())}>Search</button>
+          {query && <button className="btn ghost" onClick={() => { setQ(""); setQuery(""); }}>Clear</button>}
+        </div>
+        {subs.loading && <p className="muted">Loading…</p>}
+        {subs.error && <p className="err">{subs.error}</p>}
+        {subs.data && subs.data.length === 0 && <p className="muted">No subscribers match.</p>}
+        {subs.data && subs.data.length > 0 && (
+          <table style={{ marginTop: 8 }}>
+            <thead><tr><th>Email</th><th>Status</th><th>Entitlement</th><th>Last engaged</th><th></th></tr></thead>
+            <tbody>
+              {subs.data.map((s) => (
+                <tr key={s.sub}>
+                  <td className="t-strong">{s.email}</td>
+                  <td>{s.status}</td>
+                  <td>{s.entitlement}</td>
+                  <td className="muted">{s.lastEngagedAt ? new Date(s.lastEngagedAt).toLocaleString() : "—"}</td>
+                  <td><button className="btn ghost" onClick={() => void unsubscribeAll(s.sub, s.email)}>Unsubscribe all</button></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+
       <div className="card">
         <label>Manually suppress an address (does not delete)</label>
         <div className="row">
           <input placeholder="email" value={email} onChange={(e) => setEmail(e.target.value)} />
           <button className="btn" onClick={() => void suppress()} disabled={!email}>Suppress</button>
         </div>
-        {msg && <p className="muted">{msg}</p>}
+      </div>
+
+      <div className="card">
+        <div className="muted" style={{ marginBottom: 8 }}>Suppression list</div>
+        {supps.loading && <p className="muted">Loading…</p>}
+        {supps.error && <p className="err">{supps.error}</p>}
+        {supps.data && supps.data.length === 0 && <p className="muted">No suppressed addresses.</p>}
+        {supps.data && supps.data.length > 0 && (
+          <table>
+            <thead><tr><th>Email</th><th>Source</th><th>Scope</th><th>Added</th><th></th></tr></thead>
+            <tbody>
+              {supps.data.map((s) => (
+                <tr key={`${s.email}:${s.scope}`}>
+                  <td className="t-strong">{s.email}</td>
+                  <td>{s.source}</td>
+                  <td>{s.scope}</td>
+                  <td className="muted">{new Date(s.addedAt).toLocaleString()}</td>
+                  <td>
+                    {s.scope === "org"
+                      ? <button className="btn ghost" onClick={() => void lift(s.email)}>Lift</button>
+                      : <span className="muted">global</span>}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function Segments({ org }: { org: string }) {
+  const [rev, setRev] = useState(0);
+  const segments = useAsync(() => api.segments(org), [org, rev]);
+  const [segmentId, setSegmentId] = useState("");
+  const [name, setName] = useState("");
+  const [predicate, setPredicate] = useState("");
+  const [msg, setMsg] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const edit = (s: { segmentId: string; name: string; predicate: unknown }) => {
+    setSegmentId(s.segmentId); setName(s.name);
+    setPredicate(JSON.stringify(s.predicate, null, 2)); setMsg("");
+  };
+  const reset = () => { setSegmentId(""); setName(""); setPredicate(""); setMsg(""); };
+
+  const save = async () => {
+    setMsg(""); setBusy(true);
+    let parsed: unknown;
+    try { parsed = JSON.parse(predicate); }
+    catch { setMsg("Predicate is not valid JSON."); setBusy(false); return; }
+    try {
+      const saved = await api.saveSegment(org, segmentId.trim(), name.trim(), parsed);
+      setMsg(`Saved "${saved.segmentId}".`);
+      setRev((n) => n + 1);
+    } catch (e) { setMsg(String(e)); }
+    finally { setBusy(false); }
+  };
+  const valid = segmentId.trim() && name.trim() && predicate.trim();
+
+  return (
+    <div>
+      <h1 className="h1">Segments · {org || "—"}</h1>
+      <p className="muted" style={{ marginTop: -8 }}>
+        Reusable audience filters that target within a list. The v1 engine requires a base
+        <code> list</code> condition.
+      </p>
+      {segments.loading && <div className="card muted">Loading…</div>}
+      {segments.error && <p className="err">{segments.error}</p>}
+      {segments.data && segments.data.length > 0 && (
+        <div className="card">
+          <table>
+            <thead><tr><th>Segment</th><th></th></tr></thead>
+            <tbody>
+              {segments.data.map((s) => (
+                <tr key={s.segmentId}>
+                  <td className="t-strong">{s.name} <span className="muted">({s.segmentId})</span></td>
+                  <td><button className="btn ghost" onClick={() => edit(s)}>Edit</button></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      <div className="card">
+        <div className="muted" style={{ marginBottom: 8 }}>{segmentId ? `Editing ${segmentId}` : "New segment"}</div>
+        <div style={{ display: "flex", gap: 8 }}>
+          <input value={segmentId} onChange={(e) => setSegmentId(e.target.value)} placeholder="segment id" style={{ flex: 1 }} disabled={busy} />
+          <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Display name" style={{ flex: 2 }} disabled={busy} />
+        </div>
+        <label style={{ marginTop: 12 }}>Predicate (JSON)</label>
+        <textarea value={predicate} onChange={(e) => setPredicate(e.target.value)} rows={10}
+          placeholder={'{"match":"all","conditions":[{"field":"list","op":"in","value":"ledger"}]}'}
+          style={{ width: "100%", fontFamily: "monospace" }} disabled={busy} />
+        <p className="muted" style={{ margin: "6px 0 0" }}>
+          A base <code>list</code> condition is required by the v1 engine.
+        </p>
+        <div style={{ display: "flex", gap: 10, alignItems: "center", marginTop: 8 }}>
+          <button className="btn" disabled={!valid || busy} onClick={() => void save()}>{busy ? "Saving…" : "Save segment"}</button>
+          {segmentId && <button className="btn ghost" onClick={reset} disabled={busy}>New</button>}
+          {msg && <span className={msg.startsWith("Saved") ? "muted" : "err"}>{msg}</span>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ImportSubscribers({ org }: { org: string }) {
+  const lists = useAsync(() => api.lists(org), [org]);
+  const [listId, setListId] = useState("");
+  const [csv, setCsv] = useState("");
+  const [status, setStatus] = useState<"pending" | "confirmed">("pending");
+  const [report, setReport] = useState<{ imported: number; skipped: number; suppressed: number; dryRun: boolean } | null>(null);
+  const [msg, setMsg] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (lists.data && lists.data.length > 0 && !listId) setListId(lists.data[0]!.listId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lists.data]);
+
+  const run = async (dryRun: boolean) => {
+    setMsg(""); setReport(null); setBusy(true);
+    try {
+      setReport(await api.importCsv(org, listId, csv, dryRun, status));
+    } catch (e) { setMsg(String(e)); }
+    finally { setBusy(false); }
+  };
+  const valid = !!listId && csv.trim() !== "";
+
+  return (
+    <div>
+      <h1 className="h1">Import subscribers · {org || "—"}</h1>
+      <p className="muted" style={{ marginTop: -8 }}>
+        Paste CSV to bulk-add subscribers to a list. Run a dry run first to preview counts.
+      </p>
+      {lists.data && lists.data.length === 0 && (
+        <div className="card muted">No newsletters yet — create a list first.</div>
+      )}
+      <div className="card">
+        <label>List</label>
+        <select value={listId} onChange={(e) => setListId(e.target.value)} style={{ width: "100%" }}>
+          {(lists.data ?? []).map((l) => (
+            <option key={l.listId} value={l.listId}>{l.name} ({l.listId})</option>
+          ))}
+        </select>
+        <label style={{ marginTop: 12 }}>Initial status</label>
+        <select value={status} onChange={(e) => setStatus(e.target.value as "pending" | "confirmed")} style={{ width: "100%" }}>
+          <option value="pending">pending</option>
+          <option value="confirmed">confirmed</option>
+        </select>
+        <label style={{ marginTop: 12 }}>CSV</label>
+        <textarea value={csv} onChange={(e) => setCsv(e.target.value)} rows={10}
+          placeholder={"email,first_name\nreader@example.com,Alex"}
+          style={{ width: "100%", fontFamily: "monospace" }} disabled={busy} />
+        <div style={{ display: "flex", gap: 10, alignItems: "center", marginTop: 8 }}>
+          <button className="btn ghost" disabled={!valid || busy} onClick={() => void run(true)}>Dry run</button>
+          <button className="btn" disabled={!valid || busy} onClick={() => void run(false)}>{busy ? "Working…" : "Import"}</button>
+          {msg && <span className="err">{msg}</span>}
+        </div>
+      </div>
+      {report && (
+        <div className="card">
+          <div className="muted" style={{ marginBottom: 8 }}>{report.dryRun ? "Dry run — no changes applied" : "Import complete"}</div>
+          <div className="kpis">
+            <Kpi n={report.imported} l="imported" />
+            <Kpi n={report.skipped} l="skipped" />
+            <Kpi n={report.suppressed} l="suppressed" />
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Privacy({ org }: { org: string }) {
+  const [email, setEmail] = useState("");
+  const [confirm, setConfirm] = useState(false);
+  const [result, setResult] = useState<{ found?: boolean; data?: unknown; erased?: boolean } | null>(null);
+  const [msg, setMsg] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const run = async (action: "export" | "erase") => {
+    setMsg(""); setResult(null); setBusy(true);
+    try { setResult(await api.privacy(org, action, email.trim())); }
+    catch (e) { setMsg(String(e)); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <div>
+      <h1 className="h1">Data requests · {org || "—"}</h1>
+      <p className="muted" style={{ marginTop: -8 }}>
+        Handle DSAR export and erasure requests. Erase requires the <code>subscribers:delete</code> role and will 403 otherwise.
+      </p>
+      <div className="card">
+        <label>Subject email</label>
+        <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="email" style={{ width: "100%" }} disabled={busy} />
+        <div style={{ display: "flex", gap: 10, alignItems: "center", marginTop: 12 }}>
+          <button className="btn" disabled={!email.trim() || busy} onClick={() => void run("export")}>Export</button>
+        </div>
+        <label style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 16 }}>
+          <input type="checkbox" checked={confirm} onChange={(e) => setConfirm(e.target.checked)} /> I understand this is irreversible
+        </label>
+        <div style={{ display: "flex", gap: 10, alignItems: "center", marginTop: 8 }}>
+          <button className="btn" disabled={!email.trim() || !confirm || busy} onClick={() => void run("erase")}>Erase</button>
+          {msg && <span className="err">{msg}</span>}
+        </div>
+      </div>
+      {result && (
+        <div className="card">
+          <div className="muted" style={{ marginBottom: 8 }}>Result</div>
+          <pre style={{ whiteSpace: "pre-wrap", margin: 0 }}>{JSON.stringify(result, null, 2)}</pre>
+        </div>
+      )}
+    </div>
+  );
+}
+
+interface DraftStep { stepId: string; waitSeconds: string; listId: string; templateId: string; subject: string }
+
+function Drips({ org }: { org: string }) {
+  const [rev, setRev] = useState(0);
+  const sequences = useAsync(() => api.dripSequences(org), [org, rev]);
+  const lists = useAsync(() => api.lists(org), [org]);
+  const templates = useAsync(() => api.templates(org), [org]);
+  const [sequenceId, setSequenceId] = useState("");
+  const [name, setName] = useState("");
+  const [triggerKind, setTriggerKind] = useState<"signup" | "manual">("signup");
+  const [triggerListId, setTriggerListId] = useState("");
+  const [steps, setSteps] = useState<DraftStep[]>([{ stepId: "", waitSeconds: "0", listId: "", templateId: "", subject: "" }]);
+  const [msg, setMsg] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const setStep = (i: number, patch: Partial<DraftStep>) =>
+    setSteps((ss) => ss.map((s, j) => (j === i ? { ...s, ...patch } : s)));
+  const addStep = () => setSteps((ss) => [...ss, { stepId: "", waitSeconds: "0", listId: "", templateId: "", subject: "" }]);
+  const removeStep = (i: number) => setSteps((ss) => ss.filter((_, j) => j !== i));
+
+  const save = async () => {
+    setMsg(""); setBusy(true);
+    try {
+      const stepDefs: DripStepDef[] = steps.map((s) => ({
+        stepId: s.stepId.trim(),
+        waitSeconds: Number(s.waitSeconds) || 0,
+        listId: s.listId,
+        templateId: s.templateId,
+        subject: s.subject,
+      }));
+      const trigger = triggerKind === "signup"
+        ? { kind: "signup" as const, listId: triggerListId }
+        : { kind: "manual" as const };
+      const saved = await api.saveDripSequence({ orgId: org, sequenceId: sequenceId.trim(), name: name.trim(), trigger, steps: stepDefs });
+      setMsg(`Saved "${saved.sequenceId}".`);
+      setRev((n) => n + 1);
+    } catch (e) { setMsg(String(e)); }
+    finally { setBusy(false); }
+  };
+
+  const stepsValid = steps.length > 0 && steps.every((s) => s.stepId.trim() && s.listId && s.templateId && s.subject.trim());
+  const valid = sequenceId.trim() && name.trim() && stepsValid && (triggerKind === "manual" || !!triggerListId);
+
+  return (
+    <div>
+      <h1 className="h1">Drip sequences · {org || "—"}</h1>
+      <p className="muted" style={{ marginTop: -8 }}>
+        Automated multi-step sends triggered on signup or manually. Drip steps render the selected
+        template; use raw_html templates (server-side MJML compile isn't available).
+      </p>
+      {sequences.loading && <div className="card muted">Loading…</div>}
+      {sequences.error && <p className="err">{sequences.error}</p>}
+      {sequences.data && sequences.data.length > 0 && (
+        <div className="card">
+          <table>
+            <thead><tr><th>Sequence</th><th>Trigger</th><th>Steps</th></tr></thead>
+            <tbody>
+              {sequences.data.map((s) => (
+                <tr key={s.sequenceId}>
+                  <td className="t-strong">{s.name} <span className="muted">({s.sequenceId})</span></td>
+                  <td>{s.trigger.kind === "signup" ? `signup → ${s.trigger.listId}` : "manual"}</td>
+                  <td>{s.steps.length}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      <div className="card">
+        <div className="muted" style={{ marginBottom: 8 }}>New sequence</div>
+        <div style={{ display: "flex", gap: 8 }}>
+          <input value={sequenceId} onChange={(e) => setSequenceId(e.target.value)} placeholder="sequence id" style={{ flex: 1 }} disabled={busy} />
+          <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Display name" style={{ flex: 2 }} disabled={busy} />
+        </div>
+        <label style={{ marginTop: 12 }}>Trigger</label>
+        <div style={{ display: "flex", gap: 16 }}>
+          {(["signup", "manual"] as const).map((k) => (
+            <label key={k} style={{ display: "flex", gap: 6, alignItems: "center" }}>
+              <input type="radio" name="triggerKind" checked={triggerKind === k} onChange={() => setTriggerKind(k)} /> {k}
+            </label>
+          ))}
+        </div>
+        {triggerKind === "signup" && (
+          <div style={{ marginTop: 8 }}>
+            <label>Signup list</label>
+            <select value={triggerListId} onChange={(e) => setTriggerListId(e.target.value)} style={{ width: "100%" }}>
+              <option value="">Choose a list…</option>
+              {(lists.data ?? []).map((l) => (<option key={l.listId} value={l.listId}>{l.name} ({l.listId})</option>))}
+            </select>
+          </div>
+        )}
+        <div style={{ marginTop: 16 }}>
+          <div className="muted" style={{ marginBottom: 8 }}>Steps</div>
+          {steps.map((s, i) => (
+            <div key={i} style={{ borderTop: i ? "1px solid #eee" : "none", paddingTop: i ? 10 : 0, marginTop: i ? 10 : 0 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <span className="muted">Step {i + 1}</span>
+                {steps.length > 1 && <button className="btn ghost" onClick={() => removeStep(i)}>Remove</button>}
+              </div>
+              <div style={{ display: "flex", gap: 8, marginTop: 6 }}>
+                <input value={s.stepId} onChange={(e) => setStep(i, { stepId: e.target.value })} placeholder="step id" style={{ flex: 1 }} />
+                <input type="number" value={s.waitSeconds} onChange={(e) => setStep(i, { waitSeconds: e.target.value })} placeholder="wait seconds" style={{ flex: 1 }} />
+              </div>
+              <div style={{ display: "flex", gap: 8, marginTop: 6 }}>
+                <select value={s.listId} onChange={(e) => setStep(i, { listId: e.target.value })} style={{ flex: 1 }}>
+                  <option value="">List…</option>
+                  {(lists.data ?? []).map((l) => (<option key={l.listId} value={l.listId}>{l.name} ({l.listId})</option>))}
+                </select>
+                <select value={s.templateId} onChange={(e) => setStep(i, { templateId: e.target.value })} style={{ flex: 1 }}>
+                  <option value="">Template…</option>
+                  {(templates.data ?? []).map((t) => (<option key={t.templateId} value={t.templateId}>{t.name} ({t.templateId})</option>))}
+                </select>
+              </div>
+              <input value={s.subject} onChange={(e) => setStep(i, { subject: e.target.value })} placeholder="Subject" style={{ width: "100%", marginTop: 6 }} />
+            </div>
+          ))}
+          <button className="btn ghost" style={{ marginTop: 10 }} onClick={addStep}>+ Step</button>
+        </div>
+        <div style={{ display: "flex", gap: 10, alignItems: "center", marginTop: 12 }}>
+          <button className="btn" disabled={!valid || busy} onClick={() => void save()}>{busy ? "Saving…" : "Save sequence"}</button>
+          {msg && <span className={msg.startsWith("Saved") ? "muted" : "err"}>{msg}</span>}
+        </div>
       </div>
     </div>
   );
@@ -908,6 +1325,7 @@ const DEFAULT_PRESENTATION: ListPresentation = {
 };
 
 function PresentationEditor({ org }: { org: string }) {
+  const lists = useAsync(() => api.lists(org), [org]);
   const [listId, setListId] = useState("");
   const [p, setP] = useState<ListPresentation>(DEFAULT_PRESENTATION);
   const [msg, setMsg] = useState("");
@@ -925,8 +1343,14 @@ function PresentationEditor({ org }: { org: string }) {
     <div>
       <h1 className="h1">Subscriber-site presentation</h1>
       <div className="card">
-        <label>List id</label>
-        <input value={listId} onChange={(e) => setListId(e.target.value)} placeholder="e.g. ledger" />
+        <label>List</label>
+        <select value={listId} onChange={(e) => setListId(e.target.value)} style={{ width: "100%" }}>
+          <option value="">Choose a list…</option>
+          {(lists.data ?? []).map((l) => (<option key={l.listId} value={l.listId}>{l.name} ({l.listId})</option>))}
+        </select>
+        <p className="muted" style={{ margin: "6px 0 0" }}>
+          Saving overwrites this list's current toggles with the values shown.
+        </p>
         <div style={{ marginTop: 12 }}>
           <Check k="showFrequency" label="Show frequency" />
           <Check k="showSendTime" label="Show send time" />

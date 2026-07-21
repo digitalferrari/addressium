@@ -75,7 +75,7 @@ export function renderForRecipient(
       parts.push(`<p>${applyMerge(block.html, attrs)}</p>`);
     } else if (block.kind === "editorial") {
       // Token rides in the fragment (client-side only) — docs/SECURITY.md §4.1.
-      const href = `${block.url}#tok=${magicToken}`;
+      const href = `${safeHref(block.url)}#tok=${magicToken}`;
       parts.push(
         `<a data-linkid="l${li}" href="${escapeHtml(href)}">${escapeHtml(block.label)}</a>`,
       );
@@ -97,6 +97,20 @@ const ANCHOR_RE = /<a\b([^>]*?)\shref="([^"]*)"([^>]*)>([\s\S]*?)<\/a>/gi;
 function baseUrl(u: string): string {
   const i = u.indexOf("#");
   return i >= 0 ? u.slice(0, i) : u;
+}
+
+/**
+ * Neutralize dangerous link schemes at render (#94). Blocks-mode editorial urls
+ * are schema-validated, but the `mjmlHtml` path bypasses the raw-HTML sanitizer,
+ * so we re-check here: an absolute http(s)/mailto url, a protocol-relative/root/
+ * fragment-relative url, or a scheme-less relative url is kept; anything with an
+ * explicit disallowed scheme (`javascript:`/`data:`/`vbscript:`…) becomes "#".
+ */
+function safeHref(u: string): string {
+  const t = u.trim();
+  if (/^(https?:|mailto:|\/\/|\/|#)/i.test(t)) return u;
+  if (!/^[a-z][a-z0-9+.-]*:/i.test(t)) return u; // no scheme ⇒ relative, allowed
+  return "#";
 }
 function stripTags(s: string): string {
   return s.replace(/<[^>]*>/g, "").replace(/\s+/g, " ").trim();
@@ -134,7 +148,7 @@ export function renderHtmlForRecipient(
   let li = 0;
   return merged.replace(ANCHOR_RE, (_full, pre: string, href: string, post: string, inner: string) => {
     const linkId = `l${li++}`;
-    const target = `${baseUrl(href)}#tok=${magicToken}`;
+    const target = `${safeHref(baseUrl(href))}#tok=${magicToken}`;
     return `<a${pre} data-linkid="${linkId}" href="${escapeHtml(target)}"${post}>${inner}</a>`;
   });
 }

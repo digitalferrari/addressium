@@ -75,9 +75,22 @@ export type SaveCampaignInput = z.infer<typeof saveCampaignSchema>;
  * renderer): text (may hold {{merge}} tags), a tracked editorial link, or an
  * ad slot inserted verbatim. Kept in lockstep with render.ts.
  */
+/**
+ * Link URL restricted to safe schemes (#94). `z.string().url()` alone accepts
+ * `javascript:`/`data:` (the URL constructor treats them as valid), and editorial
+ * links bypass the raw-HTML sanitizer in blocks mode — so a bad scheme would
+ * reach the rendered `<a href>`. Restrict to http(s)/mailto at the boundary.
+ */
+const safeLinkUrl = z
+  .string()
+  .url()
+  .refine((u) => /^(https?:|mailto:)/i.test(u.trim()), {
+    message: "url must be http(s) or mailto",
+  });
+
 export const emailBlockSchema = z.union([
   z.object({ kind: z.literal("text"), html: z.string() }),
-  z.object({ kind: z.literal("editorial"), label: z.string().min(1), url: z.string().url() }),
+  z.object({ kind: z.literal("editorial"), label: z.string().min(1), url: safeLinkUrl }),
   z.object({ kind: z.literal("ad"), slot: z.string().min(1), html: z.string() }),
 ]);
 /**
@@ -127,6 +140,30 @@ export const saveSegmentSchema = z.object({
   predicate: z.unknown(),
 });
 export type SaveSegmentInput = z.infer<typeof saveSegmentSchema>;
+
+/** Create/update drip-sequence payload (admin, #104). */
+export const saveDripSequenceSchema = z.object({
+  orgId: z.string().min(1),
+  sequenceId: z.string().min(1),
+  name: z.string().min(1),
+  trigger: z.union([
+    z.object({ kind: z.literal("signup"), listId: z.string().min(1) }),
+    z.object({ kind: z.literal("manual") }),
+  ]),
+  steps: z
+    .array(
+      z.object({
+        stepId: z.string().min(1),
+        waitSeconds: z.number().int().min(0),
+        listId: z.string().min(1),
+        templateId: z.string().min(1),
+        subject: z.string().min(1),
+        requireEntitlement: entitlement.optional(),
+      }),
+    )
+    .min(1),
+});
+export type SaveDripSequenceInput = z.infer<typeof saveDripSequenceSchema>;
 
 /** Manual suppression payload (admin). */
 export const manualSuppressSchema = z.object({
