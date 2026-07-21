@@ -18,6 +18,7 @@
     { "path": "services/feeds" },
     { "path": "services/privacy" },
     { "path": "services/importer" },
+    { "path": "services/analytics-export" },
     { "path": "infra/cdk" }
   ]
 }
