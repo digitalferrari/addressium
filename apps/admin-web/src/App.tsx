@@ -8,9 +8,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { completeLoginIfPresent, decodeClaims, getTokens, login, logout } from "./auth.js";
 import { grantFromClaims, can, type Grant } from "./rbac.js";
-import { api, type Branding, type CampaignReport, type ListPresentation, type SendScheduleState, type SetupState, type UsageRecord } from "./api.js";
+import { api, type Branding, type CampaignReport, type EmailBlock, type ListPresentation, type ScheduleWhen, type SendScheduleState, type SetupState, type UsageRecord } from "./api.js";
 
-type View = "dashboard" | "setup" | "report" | "usage" | "schedules" | "branding" | "presentation" | "subscribers" | "settings";
+type View = "dashboard" | "setup" | "compose" | "report" | "usage" | "schedules" | "branding" | "presentation" | "subscribers" | "settings";
 
 export function App() {
   const [ready, setReady] = useState(false);
@@ -110,6 +110,7 @@ function Console() {
         <nav className="nav" style={{ marginTop: 16 }}>
           <NavItem id="dashboard" label="Dashboard" />
           <NavItem id="setup" label="Setup" />
+          <NavItem id="compose" label="Compose & schedule" cap="campaigns:schedule" />
           <NavItem id="report" label="Campaign report" cap="reports:view" />
           <NavItem id="schedules" label="Schedules" cap="campaigns:schedule" />
           <NavItem id="usage" label="Usage & cost" cap="reports:view" />
@@ -128,6 +129,7 @@ function Console() {
       <main className="main">
         {view === "dashboard" && <Dashboard org={org} onGoToSetup={() => setView("setup")} />}
         {view === "setup" && <Setup org={org} />}
+        {view === "compose" && <Compose org={org} onScheduled={() => setView("schedules")} />}
         {view === "report" && <Report org={org} grant={grant} />}
         {view === "schedules" && <Schedules org={org} grant={grant} />}
         {view === "usage" && <Usage org={org} />}
@@ -361,6 +363,147 @@ function Usage({ org }: { org: string }) {
           </table>
         </div>
       )}
+    </div>
+  );
+}
+
+interface DraftBlock { kind: "text" | "editorial"; html: string; label: string; url: string }
+
+function Compose({ org, onScheduled }: { org: string; onScheduled: () => void }) {
+  const lists = useAsync(() => api.lists(org), [org]);
+  const [listId, setListId] = useState("");
+  const [campaignId, setCampaignId] = useState("");
+  const [subject, setSubject] = useState("");
+  const [blocks, setBlocks] = useState<DraftBlock[]>([{ kind: "text", html: "", label: "", url: "" }]);
+  const [when, setWhen] = useState<"now" | "at" | "recurring">("now");
+  const [at, setAt] = useState("");
+  const [cron, setCron] = useState("cron(0 13 * * ? *)");
+  const [timezone, setTimezone] = useState("");
+  const [msg, setMsg] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (lists.data && lists.data.length > 0 && !listId) setListId(lists.data[0]!.listId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lists.data]);
+
+  const setBlock = (i: number, patch: Partial<DraftBlock>) =>
+    setBlocks((bs) => bs.map((b, j) => (j === i ? { ...b, ...patch } : b)));
+  const addBlock = (kind: "text" | "editorial") =>
+    setBlocks((bs) => [...bs, { kind, html: "", label: "", url: "" }]);
+  const removeBlock = (i: number) => setBlocks((bs) => bs.filter((_, j) => j !== i));
+
+  const blocksValid = blocks.length > 0 && blocks.every((b) =>
+    b.kind === "text" ? b.html.trim() !== "" : b.label.trim() !== "" && /^https?:\/\//.test(b.url.trim()),
+  );
+  const valid =
+    !!listId && campaignId.trim() !== "" && subject.trim() !== "" && blocksValid &&
+    (when !== "at" || at !== "") && (when !== "recurring" || cron.trim() !== "");
+
+  const submit = async () => {
+    setMsg(""); setBusy(true);
+    try {
+      const whenPayload: ScheduleWhen =
+        when === "now" ? { type: "now" }
+        : when === "at" ? { type: "at", at: new Date(at).toISOString() }
+        : { type: "recurring", cron: cron.trim(), ...(timezone.trim() ? { timezone: timezone.trim() } : {}) };
+      const template = {
+        blocks: blocks.map((b): EmailBlock =>
+          b.kind === "text" ? { kind: "text", html: b.html } : { kind: "editorial", label: b.label, url: b.url.trim() },
+        ),
+      };
+      const res = await api.scheduleCampaign({ orgId: org, campaignId: campaignId.trim(), listId, subject, template, when: whenPayload });
+      setMsg(`Scheduled "${res.scheduleId}" (${res.status}${res.at ? ` · ${new Date(res.at).toLocaleString()}` : ""}${res.timezone ? ` · ${res.timezone}` : ""}).`);
+      onScheduled();
+    } catch (e) {
+      setMsg(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div>
+      <h1 className="h1">Compose &amp; schedule · {org || "—"}</h1>
+      <p className="muted" style={{ marginTop: -8 }}>
+        Build a send and schedule it now, at a time, or on a recurring cron. It appears under
+        Schedules where you can pause or archive it.
+      </p>
+      {lists.data && lists.data.length === 0 && (
+        <div className="card muted">No newsletters yet — create a list first.</div>
+      )}
+      <div className="card">
+        <label>Newsletter</label>
+        <select value={listId} onChange={(e) => setListId(e.target.value)} style={{ width: "100%" }}>
+          {(lists.data ?? []).map((l) => (
+            <option key={l.listId} value={l.listId}>{l.name} ({l.listId})</option>
+          ))}
+        </select>
+        <label style={{ marginTop: 12 }}>Campaign id</label>
+        <input value={campaignId} onChange={(e) => setCampaignId(e.target.value)} placeholder="e.g. daily-2026-07-21" style={{ width: "100%" }} />
+        <label style={{ marginTop: 12 }}>Subject</label>
+        <input value={subject} onChange={(e) => setSubject(e.target.value)} placeholder="Subject line" style={{ width: "100%" }} />
+      </div>
+
+      <div className="card">
+        <div className="muted" style={{ marginBottom: 8 }}>Body</div>
+        {blocks.map((b, i) => (
+          <div key={i} style={{ borderTop: i ? "1px solid #eee" : "none", paddingTop: i ? 10 : 0, marginTop: i ? 10 : 0 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <span className="muted">{b.kind === "text" ? "Text block" : "Editorial link"}</span>
+              {blocks.length > 1 && (
+                <button className="btn ghost" onClick={() => removeBlock(i)}>Remove</button>
+              )}
+            </div>
+            {b.kind === "text" ? (
+              <textarea value={b.html} onChange={(e) => setBlock(i, { html: e.target.value })}
+                placeholder="HTML — {{first_name}} merge tags allowed" rows={3} style={{ width: "100%" }} />
+            ) : (
+              <div style={{ display: "flex", gap: 8 }}>
+                <input value={b.label} onChange={(e) => setBlock(i, { label: e.target.value })} placeholder="Link label" style={{ flex: 1 }} />
+                <input value={b.url} onChange={(e) => setBlock(i, { url: e.target.value })} placeholder="https://…" style={{ flex: 2 }} />
+              </div>
+            )}
+          </div>
+        ))}
+        <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+          <button className="btn ghost" onClick={() => addBlock("text")}>+ Text</button>
+          <button className="btn ghost" onClick={() => addBlock("editorial")}>+ Editorial link</button>
+        </div>
+      </div>
+
+      <div className="card">
+        <div className="muted" style={{ marginBottom: 8 }}>When</div>
+        <div style={{ display: "flex", gap: 16 }}>
+          {(["now", "at", "recurring"] as const).map((w) => (
+            <label key={w} style={{ display: "flex", gap: 6, alignItems: "center" }}>
+              <input type="radio" name="when" checked={when === w} onChange={() => setWhen(w)} />
+              {w === "now" ? "Send now" : w === "at" ? "At a time" : "Recurring"}
+            </label>
+          ))}
+        </div>
+        {when === "at" && (
+          <div style={{ marginTop: 10 }}>
+            <label>Send at (your local time; a 5-minute floor always applies)</label>
+            <input type="datetime-local" value={at} onChange={(e) => setAt(e.target.value)} style={{ width: "100%" }} />
+          </div>
+        )}
+        {when === "recurring" && (
+          <div style={{ marginTop: 10 }}>
+            <label>Cron expression</label>
+            <input value={cron} onChange={(e) => setCron(e.target.value)} placeholder="cron(0 13 * * ? *)" style={{ width: "100%" }} />
+            <label style={{ marginTop: 8 }}>Timezone (blank → org default)</label>
+            <input value={timezone} onChange={(e) => setTimezone(e.target.value)} placeholder="America/Denver" style={{ width: "100%" }} />
+          </div>
+        )}
+      </div>
+
+      <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+        <button className="btn" disabled={!valid || busy} onClick={submit}>
+          {busy ? "Scheduling…" : "Schedule"}
+        </button>
+        {msg && <span className={msg.startsWith("Scheduled") ? "muted" : "err"}>{msg}</span>}
+      </div>
     </div>
   );
 }

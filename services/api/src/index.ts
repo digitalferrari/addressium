@@ -198,17 +198,10 @@ export async function confirmHandler(event: HttpEvent): Promise<HttpResult> {
   }
 }
 
-export interface ScheduleBody extends SendDescriptor {
-  when:
-    | { type: "now" }
-    | { type: "at"; at: string } // absolute instant (offset/Z) — no zone needed
-    | { type: "recurring"; cron: string; timezone?: string };
-}
-
 /** POST /campaigns/schedule — send now, at a time, or recurring (§4.6, §4.16). */
 export async function scheduleCampaignHandler(event: HttpEvent): Promise<HttpResult> {
   try {
-    const body = JSON.parse(event.body ?? "{}") as ScheduleBody;
+    const body = schemas.scheduleCampaignSchema.parse(JSON.parse(event.body ?? "{}"));
     requireGrant(event, "campaigns:schedule", body.orgId); // admin-only (§4.12)
     const descriptor: SendDescriptor = {
       orgId: body.orgId,

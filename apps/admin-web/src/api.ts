@@ -83,6 +83,40 @@ export interface OrgMeta {
   setupComplete: boolean;
 }
 
+export interface AdminList {
+  orgId: string;
+  listId: string;
+  name: string;
+  visibility?: "open" | "closed";
+  fromAddress?: string;
+}
+
+export type EmailBlock =
+  | { kind: "text"; html: string }
+  | { kind: "editorial"; label: string; url: string }
+  | { kind: "ad"; slot: string; html: string };
+
+export type ScheduleWhen =
+  | { type: "now" }
+  | { type: "at"; at: string }
+  | { type: "recurring"; cron: string; timezone?: string };
+
+export interface ScheduleCampaignBody {
+  orgId: string;
+  campaignId: string;
+  listId: string;
+  subject: string;
+  template: { blocks: EmailBlock[] };
+  when: ScheduleWhen;
+}
+
+export interface ScheduleResult {
+  status: string;
+  at?: string;
+  timezone?: string;
+  scheduleId: string;
+}
+
 export interface SendScheduleState {
   orgId: string;
   scheduleId: string;
@@ -96,8 +130,9 @@ export interface SendScheduleState {
 
 export const api = {
   orgMeta: (org: string) => call<OrgMeta>("GET", `/orgs/${org}`),
-  lists: (org: string) => call<unknown[]>("GET", `/orgs/${org}/lists`),
+  lists: (org: string) => call<AdminList[]>("GET", `/orgs/${org}/lists`),
   schedules: (org: string) => call<SendScheduleState[]>("GET", `/orgs/${org}/schedules`),
+  scheduleCampaign: (body: ScheduleCampaignBody) => call<ScheduleResult>("POST", `/campaigns/schedule`, body),
   scheduleLifecycle: (orgId: string, scheduleId: string, action: "start" | "pause" | "archive") =>
     call<SendScheduleState>("POST", `/campaigns/lifecycle`, { orgId, scheduleId, action }),
   usage: (org: string) => call<UsageRecord[] | null>("GET", `/orgs/${org}/usage`),

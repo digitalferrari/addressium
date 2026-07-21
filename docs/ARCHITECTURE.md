@@ -319,6 +319,12 @@ at least 5 minutes in the future** (`MIN_ONEOFF_LEAD_MS`), so an operator has a
 window to pause before anything leaves. A requested time further out is honored
 as-is. Recurring series use a timezone-aware cron (§4.21).
 
+**Composing a send.** The console's **Compose & schedule** screen builds a send
+inline — newsletter, subject, and a body of text + editorial-link blocks — and
+`POST /campaigns/schedule` (validated by `scheduleCampaignSchema`) dispatches it
+now, at an instant, or on a recurring cron. The scheduled send then shows up in
+the Schedules screen below, where its lifecycle is managed.
+
 **Send lifecycle — start · pause · archive, never delete.** Every scheduled send
 carries a `SendScheduleState` record (`active` | `paused` | `archived`) that is
 the **source of truth** for whether it may fire. `POST /campaigns/lifecycle`

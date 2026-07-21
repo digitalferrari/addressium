@@ -70,6 +70,33 @@ export const saveCampaignSchema = z.object({
 });
 export type SaveCampaignInput = z.infer<typeof saveCampaignSchema>;
 
+/**
+ * Email body blocks (mirror `EmailTemplate`/`Block` in @addressium/domain's
+ * renderer): text (may hold {{merge}} tags), a tracked editorial link, or an
+ * ad slot inserted verbatim. Kept in lockstep with render.ts.
+ */
+export const emailBlockSchema = z.union([
+  z.object({ kind: z.literal("text"), html: z.string() }),
+  z.object({ kind: z.literal("editorial"), label: z.string().min(1), url: z.string().url() }),
+  z.object({ kind: z.literal("ad"), slot: z.string().min(1), html: z.string() }),
+]);
+export const emailTemplateSchema = z.object({ blocks: z.array(emailBlockSchema).min(1) });
+
+/** Compose + schedule payload (§4.6): send now, at an instant, or recurring cron. */
+export const scheduleCampaignSchema = z.object({
+  orgId: z.string().min(1),
+  campaignId: z.string().min(1),
+  listId: z.string().min(1),
+  subject: z.string().min(1),
+  template: emailTemplateSchema,
+  when: z.union([
+    z.object({ type: z.literal("now") }),
+    z.object({ type: z.literal("at"), at: z.string().min(1) }),
+    z.object({ type: z.literal("recurring"), cron: z.string().min(1), timezone: z.string().optional() }),
+  ]),
+});
+export type ScheduleCampaignInput = z.infer<typeof scheduleCampaignSchema>;
+
 /** Create/update-segment payload (admin). */
 export const saveSegmentSchema = z.object({
   orgId: z.string().min(1),
