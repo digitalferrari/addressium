@@ -402,6 +402,7 @@ export class ControlPlaneStack extends Stack {
       });
       return f;
     };
+    adminRoute("SetupStateFn", "setupStateHandler", HttpMethod.GET, "/orgs/{org}/setup");
     adminRoute("ListsGetFn", "listsHandler", HttpMethod.GET, "/orgs/{org}/lists");
     adminRoute("ListsPostFn", "listsHandler", HttpMethod.POST, "/lists");
     adminRoute("ListVisFn", "listVisibilityHandler", HttpMethod.POST, "/lists/visibility");

@@ -8,9 +8,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { completeLoginIfPresent, decodeClaims, getTokens, login, logout } from "./auth.js";
 import { grantFromClaims, can, type Grant } from "./rbac.js";
-import { api, type Branding, type CampaignReport, type ListPresentation, type UsageRecord } from "./api.js";
+import { api, type Branding, type CampaignReport, type ListPresentation, type SetupState, type UsageRecord } from "./api.js";
 
-type View = "dashboard" | "report" | "usage" | "branding" | "presentation" | "subscribers" | "settings";
+type View = "dashboard" | "setup" | "report" | "usage" | "branding" | "presentation" | "subscribers" | "settings";
 
 export function App() {
   const [ready, setReady] = useState(false);
@@ -81,6 +81,7 @@ function Console() {
         )}
         <nav className="nav" style={{ marginTop: 16 }}>
           <NavItem id="dashboard" label="Dashboard" />
+          <NavItem id="setup" label="Setup" />
           <NavItem id="report" label="Campaign report" cap="reports:view" />
           <NavItem id="usage" label="Usage & cost" cap="reports:view" />
           <NavItem id="subscribers" label="Subscribers" cap="subscribers:manage" />
@@ -96,7 +97,8 @@ function Console() {
         </button>
       </aside>
       <main className="main">
-        {view === "dashboard" && <Dashboard org={org} />}
+        {view === "dashboard" && <Dashboard org={org} onGoToSetup={() => setView("setup")} />}
+        {view === "setup" && <Setup org={org} />}
         {view === "report" && <Report org={org} grant={grant} />}
         {view === "usage" && <Usage org={org} />}
         {view === "subscribers" && <Subscribers org={org} />}
@@ -124,17 +126,64 @@ function useAsync<T>(fn: () => Promise<T>, deps: unknown[]) {
   return state;
 }
 
-function Dashboard({ org }: { org: string }) {
+function Dashboard({ org, onGoToSetup }: { org: string; onGoToSetup: () => void }) {
   const { data, error, loading } = useAsync(() => api.lists(org), [org]);
+  const setup = useAsync(() => api.setup(org), [org]);
   return (
     <div>
       <h1 className="h1">Dashboard · {org || "—"}</h1>
+      {setup.data && !setup.data.complete && (
+        <div className="card" style={{ borderLeft: "3px solid #d99" }}>
+          <div className="t-strong">Finish setting up this organization</div>
+          <p className="muted" style={{ margin: "4px 0 8px" }}>
+            {setup.data.requiredDone} of {setup.data.requiredTotal} required steps done — you can't send safely until they're complete.
+          </p>
+          <button className="btn" onClick={onGoToSetup}>Go to Setup</button>
+        </div>
+      )}
       <div className="card">
         <div className="muted">Newsletters</div>
         {loading && <p className="muted">Loading…</p>}
         {error && <p className="err">{error}</p>}
         {data && <p className="kpi"><span className="n">{data.length}</span> <span className="l">lists</span></p>}
       </div>
+    </div>
+  );
+}
+
+function Setup({ org }: { org: string }) {
+  const { data, error, loading } = useAsync(() => api.setup(org), [org]);
+  return (
+    <div>
+      <h1 className="h1">Setup · {org || "—"}</h1>
+      {loading && <div className="card muted">Loading…</div>}
+      {error && <p className="err">{error}</p>}
+      {data && (
+        <>
+          <div className="card">
+            <div className="muted">
+              {data.complete
+                ? "All required steps complete — this organization is ready to send."
+                : `${data.requiredDone} of ${data.requiredTotal} required steps complete.`}
+            </div>
+          </div>
+          <div className="card">
+            <table>
+              <thead><tr><th></th><th>Step</th><th></th><th>How</th></tr></thead>
+              <tbody>
+                {data.steps.map((s) => (
+                  <tr key={s.id}>
+                    <td style={{ width: 24 }}>{s.done ? "✓" : "○"}</td>
+                    <td className="t-strong">{s.label}</td>
+                    <td className="muted">{s.required ? "required" : "recommended"}</td>
+                    <td className="muted">{s.done ? "—" : s.hint}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
     </div>
   );
 }
