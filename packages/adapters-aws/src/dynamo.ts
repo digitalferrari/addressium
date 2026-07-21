@@ -284,6 +284,12 @@ export class DynamoStores implements Stores {
         }),
       );
     },
+    list: (orgId) =>
+      this.queryAll<SuppressionEntry>({
+        TableName: this.tableName,
+        KeyConditionExpression: "pk = :pk AND begins_with(sk, :s)",
+        ExpressionAttributeValues: { ":pk": `${org(orgId)}#SUPPRESSION`, ":s": "EMAIL#" },
+      }),
   };
 
   archive: ArchiveStore = {

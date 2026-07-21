@@ -97,6 +97,8 @@ export interface SuppressionStore {
   entriesFor(orgId: string, email: string): Promise<SuppressionEntry[]>;
   /** Remove a suppression entry (e.g. self-clear a prior unsubscribe on genuine re-opt-in). */
   remove(orgId: string, email: string, scope: SuppressionScope): Promise<void>;
+  /** Org-scoped suppression entries, for the admin suppression-list view (#102). */
+  list(orgId: string): Promise<SuppressionEntry[]>;
 }
 
 export interface ArchiveStore {

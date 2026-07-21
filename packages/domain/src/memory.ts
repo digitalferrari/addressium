@@ -169,6 +169,9 @@ export class MemSuppression implements SuppressionStore {
     if (scope === "global") this.global.delete(e);
     else this.orgScoped.delete(subKey(orgId, e));
   }
+  async list(orgId: string) {
+    return [...this.orgScoped.values()].filter((e) => e.orgId === orgId);
+  }
 }
 
 export class MemArchive implements ArchiveStore {

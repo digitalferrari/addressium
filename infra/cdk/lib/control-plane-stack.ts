@@ -438,6 +438,14 @@ export class ControlPlaneStack extends Stack {
     adminRoute("SegmentsPostFn", "segmentsHandler", HttpMethod.POST, "/segments");
     adminRoute("SuppressFn", "subscriberSuppressHandler", HttpMethod.POST, "/subscribers/suppress");
     adminRoute("SubUnsubFn", "subscriberUnsubscribeHandler", HttpMethod.POST, "/subscribers/unsubscribe");
+    // Operator-side subscriber management (#102): list/search, suppression list,
+    // and lift-suppression.
+    adminRoute("SubscribersListFn", "subscribersListHandler", HttpMethod.GET, "/orgs/{org}/subscribers");
+    adminRoute("SuppressionsListFn", "suppressionsListHandler", HttpMethod.GET, "/orgs/{org}/suppressions");
+    adminRoute("UnsuppressFn", "subscriberUnsuppressHandler", HttpMethod.POST, "/subscribers/unsuppress");
+    // Subscriber migration (#100) + GDPR/CCPA data-subject requests (#101).
+    adminRoute("ImportFn", "importHandler", HttpMethod.POST, "/orgs/{org}/import");
+    adminRoute("PrivacyFn", "privacyHandler", HttpMethod.POST, "/privacy");
     adminRoute("BrandingPostFn", "brandingHandler", HttpMethod.POST, "/orgs/branding");
     adminRoute("PresentationFn", "listPresentationHandler", HttpMethod.POST, "/lists/presentation");
     // AI config writes the API key to Secrets Manager (create/put).
