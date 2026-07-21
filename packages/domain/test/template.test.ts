@@ -27,17 +27,14 @@ test("editing an existing template bumps the version", async () => {
   assert.equal(edited.version, 2);
 });
 
-test("raw HTML is sanitized on save; MJML source is stored verbatim", async () => {
+test("saveTemplate stores source verbatim — sanitization happens at the API edge", async () => {
+  // Sanitization of raw HTML is the API handler's job (adapters-aws
+  // sanitizeEmailHtml, tested in integration-tests); the pure domain fn stores
+  // what it's given, MJML source included.
   const stores = memStores();
-  const html = await saveTemplate(stores, {
-    orgId: ORG, templateId: "h", name: "H", mode: "raw_html",
-    source: `<p>ok</p><script>evil()</script>`, mergeTags: [], adSlots: [],
-  });
-  assert.doesNotMatch(html.source, /<script/i);
-
   const mjmlSrc = "<mjml><mj-body>{{x}}</mj-body></mjml>";
   const mjml = await saveTemplate(stores, {
     orgId: ORG, templateId: "m", name: "M", mode: "mjml", source: mjmlSrc, mergeTags: [], adSlots: [],
   });
-  assert.equal(mjml.source, mjmlSrc); // untouched — compiled at send (Phase 2)
+  assert.equal(mjml.source, mjmlSrc);
 });

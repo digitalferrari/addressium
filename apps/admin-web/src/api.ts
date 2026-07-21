@@ -122,7 +122,7 @@ export type ScheduleWhen =
   | { type: "at"; at: string }
   | { type: "recurring"; cron: string; timezone?: string };
 
-export type EmailTemplateBody = { blocks: EmailBlock[] } | { html: string };
+export type EmailTemplateBody = { blocks: EmailBlock[] } | { html: string } | { mjmlHtml: string };
 export interface ScheduleCampaignBody {
   orgId: string;
   campaignId: string;

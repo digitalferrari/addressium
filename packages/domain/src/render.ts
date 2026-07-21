@@ -102,24 +102,6 @@ function stripTags(s: string): string {
   return s.replace(/<[^>]*>/g, "").replace(/\s+/g, " ").trim();
 }
 
-/**
- * Baseline defense-in-depth for admin-authored HTML: strip active content and
- * javascript:/data: URLs. Templates are authored by trusted operators (RBAC)
- * and per-recipient merge values are HTML-escaped separately, so this is a
- * belt-and-suspenders pass — NOT a substitute for a hardened DOM sanitizer,
- * which lands with the visual builder (Phase 2). See docs/SECURITY.md.
- */
-export function sanitizeEmailHtml(html: string): string {
-  return html
-    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, "")
-    .replace(/<\/?(?:iframe|object|embed|base|meta|link)\b[^>]*>/gi, "")
-    .replace(/\son\w+\s*=\s*"[^"]*"/gi, "")
-    .replace(/\son\w+\s*=\s*'[^']*'/gi, "")
-    .replace(/\son\w+\s*=\s*[^\s>]+/gi, "")
-    .replace(/(href|src)\s*=\s*"(?:\s*(?:javascript|data|vbscript):)[^"]*"/gi, '$1="#"')
-    .replace(/(href|src)\s*=\s*'(?:\s*(?:javascript|data|vbscript):)[^']*'/gi, "$1='#'");
-}
-
 /** Generic (per-campaign) link map for an HTML body — editorial anchors in order. */
 export function buildHtmlLinkMap(html: string): EmailArchive["linkMap"] {
   const map: EmailArchive["linkMap"] = {};

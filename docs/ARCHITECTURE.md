@@ -547,16 +547,26 @@ sender as either structured **blocks** or an **HTML** string, and the per-recipi
 render does the same security-relevant transforms: merge tags are
 **escape-substituted**, every `<a>` gets the recipient's magic-link token in the
 **fragment** plus a stable `data-linkid`, and a **link-map** is built for click
-tracking. HTML bodies additionally pass a **baseline sanitizer** (strips
-`<script>`/active content and `javascript:`/`data:` URLs) at save and schedule
-time — defense-in-depth over the fact that templates are authored by trusted RBAC
-operators and merge values are escaped separately.
+tracking.
 
-**Build status.** Shipped: raw-HTML + block bodies end-to-end — a **Template**
-store/screen, the render pipeline above, and a **Compose** HTML body mode.
-Pending (Phase 2): the **GrapesJS** visual editor embed, the **MJML→HTML compile**
-step (so `visual`/`mjml` templates become sendable), and a **hardened DOM
-sanitizer** to replace the baseline pass.
+**MJML compiles in the browser.** `visual`/`mjml` templates are compiled to HTML
+client-side (`mjml-browser`, lazy-loaded), so no heavy compiler ships in a Lambda.
+The compiled HTML is posted as `mjmlHtml` and **trusted as-is** — it is generated
+by our own compiler from trusted-operator source and carries the `<!--[if mso]>`
+conditional comments Outlook needs, which a sanitizer would strip.
+
+**Raw HTML is hard-sanitized server-side.** Pasted `html` bodies pass a
+`sanitize-html`-based allowlist sanitizer (adapters-aws `sanitizeEmailHtml`) at the
+API trust boundary — on template save and on schedule — stripping `<script>`,
+event handlers, and `javascript:`/`data:` schemes while keeping the tables, inline
+styles, links and images email needs. Merge values are HTML-escaped separately at
+render.
+
+**Build status.** Shipped: raw-HTML + block bodies, **MJML source authoring +
+client-side compile** (so `mjml` templates are sendable), the hardened sanitizer,
+a **Template** store/screen (with MJML compile-and-preview), and **Compose** body
+modes (Blocks / Raw HTML / MJML). Pending: the **GrapesJS** drag-and-drop visual
+editor — the no-code front end that outputs MJML into this same compile path.
 
 ### 4.16 Campaign types & series reporting
 

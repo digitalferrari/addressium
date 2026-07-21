@@ -80,10 +80,16 @@ export const emailBlockSchema = z.union([
   z.object({ kind: z.literal("editorial"), label: z.string().min(1), url: z.string().url() }),
   z.object({ kind: z.literal("ad"), slot: z.string().min(1), html: z.string() }),
 ]);
-/** A send body is either structured blocks or a raw-HTML string — never both. */
+/**
+ * A send body is one of: structured blocks, a raw-HTML string (hard-sanitized at
+ * the API boundary), or `mjmlHtml` — HTML our SPA compiled from trusted MJML
+ * source, which the API trusts as-is so MJML's Outlook conditional comments
+ * survive (§4.15).
+ */
 export const emailTemplateSchema = z.union([
   z.object({ blocks: z.array(emailBlockSchema).min(1) }),
   z.object({ html: z.string().min(1) }),
+  z.object({ mjmlHtml: z.string().min(1) }),
 ]);
 
 /** Create/update a reusable template (§4.15). Source is MJML for visual/mjml, HTML for raw_html. */

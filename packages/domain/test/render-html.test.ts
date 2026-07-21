@@ -11,7 +11,6 @@ import {
   buildLinkMap,
   renderForRecipient,
   renderHtmlForRecipient,
-  sanitizeEmailHtml,
   type EmailTemplate,
 } from "@addressium/domain";
 
@@ -56,14 +55,4 @@ test("EmailTemplate with html routes through the HTML pipeline", () => {
   const t: EmailTemplate = { html: `<a href="https://x.example/a">A</a>` };
   assert.match(renderForRecipient(t, {}, "TOK"), /#tok=TOK/);
   assert.equal(buildLinkMap(t).l0?.urlTemplate, "https://x.example/a");
-});
-
-test("sanitizer strips scripts, event handlers and javascript: URLs", () => {
-  const dirty = `<p onclick="steal()">hi</p><script>evil()</script><a href="javascript:alert(1)">x</a><iframe src="//e"></iframe>`;
-  const clean = sanitizeEmailHtml(dirty);
-  assert.doesNotMatch(clean, /<script/i);
-  assert.doesNotMatch(clean, /onclick/i);
-  assert.doesNotMatch(clean, /javascript:/i);
-  assert.doesNotMatch(clean, /<iframe/i);
-  assert.match(clean, /<p>hi<\/p>/); // benign content survives
 });
