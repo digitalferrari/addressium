@@ -300,6 +300,24 @@ export async function listsHandler(event: HttpEvent): Promise<HttpResult> {
   }
 }
 
+/** GET /orgs/{org} — lightweight org metadata (name, environment) for the console header. */
+export async function orgMetaHandler(event: HttpEvent): Promise<HttpResult> {
+  try {
+    const orgId = event.pathParameters?.org ?? "";
+    requireGrant(event, "reports:view", orgId);
+    const org = await stores().organizations.get(orgId);
+    if (!org) return json(404, { error: "not found" });
+    return json(200, {
+      orgId: org.orgId,
+      name: org.name,
+      environment: org.environment ?? "prod",
+      setupComplete: org.setupComplete,
+    });
+  } catch (e) {
+    return fail(e);
+  }
+}
+
 /** GET /orgs/{org}/setup — onboarding checklist state for the setup wizard (§9). */
 export async function setupStateHandler(event: HttpEvent): Promise<HttpResult> {
   try {

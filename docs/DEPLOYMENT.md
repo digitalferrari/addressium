@@ -108,6 +108,15 @@ widget operators paste into any page:
    provisioning step returns. Wait for SES verification to go green.
 4. Create lists, and you're ready to collect signups (double opt-in) and send.
 
+> **Dev / test organizations.** To rehearse real campaigns against production
+> workflows without risk, add an org with `environment: "dev"`. Give it a full
+> root domain that mirrors the prod one — `devsummitdaily.com` alongside
+> `summitdaily.com` (a dev domain is a *domain*, not a subdomain, so DKIM/SES and
+> even a `click.devsummitdaily.com` tracker work identically). The dev org is a
+> complete, isolated silo — its own SES identity, reputation and subscriber
+> list — so it can't reach a prod list. The console shows a **DEV** badge for it,
+> and its usage is tagged so you can exclude it from cost rollups.
+
 ### First-run setup checklist
 
 The console's **Setup** screen (and a Dashboard banner) tracks the essentials and

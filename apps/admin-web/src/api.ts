@@ -76,7 +76,15 @@ export interface SetupState {
   complete: boolean;
 }
 
+export interface OrgMeta {
+  orgId: string;
+  name: string;
+  environment: "prod" | "dev";
+  setupComplete: boolean;
+}
+
 export const api = {
+  orgMeta: (org: string) => call<OrgMeta>("GET", `/orgs/${org}`),
   lists: (org: string) => call<unknown[]>("GET", `/orgs/${org}/lists`),
   usage: (org: string) => call<UsageRecord[] | null>("GET", `/orgs/${org}/usage`),
   setup: (org: string) => call<SetupState>("GET", `/orgs/${org}/setup`),

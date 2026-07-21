@@ -35,6 +35,7 @@ export type DeploymentSuppressionScope = "global" | "org" | "hybrid";
 export type MergeTagSource = "profile" | "feed" | "system" | "token_claim";
 export type MergeTagScope = "per_recipient" | "per_campaign" | "token_claim";
 export type IpMode = "shared" | "dedicated";
+export type OrgEnvironment = "prod" | "dev";
 export type LinkClass = "editorial" | "advertising";
 export type EventType =
   | "sent"
@@ -87,6 +88,13 @@ export interface Organization {
   branding?: Branding;
   /** Public-signup bot protection + optional post-verify account provisioning (#62). */
   signupProtection?: SignupProtection;
+  /**
+   * Deployment environment for this org silo. `dev` orgs run on the exact same
+   * prod workflows but are labeled in the console and excluded from cost/usage
+   * rollups so a test publisher (e.g. devsummitdaily.com) can't be mistaken for
+   * a live one. Absent on legacy records → treated as `prod`. (§4.11)
+   */
+  environment?: OrgEnvironment;
   /** Engagement-based sunset / win-back automation policy (§4.22). Off unless enabled. */
   reengagement?: ReengagementPolicy;
   setupComplete: boolean;

@@ -109,6 +109,7 @@ export async function provisionOrganization(
     sesConfigSet: ses.configSet,
     ipMode: input.dedicatedIp ? "dedicated" : "shared",
     suppressionScope: input.suppressionScope,
+    environment: input.environment,
     defaultTimezone: input.defaultTimezone,
     // Not complete until SES reports the domain identity verified (async, DNS-based).
     setupComplete: ses.verificationStatus === "verified",
