@@ -10,7 +10,10 @@
 import { DynamoStores, KmsMagicLinkSigner, SesEmailSender, SqsSendQueue } from "@addressium/adapters-aws";
 import {
   SystemClock,
+  emailTemplateFromStored,
+  escapeHtml,
   evaluateDripStep,
+  finalizeAbTest,
   nextStepIndex,
   planLaunchDescriptor,
   runReengagementSweep,
@@ -20,6 +23,7 @@ import {
   type RecurringLaunchPayload,
   type SendDescriptor,
 } from "@addressium/domain";
+import type { AbTest } from "@addressium/core";
 import { fetchFeedItems } from "@addressium/svc-feeds";
 
 function env(name: string): string {
@@ -104,15 +108,22 @@ export async function dripStepHandler(event: DripStepEvent) {
       clock,
     );
     const ses = new SesEmailSender(org.sesConfigSet);
+    // Resolve the step's stored template and render it through the shared
+    // pipeline (#95) — same merge-escape + link-tokenization + click-map as a
+    // campaign. A step with no templateId falls back to a minimal subject block.
+    let template: EmailTemplate = { blocks: [{ kind: "text", html: escapeHtml(step.subject) }] };
+    if (step.templateId) {
+      const stored = await s.templates.get(event.orgId, step.templateId);
+      if (!stored) throw new Error(`drip step references unknown template ${step.templateId}`);
+      template = emailTemplateFromStored(stored);
+    }
     await sendToSubscriber(s, ses, magic, clock, {
       orgId: event.orgId,
       campaignId: `drip-${event.sequenceId}-${step.stepId}`,
       subscriberId: event.subscriberId,
       listId: step.listId,
       subject: step.subject,
-      // Drip templates render from the step's stored template; a single editorial
-      // block keyed by templateId stands in until the template store lands.
-      template: { blocks: [{ kind: "text", html: `<a href="#">${step.subject}</a>` }] },
+      template,
     });
   }
 
@@ -125,6 +136,37 @@ export async function dripStepHandler(event: DripStepEvent) {
     nextStepIndex: next ?? null,
     nextWaitSeconds: next !== undefined ? (sequence.steps[next]?.waitSeconds ?? 0) : null,
   };
+}
+
+/**
+ * A/B finalize Task (#25, #96) — EventBridge Scheduler one-off target set
+ * `decisionWindowMins` after phase 1. Resolves the winner and sends the winning
+ * subject to the remainder exactly once (claim-guarded, so a retried firing is a
+ * no-op). Reconstructs the org's magic signer + SES config the same way the drip
+ * and reengagement handlers do.
+ */
+export interface AbFinalizeEvent {
+  descriptor: SendDescriptor;
+  test: AbTest;
+}
+
+export async function abFinalizeHandler(event: AbFinalizeEvent) {
+  const s = stores();
+  const org = await s.organizations.get(event.descriptor.orgId);
+  if (!org) throw new Error(`unknown org ${event.descriptor.orgId}`);
+  const magic = new KmsMagicLinkSigner(
+    {
+      keyId: org.magicLink.kmsKeyArn,
+      kid: org.magicLink.kid,
+      issuer: org.magicLink.issuer,
+      audience: org.magicLink.audience,
+      ttlSeconds: TTL,
+    },
+    clock,
+  );
+  const ses = new SesEmailSender(org.sesConfigSet);
+  const result = await finalizeAbTest(s, ses, magic, clock, event.descriptor, event.test);
+  return { ok: true, winner: result.decision.winner, alreadyFinalized: result.alreadyFinalized };
 }
 
 /**

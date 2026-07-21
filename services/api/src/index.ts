@@ -401,6 +401,34 @@ export async function campaignsHandler(event: HttpEvent): Promise<HttpResult> {
   }
 }
 
+/**
+ * GET /orgs/{org}/campaigns — recent campaigns for the console's report picker
+ * (#103). Returns a lightweight projection (no full template bodies), newest by
+ * campaignId first, so operators don't have to remember raw ids.
+ */
+export async function campaignsListHandler(event: HttpEvent): Promise<HttpResult> {
+  try {
+    const orgId = event.pathParameters?.org ?? "";
+    requireGrant(event, "reports:view", orgId);
+    const campaigns = await stores().campaigns.list(orgId);
+    const rows = campaigns
+      .map((c) => ({
+        campaignId: c.campaignId,
+        subject: c.subject,
+        status: c.status,
+        type: c.type,
+        listId: c.audience.listId,
+        segmentId: c.audience.segmentId,
+        sent: c.counters.sent,
+        sendAt: c.schedule?.sendAt,
+      }))
+      .sort((a, b) => b.campaignId.localeCompare(a.campaignId));
+    return json(200, rows);
+  } catch (e) {
+    return fail(e);
+  }
+}
+
 /** GET /orgs/{org}/templates — list. GET …/templates/{id} — one. POST /templates — save. */
 export async function templatesHandler(event: HttpEvent): Promise<HttpResult> {
   try {

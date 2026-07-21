@@ -209,6 +209,9 @@ export class MemCampaigns implements CampaignStore {
   async put(c: Campaign) {
     this.map.set(subKey(c.orgId, c.campaignId), c);
   }
+  async list(orgId: string) {
+    return [...this.map.values()].filter((c) => c.orgId === orgId);
+  }
 }
 
 export class MemCampaignSeries implements CampaignSeriesStore {

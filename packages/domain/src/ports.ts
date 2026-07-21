@@ -123,6 +123,7 @@ export interface SendClaimStore {
 export interface CampaignStore {
   get(orgId: string, campaignId: string): Promise<Campaign | undefined>;
   put(c: Campaign): Promise<void>;
+  list(orgId: string): Promise<Campaign[]>;
 }
 
 export interface CampaignSeriesStore {
