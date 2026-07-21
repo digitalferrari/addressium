@@ -150,8 +150,82 @@ export interface SendScheduleState {
   updatedAt: string;
 }
 
+export interface CampaignRow {
+  campaignId: string;
+  subject: string;
+  status: string;
+  type: string;
+  listId?: string;
+  segmentId?: string;
+  sent: number;
+  sendAt?: string;
+}
+
+export interface Segment {
+  orgId: string;
+  segmentId: string;
+  name: string;
+  predicate: unknown;
+}
+
+export interface SubscriberRow {
+  sub: string;
+  email: string;
+  status: "active" | "suppressed";
+  entitlement: string;
+  lastEngagedAt?: string;
+}
+
+export interface SuppressionEntry {
+  orgId: string;
+  email: string;
+  source: string;
+  scope: "org" | "global";
+  addedAt: string;
+}
+
+export interface ImportReport {
+  imported: number;
+  skipped: number;
+  suppressed: number;
+  dryRun: boolean;
+}
+
+export interface DripStepDef {
+  stepId: string;
+  waitSeconds: number;
+  listId: string;
+  templateId: string;
+  subject: string;
+  requireEntitlement?: "free" | "paid";
+}
+export interface DripSequence {
+  orgId: string;
+  sequenceId: string;
+  name: string;
+  trigger: { kind: "signup"; listId: string } | { kind: "manual" };
+  steps: DripStepDef[];
+}
+export type SaveDripSequenceBody = Omit<DripSequence, "orgId"> & { orgId: string };
+
 export const api = {
   orgMeta: (org: string) => call<OrgMeta>("GET", `/orgs/${org}`),
+  campaigns: (org: string) => call<CampaignRow[]>("GET", `/orgs/${org}/campaigns`),
+  dripSequences: (org: string) => call<DripSequence[]>("GET", `/orgs/${org}/drip-sequences`),
+  saveDripSequence: (body: SaveDripSequenceBody) => call<DripSequence>("POST", `/drip-sequences`, body),
+  segments: (org: string) => call<Segment[]>("GET", `/orgs/${org}/segments`),
+  saveSegment: (orgId: string, segmentId: string, name: string, predicate: unknown) =>
+    call<Segment>("POST", `/segments`, { orgId, segmentId, name, predicate }),
+  subscribers: (org: string, q?: string) =>
+    call<SubscriberRow[]>("GET", `/orgs/${org}/subscribers${q ? `?q=${encodeURIComponent(q)}` : ""}`),
+  suppressions: (org: string) => call<SuppressionEntry[]>("GET", `/orgs/${org}/suppressions`),
+  unsuppress: (orgId: string, email: string) => call<unknown>("POST", `/subscribers/unsuppress`, { orgId, email }),
+  adminUnsubscribe: (orgId: string, subscriberId: string, email?: string, listId?: string) =>
+    call<unknown>("POST", `/subscribers/unsubscribe`, { orgId, subscriberId, email, listId }),
+  importCsv: (orgId: string, listId: string, csv: string, dryRun: boolean, status?: "confirmed" | "pending") =>
+    call<ImportReport>("POST", `/orgs/${orgId}/import`, { listId, csv, dryRun, status }),
+  privacy: (orgId: string, action: "export" | "erase", email: string) =>
+    call<{ found?: boolean; data?: unknown; erased?: boolean }>("POST", `/privacy`, { orgId, action, email }),
   lists: (org: string) => call<AdminList[]>("GET", `/orgs/${org}/lists`),
   schedules: (org: string) => call<SendScheduleState[]>("GET", `/orgs/${org}/schedules`),
   templates: (org: string) => call<Template[]>("GET", `/orgs/${org}/templates`),

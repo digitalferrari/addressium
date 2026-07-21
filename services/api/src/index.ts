@@ -43,6 +43,7 @@ import {
   saveCampaignDraft,
   saveList,
   saveSegment,
+  saveDripSequence,
   saveTemplate,
   setListVisibility,
   signup,
@@ -211,12 +212,20 @@ export async function scheduleCampaignHandler(event: HttpEvent): Promise<HttpRes
     const body = schemas.scheduleCampaignSchema.parse(JSON.parse(event.body ?? "{}"));
     requireGrant(event, "campaigns:schedule", body.orgId); // admin-only (§4.12)
     // Body resolution (§4.15): raw HTML is hard-sanitized; MJML our SPA compiled
-    // is trusted as-is (its Outlook conditional comments must survive); blocks
-    // pass through.
+    // is trusted as-is (its Outlook conditional comments must survive); block
+    // bodies get their text/ad HTML hard-sanitized too (#94) so blocks mode is no
+    // weaker than raw_html — editorial link urls are already scheme-checked by
+    // the schema and re-checked at render.
     const template: EmailTemplate =
       "html" in body.template ? { html: sanitizeEmailHtml(body.template.html) }
       : "mjmlHtml" in body.template ? { html: body.template.mjmlHtml }
-      : body.template;
+      : {
+          blocks: body.template.blocks.map((b) =>
+            b.kind === "text" ? { ...b, html: sanitizeEmailHtml(b.html) }
+            : b.kind === "ad" ? { ...b, html: sanitizeEmailHtml(b.html) }
+            : b,
+          ),
+        };
     const descriptor: SendDescriptor = {
       orgId: body.orgId,
       campaignId: body.campaignId,
@@ -471,6 +480,23 @@ export async function segmentsHandler(event: HttpEvent): Promise<HttpResult> {
     const orgId = event.pathParameters?.org ?? "";
     requireGrant(event, "reports:view", orgId);
     return json(200, await stores().segments.list(orgId));
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+/** GET /orgs/{org}/drip-sequences — list. POST /drip-sequences — create/edit (#104). */
+export async function dripSequencesHandler(event: HttpEvent): Promise<HttpResult> {
+  try {
+    const method = event.requestContext?.http?.method ?? (event.body ? "POST" : "GET");
+    if (method === "POST") {
+      const input = schemas.saveDripSequenceSchema.parse(JSON.parse(event.body ?? "{}"));
+      requireGrant(event, "campaigns:manage", input.orgId);
+      return json(200, await saveDripSequence(stores(), input));
+    }
+    const orgId = event.pathParameters?.org ?? "";
+    requireGrant(event, "reports:view", orgId);
+    return json(200, await stores().dripSequences.list(orgId));
   } catch (e) {
     return fail(e);
   }

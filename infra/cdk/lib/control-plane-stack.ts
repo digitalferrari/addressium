@@ -436,6 +436,9 @@ export class ControlPlaneStack extends Stack {
     adminRoute("TemplatesPostFn", "templatesHandler", HttpMethod.POST, "/templates");
     adminRoute("SegmentsGetFn", "segmentsHandler", HttpMethod.GET, "/orgs/{org}/segments");
     adminRoute("SegmentsPostFn", "segmentsHandler", HttpMethod.POST, "/segments");
+    // Drip sequences (#104): list + create/edit.
+    adminRoute("DripSeqGetFn", "dripSequencesHandler", HttpMethod.GET, "/orgs/{org}/drip-sequences");
+    adminRoute("DripSeqPostFn", "dripSequencesHandler", HttpMethod.POST, "/drip-sequences");
     adminRoute("SuppressFn", "subscriberSuppressHandler", HttpMethod.POST, "/subscribers/suppress");
     adminRoute("SubUnsubFn", "subscriberUnsubscribeHandler", HttpMethod.POST, "/subscribers/unsubscribe");
     // Operator-side subscriber management (#102): list/search, suppression list,

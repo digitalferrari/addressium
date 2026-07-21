@@ -25,6 +25,29 @@ test("missing merge values render empty, not the literal tag", () => {
   assert.match(out, /Hi !/);
 });
 
+test("dangerous link schemes are neutralized at render (#94)", () => {
+  // The mjmlHtml path bypasses the sanitizer, so render must not tokenize a
+  // javascript:/data: href into a live link.
+  const js = renderHtmlForRecipient(`<a href="javascript:alert(1)">x</a>`, {}, "TOK");
+  assert.doesNotMatch(js, /javascript:/i);
+  assert.match(js, /href="#\S*tok=TOK"/); // rewritten to "#"
+
+  const data = renderHtmlForRecipient(`<a href="data:text/html,evil">x</a>`, {}, "TOK");
+  assert.doesNotMatch(data, /data:text\/html/i);
+
+  // Legit absolute + relative links are preserved (just tokenized).
+  const ok = renderHtmlForRecipient(`<a href="https://x.example/p">x</a>`, {}, "TOK");
+  assert.match(ok, /href="https:\/\/x\.example\/p#tok=TOK"/);
+
+  // Editorial block urls are guarded too.
+  const block = renderForRecipient(
+    { blocks: [{ kind: "editorial", label: "l", url: "javascript:alert(1)" }] },
+    {},
+    "TOK",
+  );
+  assert.doesNotMatch(block, /javascript:/i);
+});
+
 test("each anchor is tokenized in the fragment and gets a stable data-linkid", () => {
   const html = `<a href="https://x.example/a">A</a> then <a href="https://x.example/b">B</a>`;
   const out = renderHtmlForRecipient(html, {}, "TOK123");

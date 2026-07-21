@@ -11,6 +11,7 @@ import type {
   AiConfig,
   Branding,
   Campaign,
+  DripSequence,
   HotCounters,
   List,
   ListPresentation,
@@ -120,6 +121,22 @@ export async function saveSegment(stores: Stores, input: schemas.SaveSegmentInpu
   };
   await stores.segments.put(segment);
   return segment;
+}
+
+/** Create/update a drip sequence (§4.6, #104). */
+export async function saveDripSequence(
+  stores: Stores,
+  input: schemas.SaveDripSequenceInput,
+): Promise<DripSequence> {
+  const sequence: DripSequence = {
+    orgId: input.orgId,
+    sequenceId: input.sequenceId,
+    name: input.name,
+    trigger: input.trigger,
+    steps: input.steps,
+  };
+  await stores.dripSequences.put(sequence);
+  return sequence;
 }
 
 /** Set the org's subscriber-site branding/theme (§4.10, #31). */

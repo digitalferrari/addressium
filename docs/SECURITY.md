@@ -138,6 +138,33 @@ vector.
   merge-tag values are **contextually escaped** so a malicious subscriber
   attribute cannot inject markup.
 
+#### Pre-launch review outcomes (#94)
+
+- **Every send body is sanitized or trusted-by-provenance, uniformly.** `raw_html`
+  bodies and **`text`/`ad` blocks** are hard-sanitized (`sanitizeEmailHtml`) at the
+  API edge, so blocks mode is no weaker than raw HTML. **`mjmlHtml` is the one
+  intentional bypass**: it is HTML our own SPA compiled from operator MJML and is
+  trusted as-is so Outlook `<!--[if mso]>` conditional comments survive. Its trust
+  boundary is **authenticated admin holding `campaigns:schedule`** — the same
+  actor could paste `raw_html` — so it grants no capability that role lacks. Stored
+  email HTML is never rendered in a privileged same-origin context (previews use a
+  sandboxed iframe), so the bypass cannot become console XSS.
+- **Link schemes are restricted in depth.** Editorial/ad link URLs are validated to
+  `http(s)`/`mailto` at the schema boundary (`z.string().url()` alone accepts
+  `javascript:`), and `renderForRecipient`/`renderHtmlForRecipient` re-check every
+  href at send time — so even the trusted `mjmlHtml` path cannot emit a
+  `javascript:`/`data:` link (neutralized to `#`).
+- **`style` is allowed without a CSS-property allowlist** (accepted risk): inline
+  styles are load-bearing for email layout, mail clients strip active CSS
+  (`expression()`, `url(javascript:…)`), and merge values are escaped. Revisit with
+  `allowedStyles` if a concrete client-side CSS-exfil vector is identified.
+- **RBAC:** every route added since the last review (`campaigns` list, `subscribers`
+  list, `suppressions` list, `unsuppress`, `import`, `privacy`, `drip-sequences`)
+  enforces an explicit capability + org scope; `privacy:erase` requires the stronger
+  `subscribers:delete`. **Magic-link verifier** re-audited: pins `ES256`, rejects
+  `alg:none`/symmetric (RFC 8725), checks `iss`/`aud`/`exp`/`scope`/`amr`, fails
+  closed.
+
 ### 4.6 Secrets, keys & webhooks
 
 - Signing keys **never leave KMS** (asymmetric). Application secrets live in
