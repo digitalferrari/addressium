@@ -15,6 +15,7 @@ import type {
   List,
   Organization,
   Segment,
+  SendScheduleState,
   Subscriber,
   Subscription,
   SuppressionEntry,
@@ -126,6 +127,13 @@ export interface CampaignStore {
 export interface CampaignSeriesStore {
   get(orgId: string, seriesId: string): Promise<CampaignSeries | undefined>;
   put(s: CampaignSeries): Promise<void>;
+}
+
+/** Send-schedule lifecycle records (§4.6). Never deleted — pause/archive flip status. */
+export interface SendScheduleStore {
+  get(orgId: string, scheduleId: string): Promise<SendScheduleState | undefined>;
+  put(s: SendScheduleState): Promise<void>;
+  list(orgId: string): Promise<SendScheduleState[]>;
 }
 
 /** Drip/journey sequence definitions (§4.6). */
@@ -250,6 +258,7 @@ export interface Stores {
   sendClaims: SendClaimStore;
   campaigns: CampaignStore;
   series: CampaignSeriesStore;
+  schedules: SendScheduleStore;
   alerts: AlertConfigStore;
   usage: UsageStore;
   segments: SegmentStore;

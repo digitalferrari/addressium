@@ -13,6 +13,7 @@ import type {
   List,
   Organization,
   Segment,
+  SendScheduleState,
   Subscriber,
   Subscription,
   SuppressionEntry,
@@ -35,6 +36,7 @@ import type {
   SegmentStore,
   SendClaimStore,
   SendDescriptor,
+  SendScheduleStore,
   SendQueue,
   SentMessage,
   Stores,
@@ -217,6 +219,19 @@ export class MemCampaignSeries implements CampaignSeriesStore {
   }
 }
 
+export class MemSendSchedules implements SendScheduleStore {
+  private map = new Map<string, SendScheduleState>();
+  async get(orgId: string, scheduleId: string) {
+    return this.map.get(subKey(orgId, scheduleId));
+  }
+  async put(s: SendScheduleState) {
+    this.map.set(subKey(s.orgId, s.scheduleId), s);
+  }
+  async list(orgId: string) {
+    return [...this.map.values()].filter((s) => s.orgId === orgId);
+  }
+}
+
 export class MemDripSequences implements DripSequenceStore {
   private map = new Map<string, DripSequence>();
   async get(orgId: string, sequenceId: string) {
@@ -316,6 +331,7 @@ export function memStores(): Stores {
     sendClaims: new MemSendClaims(),
     campaigns: new MemCampaigns(),
     series: new MemCampaignSeries(),
+    schedules: new MemSendSchedules(),
     alerts: new MemAlertConfigs(),
     usage: new MemUsage(),
     segments: new MemSegments(),

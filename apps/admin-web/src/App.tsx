@@ -8,9 +8,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { completeLoginIfPresent, decodeClaims, getTokens, login, logout } from "./auth.js";
 import { grantFromClaims, can, type Grant } from "./rbac.js";
-import { api, type Branding, type CampaignReport, type ListPresentation, type SetupState, type UsageRecord } from "./api.js";
+import { api, type Branding, type CampaignReport, type ListPresentation, type SendScheduleState, type SetupState, type UsageRecord } from "./api.js";
 
-type View = "dashboard" | "setup" | "report" | "usage" | "branding" | "presentation" | "subscribers" | "settings";
+type View = "dashboard" | "setup" | "report" | "usage" | "schedules" | "branding" | "presentation" | "subscribers" | "settings";
 
 export function App() {
   const [ready, setReady] = useState(false);
@@ -111,6 +111,7 @@ function Console() {
           <NavItem id="dashboard" label="Dashboard" />
           <NavItem id="setup" label="Setup" />
           <NavItem id="report" label="Campaign report" cap="reports:view" />
+          <NavItem id="schedules" label="Schedules" cap="campaigns:schedule" />
           <NavItem id="usage" label="Usage & cost" cap="reports:view" />
           <NavItem id="subscribers" label="Subscribers" cap="subscribers:manage" />
           <NavItem id="branding" label="Branding" cap="branding:manage" />
@@ -128,6 +129,7 @@ function Console() {
         {view === "dashboard" && <Dashboard org={org} onGoToSetup={() => setView("setup")} />}
         {view === "setup" && <Setup org={org} />}
         {view === "report" && <Report org={org} grant={grant} />}
+        {view === "schedules" && <Schedules org={org} grant={grant} />}
         {view === "usage" && <Usage org={org} />}
         {view === "subscribers" && <Subscribers org={org} />}
         {view === "branding" && <BrandingEditor org={org} />}
@@ -353,6 +355,92 @@ function Usage({ org }: { org: string }) {
                   <td>{usd(r.cost.dedicatedIp)}</td>
                   <td title={gb(r.athenaBytesScanned)}>{usd(r.cost.athena)}</td>
                   <td className="t-strong">{usd(r.cost.total)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Schedules({ org, grant }: { org: string; grant: Grant | null }) {
+  const [rows, setRows] = useState<SendScheduleState[] | null>(null);
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState("");
+  const canManage = can(grant, "campaigns:schedule", org);
+
+  const load = () => {
+    setError("");
+    api.schedules(org).then(setRows).catch((e) => setError(String(e)));
+  };
+  useEffect(() => {
+    setRows(null);
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [org]);
+
+  const act = async (scheduleId: string, action: "start" | "pause" | "archive") => {
+    setBusy(`${scheduleId}:${action}`);
+    setError("");
+    try {
+      await api.scheduleLifecycle(org, scheduleId, action);
+      load();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy("");
+    }
+  };
+
+  const badge = (s: SendScheduleState["status"]) => {
+    const color =
+      s === "active" ? "#1b7a3d" : s === "paused" ? "#7a4d00" : "#555";
+    const bg = s === "active" ? "#d7f0df" : s === "paused" ? "#ffe8a3" : "#e2e2e2";
+    return (
+      <span style={{ padding: "2px 8px", borderRadius: 4, fontSize: 11, fontWeight: 700, color, background: bg }}>
+        {s.toUpperCase()}
+      </span>
+    );
+  };
+
+  return (
+    <div>
+      <h1 className="h1">Schedules · {org || "—"}</h1>
+      <p className="muted" style={{ marginTop: -8 }}>
+        Start, pause or archive scheduled sends. Nothing is ever deleted — a paused series
+        stops its next edition and can be resumed; archive puts it away for good while keeping history.
+      </p>
+      {error && <p className="err">{error}</p>}
+      {rows === null && !error && <div className="card muted">Loading…</div>}
+      {rows && rows.length === 0 && (
+        <div className="card muted">No scheduled sends yet. Schedule a campaign or recurring series to see it here.</div>
+      )}
+      {rows && rows.length > 0 && (
+        <div className="card">
+          <table>
+            <thead>
+              <tr><th>Schedule</th><th>Kind</th><th>Cadence</th><th>Status</th><th>Actions</th></tr>
+            </thead>
+            <tbody>
+              {rows.map((r) => (
+                <tr key={r.scheduleId}>
+                  <td className="t-strong">{r.scheduleId}</td>
+                  <td>{r.kind === "recurring" ? "series" : "one-off"}</td>
+                  <td className="muted">{r.cron ? `${r.cron}${r.timezone ? ` (${r.timezone})` : ""}` : "—"}</td>
+                  <td>{badge(r.status)}</td>
+                  <td>
+                    {canManage ? (
+                      <span style={{ display: "flex", gap: 6 }}>
+                        <button className="btn ghost" disabled={r.status === "active" || !!busy} onClick={() => act(r.scheduleId, "start")}>Start</button>
+                        <button className="btn ghost" disabled={r.status !== "active" || !!busy} onClick={() => act(r.scheduleId, "pause")}>Pause</button>
+                        <button className="btn ghost" disabled={r.status === "archived" || !!busy} onClick={() => act(r.scheduleId, "archive")}>Archive</button>
+                      </span>
+                    ) : (
+                      <span className="muted">read-only</span>
+                    )}
+                  </td>
                 </tr>
               ))}
             </tbody>

@@ -26,6 +26,7 @@ import type {
   List,
   Organization,
   Segment,
+  SendScheduleState,
   Subscriber,
   Subscription,
   SuppressionEntry,
@@ -43,6 +44,7 @@ import type {
   OrganizationStore,
   SegmentStore,
   SendClaimStore,
+  SendScheduleStore,
   Stores,
   SubscriberStore,
   SubscriptionStore,
@@ -321,6 +323,18 @@ export class DynamoStores implements Stores {
   series: CampaignSeriesStore = {
     get: (orgId, seriesId) => this.get<CampaignSeries>(org(orgId), `SERIES#${seriesId}`),
     put: (s) => this.put({ pk: org(s.orgId), sk: `SERIES#${s.seriesId}`, data: s }),
+  };
+
+  schedules: SendScheduleStore = {
+    get: (orgId, scheduleId) =>
+      this.get<SendScheduleState>(org(orgId), `SCHEDULE#${scheduleId}`),
+    put: (s) => this.put({ pk: org(s.orgId), sk: `SCHEDULE#${s.scheduleId}`, data: s }),
+    list: (orgId) =>
+      this.queryAll<SendScheduleState>({
+        TableName: this.tableName,
+        KeyConditionExpression: "pk = :pk AND begins_with(sk, :s)",
+        ExpressionAttributeValues: { ":pk": org(orgId), ":s": "SCHEDULE#" },
+      }),
   };
 
   alerts: AlertConfigStore = {

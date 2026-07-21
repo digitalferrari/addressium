@@ -314,11 +314,25 @@ EventBridge Scheduler drives time-based enrollment and scheduled/recurring
 campaigns.
 
 **Scheduling policy — every send goes through a schedule, and one-offs keep a
-cancel window.** Both "send now" and "send at" create a **one-off schedule
-placed at least 5 minutes in the future** (`MIN_ONEOFF_LEAD_MS`), so an operator
-can hit **cancel** (`POST /campaigns/cancel` → `DeleteSchedule`) before anything
-leaves. A requested time further out is honored as-is. Recurring series use a
-timezone-aware cron (§4.21).
+lead window.** Both "send now" and "send at" create a **one-off schedule placed
+at least 5 minutes in the future** (`MIN_ONEOFF_LEAD_MS`), so an operator has a
+window to pause before anything leaves. A requested time further out is honored
+as-is. Recurring series use a timezone-aware cron (§4.21).
+
+**Send lifecycle — start · pause · archive, never delete.** Every scheduled send
+carries a `SendScheduleState` record (`active` | `paused` | `archived`) that is
+the **source of truth** for whether it may fire. `POST /campaigns/lifecycle`
+transitions it; the console's **Schedules** screen exposes the three actions.
+
+- **Recurring series** are gated in the launch handler: a paused/archived series
+  keeps its EventBridge schedule ticking but builds and enqueues **no edition**,
+  so `close a newsletter` is no longer the only lever — you can stop a daily send
+  outright and resume it later.
+- **One-off** sends are gated in the campaign sender **before** the idempotency
+  claim, so pausing doesn't burn the claim and a resumed send still goes out.
+- We **never delete** the EventBridge schedule or the record — pause is
+  reversible and archive is a terminal "put it away" that retains history. (This
+  is why scheduling needs only `scheduler:CreateSchedule`, not `DeleteSchedule`.)
 
 ### 4.7 Importer (`services/importer`)
 

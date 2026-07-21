@@ -281,6 +281,29 @@ export interface Campaign {
   counters: HotCounters;
 }
 
+export type ScheduleKind = "one_off" | "recurring";
+export type ScheduleStatus = "active" | "paused" | "archived";
+
+/**
+ * Lifecycle record for a scheduled send (§4.6). It is the **source of truth** for
+ * whether a send may fire: the launch handler (recurring series) and the campaign
+ * sender (one-off) both gate on `status`. We **never delete** the underlying
+ * EventBridge schedule — pausing or archiving just flips `status` here, so a
+ * paused series can be resumed and history is retained. `scheduleId` is the
+ * campaign-id stem the schedule was created under.
+ */
+export interface SendScheduleState {
+  orgId: OrgId;
+  scheduleId: string;
+  kind: ScheduleKind;
+  status: ScheduleStatus;
+  /** Cron + zone for recurring series (informational; drives the admin view). */
+  cron?: string;
+  timezone?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface HotCounters {
   sent: number;
   delivered: number;
