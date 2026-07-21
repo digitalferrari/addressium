@@ -14,11 +14,11 @@
     "grapesjs": "^0.21.13",
     "grapesjs-mjml": "^1.0.8",
     "mjml-browser": "^4.15.3",
-    "react": "^18.3.1",
+    "react": "^19.2.7",
     "react-dom": "^18.3.1"
   },
   "devDependencies": {
-    "@types/react": "^18.3.31",
+    "@types/react": "^19.2.17",
     "@types/react-dom": "^18.3.7",
     "@vitejs/plugin-react": "^6.0.3",
     "typescript": "^7.0.2",
