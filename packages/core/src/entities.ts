@@ -95,6 +95,14 @@ export interface Organization {
    * a live one. Absent on legacy records → treated as `prod`. (§4.11)
    */
   environment?: OrgEnvironment;
+  /**
+   * Send-time recipient allowlist, enforced only for `dev` orgs (§4.11). Each
+   * entry is an exact email (case-insensitive) or an `@domain` suffix. A dev org
+   * sends **only** to matching addresses; with no allowlist it sends to no one
+   * (fail-closed), so a test campaign can never reach a real subscriber. Ignored
+   * for `prod` orgs.
+   */
+  devAllowlist?: string[];
   /** Engagement-based sunset / win-back automation policy (§4.22). Off unless enabled. */
   reengagement?: ReengagementPolicy;
   setupComplete: boolean;

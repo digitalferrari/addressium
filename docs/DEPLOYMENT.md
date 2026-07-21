@@ -115,7 +115,11 @@ widget operators paste into any page:
 > even a `click.devsummitdaily.com` tracker work identically). The dev org is a
 > complete, isolated silo — its own SES identity, reputation and subscriber
 > list — so it can't reach a prod list. The console shows a **DEV** badge for it,
-> and its usage is tagged so you can exclude it from cost rollups.
+> and its usage is tagged so you can exclude it from cost rollups. As a hard
+> safety net, set a **`devAllowlist`** (exact emails or `@domain` suffixes) at
+> provisioning: a dev org sends **only** to those addresses, and with no
+> allowlist it sends to no one — so a stray test blast can never reach a real
+> reader.
 
 ### First-run setup checklist
 

@@ -443,8 +443,11 @@ Daily), each an isolated silo, all operated by the same owner.
   queries **filter test spend** out (the `environment` field rides along in the
   nightly entities export, §4.23). Because a dev org is a full silo, it has its
   own SES identity, config set and reputation — so a dev blast can never touch a
-  prod list or prod deliverability. Legacy org records with no flag are read as
-  `prod`.
+  prod list or prod deliverability. As a second belt, a dev org enforces a
+  **send-time allowlist** (`devAllowlist`: exact emails or `@domain` suffixes) on
+  every recipient in both campaign and drip/transactional sends; it is
+  **fail-closed** — a dev org with no allowlist sends to no one. Legacy org
+  records with no flag are read as `prod` and are never gated.
 - **Subscriber pool — link by default, create optionally.** The subscriber pool
   is **shared with the org's main website**, so most operators already have one
   (behind their site's paywall/login). The default is to **associate an existing
