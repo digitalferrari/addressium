@@ -55,6 +55,16 @@ function Console() {
 
   const [org, setOrg] = useState(orgs[0] ?? "");
   const [view, setView] = useState<View>("dashboard");
+  const [orgEnv, setOrgEnv] = useState<"prod" | "dev" | null>(null);
+  useEffect(() => {
+    setOrgEnv(null);
+    if (!org) return;
+    let live = true;
+    api.orgMeta(org).then((m) => live && setOrgEnv(m.environment)).catch(() => undefined);
+    return () => {
+      live = false;
+    };
+  }, [org]);
 
   const NavItem = ({ id, label, cap }: { id: View; label: string; cap?: Parameters<typeof can>[1] }) =>
     cap && !can(grant, cap, org) ? null : (
@@ -78,6 +88,24 @@ function Console() {
           </select>
         ) : (
           <input value={org} onChange={(e) => setOrg(e.target.value)} placeholder="org id" style={{ width: "100%" }} />
+        )}
+        {orgEnv === "dev" && (
+          <div
+            style={{
+              marginTop: 8,
+              padding: "2px 8px",
+              display: "inline-block",
+              borderRadius: 4,
+              fontSize: 11,
+              fontWeight: 700,
+              letterSpacing: 0.5,
+              color: "#7a4d00",
+              background: "#ffe8a3",
+            }}
+            title="Test organization — same workflows as production, excluded from cost rollups"
+          >
+            DEV
+          </div>
         )}
         <nav className="nav" style={{ marginTop: 16 }}>
           <NavItem id="dashboard" label="Dashboard" />

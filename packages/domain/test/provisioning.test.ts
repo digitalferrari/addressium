@@ -22,6 +22,7 @@ const input: schemas.CreateOrgInput = {
   subscriberPool: { mode: "create" },
   dedicatedIp: false,
   suppressionScope: "hybrid",
+  environment: "prod",
 };
 
 function fakeProviders(overrides: Partial<ProvisioningProviders> = {}): ProvisioningProviders {
@@ -53,6 +54,7 @@ test("provision assembles the org record and returns DKIM/SPF/DMARC DNS", async 
   assert.equal(result.org.magicLink.audience, "northwindtimes.example");
   assert.equal(result.org.defaultTimezone, "America/Denver");
   assert.equal(result.org.ipMode, "shared");
+  assert.equal(result.org.environment, "prod");
   assert.equal(result.org.setupComplete, false); // SES pending
 
   const dkim = result.dns.filter((r) => r.type === "CNAME");
@@ -76,6 +78,20 @@ test("setupComplete flips true when SES reports verified", async () => {
   });
   const result = await provisionOrganization(stores, providers, input);
   assert.equal(result.org.setupComplete, true);
+});
+
+test("a dev org is provisioned on the same workflows but flagged environment=dev", async () => {
+  const stores = memStores();
+  const result = await provisionOrganization(stores, fakeProviders(), {
+    ...input,
+    name: "Dev Summit Daily",
+    primaryDomain: "devsummitdaily.example",
+    siteDomain: "devsummitdaily.example",
+    environment: "dev",
+  });
+  assert.equal(result.org.environment, "dev");
+  // Same silo shape as prod — its own config set + magic-link audience.
+  assert.equal(result.org.magicLink.audience, "devsummitdaily.example");
 });
 
 test("provision is idempotent — re-running returns the existing org", async () => {

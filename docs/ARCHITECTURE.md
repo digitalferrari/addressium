@@ -434,6 +434,17 @@ Daily), each an isolated silo, all operated by the same owner.
   the org's **KMS signing key, SES domain identity (DKIM/SPF/DMARC), JWKS
   endpoint and config set** — driven by the admin API via the AWS SDK (or a
   per-org CDK stack). A per-org **setup checklist** tracks verification state.
+- **Dev vs prod silos.** Each org carries an `environment` flag (`prod` by
+  default, or `dev`). A `dev` org — e.g. `devsummitdaily.com` set up as its own
+  root-domain silo, structured identically to the prod `summitdaily.com` — runs
+  on the **exact same workflows and Lambdas**; nothing new is deployed. The flag
+  only (a) surfaces a **DEV badge** in the console so an operator never confuses a
+  test publication with a live one, and (b) lets cost/usage rollups and Athena
+  queries **filter test spend** out (the `environment` field rides along in the
+  nightly entities export, §4.23). Because a dev org is a full silo, it has its
+  own SES identity, config set and reputation — so a dev blast can never touch a
+  prod list or prod deliverability. Legacy org records with no flag are read as
+  `prod`.
 - **Subscriber pool — link by default, create optionally.** The subscriber pool
   is **shared with the org's main website**, so most operators already have one
   (behind their site's paywall/login). The default is to **associate an existing

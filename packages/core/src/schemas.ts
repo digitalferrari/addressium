@@ -131,5 +131,7 @@ export const createOrgSchema = z.object({
   ]),
   dedicatedIp: z.boolean().default(false),
   suppressionScope: z.enum(["global", "org", "hybrid"]).default("hybrid"),
+  /** `dev` marks a test silo (same workflows, labeled + excluded from cost rollups). */
+  environment: z.enum(["prod", "dev"]).default("prod"),
 });
 export type CreateOrgInput = z.infer<typeof createOrgSchema>;
