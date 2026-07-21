@@ -6,7 +6,7 @@
  * renders, and hands the message to the EmailSender (SES in prod). Records a
  * "sent" event per recipient.
  */
-import type { EmailArchive, EngagementEvent, List } from "@addressium/core";
+import type { EmailArchive, EngagementEvent, List, OrgEnvironment } from "@addressium/core";
 import type {
   Clock,
   EmailSender,
@@ -29,6 +29,8 @@ export interface SendOptions {
 export interface SendResult {
   sent: number;
   suppressed: number;
+  /** Recipients dropped by a dev org's send allowlist (§4.11). */
+  devBlocked?: number;
   /** True if this campaign (or slice) was already dispatched and was skipped. */
   skipped?: boolean;
 }
@@ -69,6 +71,33 @@ export async function fanOutCampaign(
   return slices;
 }
 
+/**
+ * Dev-org send guard (#77 fast-follow). A `dev` org may only send to addresses
+ * on its explicit allowlist, so a test campaign can never reach a real
+ * subscriber. Prod orgs (and legacy records with no `environment`) are never
+ * gated. Fail-closed: a dev org with no allowlist sends to no one. Entries are
+ * exact emails (case-insensitive) or `@domain` suffixes.
+ */
+export function recipientAllowedForDev(
+  org: { environment?: OrgEnvironment; devAllowlist?: string[] } | undefined,
+  email: string,
+): boolean {
+  if (!org || (org.environment ?? "prod") !== "dev") return true;
+  const addr = email.trim().toLowerCase();
+  const at = addr.lastIndexOf("@");
+  const domain = at >= 0 ? addr.slice(at) : ""; // includes the leading "@"
+  for (const raw of org.devAllowlist ?? []) {
+    const entry = raw.trim().toLowerCase();
+    if (!entry) continue;
+    if (entry.startsWith("@")) {
+      if (domain && domain === entry) return true;
+    } else if (addr === entry) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function listUnsubscribeHeader(list: List, sub: string): string {
   // RFC 8058 one-click unsubscribe (docs/ARCHITECTURE.md §6).
   return `<https://unsub.${list.orgId}.example/u?sub=${sub}&list=${list.listId}>`;
@@ -88,7 +117,7 @@ export interface SendOneInput {
 
 export interface SendOneResult {
   sent: boolean;
-  reason?: "unknown-subscriber" | "suppressed" | "already-sent";
+  reason?: "unknown-subscriber" | "suppressed" | "already-sent" | "dev-allowlist";
 }
 
 /**
@@ -112,6 +141,11 @@ export async function sendToSubscriber(
   if (!subscriber) return { sent: false, reason: "unknown-subscriber" };
   if (await stores.suppression.isSuppressed(input.orgId, subscriber.email)) {
     return { sent: false, reason: "suppressed" };
+  }
+  // Dev allowlist: a test org can only reach addresses on its list (§4.11).
+  const org = await stores.organizations.get(input.orgId);
+  if (!recipientAllowedForDev(org, subscriber.email)) {
+    return { sent: false, reason: "dev-allowlist" };
   }
   if (input.throttle) await input.throttle.acquire();
   const token = await magic.mint({
@@ -165,6 +199,10 @@ export async function sendCampaign(
   };
   await stores.archive.put(archive);
 
+  // Dev orgs gate every recipient against their allowlist (§4.11). One org read
+  // per campaign/slice, not per recipient.
+  const org = await stores.organizations.get(input.orgId);
+
   const all = await stores.subscriptions.listConfirmed(input.orgId, input.listId);
   // A slice sends only its window of the confirmed set; no slice → the whole list.
   const confirmed = input.slice
@@ -172,6 +210,7 @@ export async function sendCampaign(
     : all;
   let sent = 0;
   let suppressed = 0;
+  let devBlocked = 0;
 
   for (const sub of confirmed) {
     const subscriber = await stores.subscribers.get(input.orgId, sub.subscriberId);
@@ -180,6 +219,12 @@ export async function sendCampaign(
     // Suppression enforced before every send (§4.4, §4.13).
     if (await stores.suppression.isSuppressed(input.orgId, subscriber.email)) {
       suppressed++;
+      continue;
+    }
+
+    // Dev allowlist: a test org can't reach anyone off its list (§4.11).
+    if (!recipientAllowedForDev(org, subscriber.email)) {
+      devBlocked++;
       continue;
     }
 
@@ -213,5 +258,5 @@ export async function sendCampaign(
     sent++;
   }
 
-  return { sent, suppressed };
+  return { sent, suppressed, devBlocked };
 }

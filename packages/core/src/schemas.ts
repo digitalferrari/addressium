@@ -133,5 +133,7 @@ export const createOrgSchema = z.object({
   suppressionScope: z.enum(["global", "org", "hybrid"]).default("hybrid"),
   /** `dev` marks a test silo (same workflows, labeled + excluded from cost rollups). */
   environment: z.enum(["prod", "dev"]).default("prod"),
+  /** Dev-org send allowlist: exact emails or `@domain` suffixes. Fail-closed for dev orgs. */
+  devAllowlist: z.array(z.string()).optional(),
 });
 export type CreateOrgInput = z.infer<typeof createOrgSchema>;
