@@ -108,9 +108,9 @@ widget operators paste into any page:
    provisioning step returns. Wait for SES verification to go green.
 4. Create lists, and you're ready to collect signups (double opt-in) and send.
 5. Optionally save reusable message templates under **Templates** — paste **raw
-   HTML** (hard-sanitized on save) or author **MJML** with a compile-and-preview
-   button (compiled in your browser to responsive HTML). (A GrapesJS drag-and-drop
-   builder over the same MJML path lands in a follow-up.)
+   HTML** (hard-sanitized on save), write **MJML** source, or use the **visual
+   builder** (GrapesJS drag-and-drop, outputs MJML). MJML/visual templates get a
+   compile-and-preview button (compiled in your browser to responsive HTML).
 6. Use **Compose & schedule** to build a send — subject plus a body authored as
    **Blocks**, **Raw HTML**, or **MJML** (optionally loaded from a saved
    template) — and dispatch it now, at a time, or on a recurring cron. It then

@@ -11,6 +11,8 @@
   },
   "dependencies": {
     "@addressium/core": "0.1.0",
+    "grapesjs": "^0.21.13",
+    "grapesjs-mjml": "^1.0.8",
     "mjml-browser": "^4.15.3",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"

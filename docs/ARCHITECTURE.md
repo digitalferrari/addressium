@@ -562,11 +562,13 @@ event handlers, and `javascript:`/`data:` schemes while keeping the tables, inli
 styles, links and images email needs. Merge values are HTML-escaped separately at
 render.
 
-**Build status.** Shipped: raw-HTML + block bodies, **MJML source authoring +
-client-side compile** (so `mjml` templates are sendable), the hardened sanitizer,
-a **Template** store/screen (with MJML compile-and-preview), and **Compose** body
-modes (Blocks / Raw HTML / MJML). Pending: the **GrapesJS** drag-and-drop visual
-editor — the no-code front end that outputs MJML into this same compile path.
+**Build status.** All three authoring modes are live: block bodies, raw HTML
+(hard-sanitized), and **MJML** — authored as source *or* with the **GrapesJS**
+drag-and-drop visual builder (`grapesjs` + `grapesjs-mjml`, lazy-loaded, browser
+only). The visual builder outputs MJML, so it feeds the exact same client-side
+compile → tokenize → send path as hand-written MJML; nothing about the pipeline is
+editor-specific. The **Template** screen offers all three (visual mode embeds the
+builder with a compile-and-preview), and **Compose** can send any of them.
 
 ### 4.16 Campaign types & series reporting
 
