@@ -296,21 +296,17 @@ export class ControlPlaneStack extends Stack {
       LAUNCH_FN_ARN: launchFn.functionArn,
     };
     const scheduleFn = fn("ScheduleFn", apiEntry, "scheduleCampaignHandler", schedEnv);
-    const cancelFn = fn("CancelFn", apiEntry, "cancelCampaignHandler", schedEnv);
-    for (const f of [scheduleFn, cancelFn]) {
-      f.addToRolePolicy(
-        new PolicyStatement({
-          actions: ["scheduler:CreateSchedule", "scheduler:DeleteSchedule"],
-          resources: ["*"],
-        }),
-      );
-    }
+    // Only CreateSchedule is needed — pause/archive never delete schedules (§4.6),
+    // they flip the lifecycle record the launch/sender handlers gate on.
+    scheduleFn.addToRolePolicy(
+      new PolicyStatement({ actions: ["scheduler:CreateSchedule"], resources: ["*"] }),
+    );
     scheduleFn.addToRolePolicy(
       new PolicyStatement({ actions: ["iam:PassRole"], resources: [schedulerRole.roleArn] }),
     );
     // Admin actions append to the WORM audit log (put-only; Object Lock blocks
     // overwrite/delete). grantPut avoids handing out s3:DeleteObject.
-    for (const f of [scheduleFn, cancelFn]) auditBucket.grantPut(f);
+    auditBucket.grantPut(scheduleFn);
 
     // ---- permissions ----
     for (const f of [
@@ -321,7 +317,6 @@ export class ControlPlaneStack extends Stack {
       entitlementFn,
       identityFn,
       scheduleFn,
-      cancelFn,
       senderFn,
       eventsFn,
       launchFn,
@@ -372,12 +367,6 @@ export class ControlPlaneStack extends Stack {
       authorizer: adminAuth,
     });
     api.addRoutes({
-      path: "/campaigns/cancel",
-      methods: [HttpMethod.POST],
-      integration: new HttpLambdaIntegration("CancelInt", cancelFn),
-      authorizer: adminAuth,
-    });
-    api.addRoutes({
       path: "/webhooks/entitlement",
       methods: [HttpMethod.POST],
       integration: new HttpLambdaIntegration("EntitlementInt", entitlementFn),
@@ -409,6 +398,9 @@ export class ControlPlaneStack extends Stack {
     adminRoute("ListVisFn", "listVisibilityHandler", HttpMethod.POST, "/lists/visibility");
     adminRoute("CampaignsGetFn", "campaignsHandler", HttpMethod.GET, "/orgs/{org}/campaigns/{id}");
     adminRoute("CampaignsPostFn", "campaignsHandler", HttpMethod.POST, "/campaigns");
+    // Send-schedule lifecycle: list + start/pause/archive (never delete, §4.6).
+    adminRoute("SchedulesGetFn", "schedulesListHandler", HttpMethod.GET, "/orgs/{org}/schedules");
+    adminRoute("ScheduleLifecycleFn", "scheduleLifecycleHandler", HttpMethod.POST, "/campaigns/lifecycle");
     adminRoute("SegmentsGetFn", "segmentsHandler", HttpMethod.GET, "/orgs/{org}/segments");
     adminRoute("SegmentsPostFn", "segmentsHandler", HttpMethod.POST, "/segments");
     adminRoute("SuppressFn", "subscriberSuppressHandler", HttpMethod.POST, "/subscribers/suppress");

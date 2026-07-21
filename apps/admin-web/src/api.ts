@@ -83,9 +83,23 @@ export interface OrgMeta {
   setupComplete: boolean;
 }
 
+export interface SendScheduleState {
+  orgId: string;
+  scheduleId: string;
+  kind: "one_off" | "recurring";
+  status: "active" | "paused" | "archived";
+  cron?: string;
+  timezone?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export const api = {
   orgMeta: (org: string) => call<OrgMeta>("GET", `/orgs/${org}`),
   lists: (org: string) => call<unknown[]>("GET", `/orgs/${org}/lists`),
+  schedules: (org: string) => call<SendScheduleState[]>("GET", `/orgs/${org}/schedules`),
+  scheduleLifecycle: (orgId: string, scheduleId: string, action: "start" | "pause" | "archive") =>
+    call<SendScheduleState>("POST", `/campaigns/lifecycle`, { orgId, scheduleId, action }),
   usage: (org: string) => call<UsageRecord[] | null>("GET", `/orgs/${org}/usage`),
   setup: (org: string) => call<SetupState>("GET", `/orgs/${org}/setup`),
   saveList: (input: unknown) => call<unknown>("POST", `/lists`, input),

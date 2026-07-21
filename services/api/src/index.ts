@@ -26,6 +26,8 @@ import {
   effectiveOneOffTime,
   evaluateSetup,
   isHoneypotTripped,
+  markScheduleActive,
+  transitionSchedule,
   provisionSubscriberAccount,
   manualSuppress,
   publicListView,
@@ -224,7 +226,12 @@ export async function scheduleCampaignHandler(event: HttpEvent): Promise<HttpRes
         const requested = body.when.type === "at" ? new Date(body.when.at) : undefined;
         const at = effectiveOneOffTime(clock.now(), requested);
         await scheduler().scheduleOneOff({ name: oneOffName, at, descriptor });
-        return json(202, { status: "scheduled", at: at.toISOString(), cancelName: oneOffName });
+        await markScheduleActive(stores(), clock, {
+          orgId: body.orgId,
+          scheduleId: body.campaignId,
+          kind: "one_off",
+        });
+        return json(202, { status: "scheduled", at: at.toISOString(), scheduleId: body.campaignId });
       }
       case "recurring": {
         // Zone: per-campaign override ?? org defaultTimezone (§4.21).
@@ -239,7 +246,14 @@ export async function scheduleCampaignHandler(event: HttpEvent): Promise<HttpRes
           timezone,
           payload: descriptor,
         });
-        return json(202, { status: "recurring", timezone });
+        await markScheduleActive(stores(), clock, {
+          orgId: body.orgId,
+          scheduleId: body.campaignId,
+          kind: "recurring",
+          cron: body.when.cron,
+          timezone,
+        });
+        return json(202, { status: "recurring", timezone, scheduleId: body.campaignId });
       }
       default:
         return json(400, { error: "unknown schedule type" });
@@ -249,17 +263,37 @@ export async function scheduleCampaignHandler(event: HttpEvent): Promise<HttpRes
   }
 }
 
-/** POST /campaigns/cancel — cancel a scheduled one-off before it fires (§4.6). */
-export async function cancelCampaignHandler(event: HttpEvent): Promise<HttpResult> {
+/**
+ * POST /campaigns/lifecycle — start (resume), pause, or archive a scheduled send
+ * (§4.6). Never deletes: pause/archive flip the lifecycle record, and the launch
+ * handler (recurring) and sender (one-off) gate on it, so a paused series stops
+ * its next edition and can be resumed later.
+ */
+export async function scheduleLifecycleHandler(event: HttpEvent): Promise<HttpResult> {
   try {
-    const { orgId, campaignId } = JSON.parse(event.body ?? "{}") as {
+    const { orgId, scheduleId, action } = JSON.parse(event.body ?? "{}") as {
       orgId: string;
-      campaignId: string;
+      scheduleId: string;
+      action: "start" | "pause" | "archive";
     };
-    if (!orgId || !campaignId) return json(400, { error: "orgId and campaignId required" });
+    if (!orgId || !scheduleId) return json(400, { error: "orgId and scheduleId required" });
+    if (action !== "start" && action !== "pause" && action !== "archive") {
+      return json(400, { error: "action must be start, pause or archive" });
+    }
     requireGrant(event, "campaigns:schedule", orgId);
-    await scheduler().cancel(`camp-${orgId}-${campaignId}`);
-    return json(200, { status: "cancelled" });
+    const state = await transitionSchedule(stores(), clock, { orgId, scheduleId, action });
+    return json(200, state);
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+/** GET /orgs/{org}/schedules — lifecycle records for the console's Schedules view. */
+export async function schedulesListHandler(event: HttpEvent): Promise<HttpResult> {
+  try {
+    const orgId = event.pathParameters?.org ?? "";
+    requireGrant(event, "reports:view", orgId);
+    return json(200, await stores().schedules.list(orgId));
   } catch (e) {
     return fail(e);
   }

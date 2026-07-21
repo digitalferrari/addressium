@@ -17,6 +17,7 @@ import type {
   Stores,
 } from "./ports.js";
 import { buildLinkMap, renderForRecipient, type EmailTemplate } from "./render.js";
+import { scheduleActive } from "./schedule-state.js";
 
 /** Alias kept for readability; a campaign send takes a SendDescriptor. */
 export type SendCampaignInput = SendDescriptor;
@@ -181,6 +182,15 @@ export async function sendCampaign(
 ): Promise<SendResult> {
   const list = await stores.lists.get(input.orgId, input.listId);
   if (!list) throw new Error("unknown list");
+
+  // Lifecycle gate: a paused or archived one-off never sends (§4.6). Checked
+  // before the idempotency claim so resuming can still send later. Recurring
+  // editions carry an edition-stamped id with no schedule record here — they're
+  // gated upstream in the launch handler — so this only bites one-offs.
+  const schedule = await stores.schedules.get(input.orgId, input.campaignId);
+  if (!scheduleActive(schedule)) {
+    return { sent: 0, suppressed: 0, skipped: true };
+  }
 
   // Idempotency: SQS is at-least-once, so claim each unit (campaign or slice)
   // exactly once (#21). Fanned-out slices claim independently (#9).

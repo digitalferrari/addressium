@@ -14,6 +14,7 @@ import {
   nextStepIndex,
   planLaunchDescriptor,
   runReengagementSweep,
+  scheduleActive,
   sendToSubscriber,
   type EmailTemplate,
   type RecurringLaunchPayload,
@@ -42,6 +43,13 @@ function normalize(input: RecurringLaunchPayload | SendDescriptor): RecurringLau
 
 export async function handler(input: RecurringLaunchPayload | SendDescriptor) {
   const payload = normalize(input);
+  // Lifecycle gate (§4.6): if the series was paused or archived, skip this
+  // firing entirely. The EventBridge schedule keeps ticking (we never delete
+  // it) but no edition is built or enqueued until it's resumed.
+  const state = await stores().schedules.get(payload.descriptor.orgId, payload.descriptor.campaignId);
+  if (!scheduleActive(state)) {
+    return { ok: true, skipped: state?.status ?? "inactive" };
+  }
   // Pull + parse the feed for this firing (guarded fetch, pinned IP, size cap).
   const items = payload.feed
     ? await fetchFeedItems(payload.feed.url, payload.feed.format)
