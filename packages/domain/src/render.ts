@@ -90,8 +90,11 @@ export function renderForRecipient(
 
 // ---- raw-HTML render pipeline (raw_html mode / compiled MJML) ----
 
-/** Matches an anchor, capturing (attrs-before-href)(href)(attrs-after-href)(inner). */
-const ANCHOR_RE = /<a\b([^>]*?)\shref="([^"]*)"([^>]*)>([\s\S]*?)<\/a>/gi;
+/** Extract the href value from one `<a …>` open tag (a short, `>`-bounded string). Linear. */
+function extractHref(openTag: string): string | undefined {
+  const m = openTag.match(/\bhref\s*=\s*(?:"([^"]*)"|'([^']*)')/i);
+  return m ? (m[1] ?? m[2] ?? "") : undefined;
+}
 
 /** Drop any existing fragment so we can append the per-recipient `#tok=…`. */
 function baseUrl(u: string): string {
@@ -112,8 +115,62 @@ function safeHref(u: string): string {
   if (!/^[a-z][a-z0-9+.-]*:/i.test(t)) return u; // no scheme ⇒ relative, allowed
   return "#";
 }
+
+/**
+ * Strip HTML tags to plain text in a single linear pass. A `/<[^>]*>/g` sanitizer
+ * is both ReDoS-prone (quadratic on many `<`) and incomplete (tags can reform),
+ * so we walk char-by-char instead. Used only for editorial link labels.
+ */
 function stripTags(s: string): string {
-  return s.replace(/<[^>]*>/g, "").replace(/\s+/g, " ").trim();
+  let out = "";
+  let inTag = false;
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i];
+    if (ch === "<") inTag = true;
+    else if (ch === ">") inTag = false;
+    else if (!inTag) out += ch;
+  }
+  return out.replace(/\s+/g, " ").trim();
+}
+
+/** True if the char after "<a" ends the tag name — distinguishes `<a …>` from `<article>`. */
+function isAnchorBoundary(ch: string | undefined): boolean {
+  return ch === undefined || ch === " " || ch === "\t" || ch === "\n" || ch === "\r" || ch === "/" || ch === ">";
+}
+
+/**
+ * Walk the HTML once with plain `indexOf` (no global regex over untrusted input —
+ * avoids js/polynomial-redos), invoking `onText` for each run between anchors and
+ * `onAnchor` for each `<a …>` open tag with its href and the index just past it.
+ */
+function scanAnchors(
+  html: string,
+  onText: (text: string) => void,
+  onAnchor: (openTag: string, href: string | undefined, innerStart: number) => void,
+): void {
+  const lower = html.toLowerCase();
+  let i = 0;
+  for (;;) {
+    const lt = lower.indexOf("<a", i);
+    if (lt < 0) {
+      onText(html.slice(i));
+      return;
+    }
+    if (!isAnchorBoundary(lower[lt + 2])) {
+      onText(html.slice(i, lt + 2)); // not an <a> tag (e.g. <article>)
+      i = lt + 2;
+      continue;
+    }
+    const gt = html.indexOf(">", lt);
+    if (gt < 0) {
+      onText(html.slice(i));
+      return;
+    }
+    onText(html.slice(i, lt));
+    const openTag = html.slice(lt, gt + 1);
+    onAnchor(openTag, extractHref(openTag), gt + 1);
+    i = gt + 1;
+  }
 }
 
 /** Generic (per-campaign) link map for an HTML body — editorial anchors in order. */
@@ -121,16 +178,24 @@ export function buildHtmlLinkMap(html: string): EmailArchive["linkMap"] {
   const map: EmailArchive["linkMap"] = {};
   let li = 0;
   let position = 0;
-  for (const m of html.matchAll(ANCHOR_RE)) {
-    position++;
-    map[`l${li}`] = {
-      urlTemplate: baseUrl(m[2] ?? ""),
-      position,
-      label: stripTags(m[4] ?? ""),
-      class: "editorial",
-    };
-    li++;
-  }
+  const lower = html.toLowerCase();
+  scanAnchors(
+    html,
+    () => {},
+    (_openTag, href, innerStart) => {
+      if (href === undefined) return; // only editorial links (with an href) are mapped
+      position++;
+      const end = lower.indexOf("</a>", innerStart);
+      const inner = end >= 0 ? html.slice(innerStart, end) : html.slice(innerStart);
+      map[`l${li}`] = {
+        urlTemplate: baseUrl(href),
+        position,
+        label: stripTags(inner),
+        class: "editorial",
+      };
+      li++;
+    },
+  );
   return map;
 }
 
@@ -145,10 +210,23 @@ export function renderHtmlForRecipient(
   magicToken: string,
 ): string {
   const merged = applyMerge(html, attrs);
+  let out = "";
   let li = 0;
-  return merged.replace(ANCHOR_RE, (_full, pre: string, href: string, post: string, inner: string) => {
-    const linkId = `l${li++}`;
-    const target = `${safeHref(baseUrl(href))}#tok=${magicToken}`;
-    return `<a${pre} data-linkid="${linkId}" href="${escapeHtml(target)}"${post}>${inner}</a>`;
-  });
+  scanAnchors(
+    merged,
+    (text) => {
+      out += text;
+    },
+    (openTag, href) => {
+      if (href === undefined) {
+        out += openTag; // leave non-link anchors untouched
+        return;
+      }
+      const linkId = `l${li++}`;
+      const target = `${safeHref(baseUrl(href))}#tok=${magicToken}`;
+      const retagged = openTag.replace(/\bhref\s*=\s*(?:"[^"]*"|'[^']*')/i, `href="${escapeHtml(target)}"`);
+      out += retagged.replace(/>$/, ` data-linkid="${linkId}">`);
+    },
+  );
+  return out;
 }

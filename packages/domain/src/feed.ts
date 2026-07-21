@@ -21,9 +21,25 @@ export interface FeedItem {
   [field: string]: string | undefined;
 }
 
+/** Unwrap `<![CDATA[ … ]]>` sections with a linear scan (no ReDoS-prone regex). */
+function stripCdata(s: string): string {
+  const open = "<![CDATA[";
+  const close = "]]>";
+  let out = "";
+  let i = 0;
+  for (;;) {
+    const start = s.indexOf(open, i);
+    if (start < 0) return out + s.slice(i);
+    out += s.slice(i, start);
+    const end = s.indexOf(close, start + open.length);
+    if (end < 0) return out + s.slice(start + open.length);
+    out += s.slice(start + open.length, end);
+    i = end + close.length;
+  }
+}
+
 function decodeEntities(s: string): string {
-  return s
-    .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, "$1")
+  return stripCdata(s)
     .replace(/&lt;/g, "<")
     .replace(/&gt;/g, ">")
     .replace(/&quot;/g, '"')
@@ -56,13 +72,23 @@ function parseRss(xml: string): FeedItem[] {
   }));
 }
 
+/** Extract the Atom `<link href="…"/>` value without a ReDoS-prone global regex. */
+function atomLinkHref(entry: string): string | undefined {
+  const lt = entry.toLowerCase().indexOf("<link");
+  if (lt < 0) return undefined;
+  const gt = entry.indexOf(">", lt);
+  const tag = gt >= 0 ? entry.slice(lt, gt + 1) : entry.slice(lt);
+  const m = tag.match(/\bhref\s*=\s*(?:"([^"]*)"|'([^']*)')/i);
+  return m ? (m[1] ?? m[2] ?? undefined) : undefined;
+}
+
 function parseAtom(xml: string): FeedItem[] {
   return blocksBetween(xml, "entry").map((entry) => {
     // Atom link is an attribute: <link href="..."/>
-    const href = entry.match(/<link[^>]*\shref=["']([^"']+)["']/i);
+    const href = atomLinkHref(entry);
     return {
       title: tag(entry, "title"),
-      link: href ? decodeEntities(href[1] ?? "") : undefined,
+      link: href ? decodeEntities(href) : undefined,
       content: tag(entry, "summary") ?? tag(entry, "content"),
       published: tag(entry, "updated") ?? tag(entry, "published"),
       id: tag(entry, "id"),

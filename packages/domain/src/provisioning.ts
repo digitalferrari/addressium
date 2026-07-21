@@ -54,7 +54,9 @@ export function slugifyOrgId(name: string): string {
   const slug = name
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
+    // Trim leading/trailing dashes. The `(?<!-)` on the trailing branch removes
+    // the ambiguity that made `-+$` polynomial on interior dash runs (#js-redos).
+    .replace(/^-+|(?<!-)-+$/g, "");
   if (!slug) throw new Error("cannot derive org id from name");
   return slug;
 }
