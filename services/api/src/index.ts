@@ -32,6 +32,10 @@ import {
   type EmailTemplate,
   provisionSubscriberAccount,
   manualSuppress,
+  liftSuppression,
+  importCsvSubscribers,
+  exportSubscriber,
+  eraseSubscriber,
   publicListView,
   setAiConfig,
   setBranding,
@@ -478,6 +482,115 @@ export async function subscriberSuppressHandler(event: HttpEvent): Promise<HttpR
     const input = schemas.manualSuppressSchema.parse(JSON.parse(event.body ?? "{}"));
     requireGrant(event, "suppression:manage", input.orgId);
     return json(200, await manualSuppress(stores(), clock, input));
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+/**
+ * GET /orgs/{org}/subscribers — subscriber lookup/list for the admin console
+ * (#102). Optional `?q=` filters by email substring. Returns a projection (no
+ * raw attributes bag) so the table stays light. Paginated at the adapter layer.
+ */
+export async function subscribersListHandler(event: HttpEvent): Promise<HttpResult> {
+  try {
+    const orgId = event.pathParameters?.org ?? "";
+    requireGrant(event, "subscribers:manage", orgId);
+    const q = (event.queryStringParameters?.q ?? "").trim().toLowerCase();
+    const all = await stores().subscribers.list(orgId);
+    const rows = all
+      .filter((s) => (q ? s.email.toLowerCase().includes(q) : true))
+      .map((s) => ({
+        sub: s.sub,
+        email: s.email,
+        status: s.status,
+        entitlement: s.entitlement,
+        lastEngagedAt: s.lastEngagedAt,
+      }));
+    return json(200, rows);
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+/** GET /orgs/{org}/suppressions — org-scoped suppression list for review (#102). */
+export async function suppressionsListHandler(event: HttpEvent): Promise<HttpResult> {
+  try {
+    const orgId = event.pathParameters?.org ?? "";
+    requireGrant(event, "suppression:manage", orgId);
+    return json(200, await stores().suppression.list(orgId));
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+/** POST /subscribers/unsuppress — lift an org suppression + reactivate (#102). */
+export async function subscriberUnsuppressHandler(event: HttpEvent): Promise<HttpResult> {
+  try {
+    const { orgId, email } = JSON.parse(event.body ?? "{}") as { orgId?: string; email?: string };
+    if (!orgId || !email) return json(400, { error: "orgId and email required" });
+    requireGrant(event, "suppression:manage", orgId);
+    return json(200, await liftSuppression(stores(), { orgId, email }));
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+/**
+ * POST /orgs/{org}/import — CSV/Pinpoint subscriber migration (#100). Accepts a
+ * CSV body (header + rows); `dryRun` reports counts without writing. Imported
+ * subscribers default to `pending` (not double-opt-in confirmed) unless the
+ * caller sets status; suppressed addresses are skipped by the domain importer.
+ */
+export async function importHandler(event: HttpEvent): Promise<HttpResult> {
+  try {
+    const orgId = event.pathParameters?.org ?? "";
+    requireGrant(event, "subscribers:manage", orgId);
+    const body = JSON.parse(event.body ?? "{}") as {
+      listId?: string;
+      csv?: string;
+      status?: "confirmed" | "pending";
+      dryRun?: boolean;
+    };
+    if (!body.listId || typeof body.csv !== "string") {
+      return json(400, { error: "listId and csv required" });
+    }
+    const report = await importCsvSubscribers(stores(), clock, {
+      orgId,
+      listId: body.listId,
+      csv: body.csv,
+      status: body.status,
+      dryRun: body.dryRun,
+    });
+    return json(200, report);
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+/**
+ * POST /privacy — GDPR/CCPA data-subject request (#101). `export` returns the
+ * person's record (requires subscribers:manage); `erase` anonymizes + suppresses
+ * (requires the stronger subscribers:delete). Sensitive; admin-invoked only.
+ */
+export async function privacyHandler(event: HttpEvent): Promise<HttpResult> {
+  try {
+    const { action, orgId, email } = JSON.parse(event.body ?? "{}") as {
+      action?: "export" | "erase";
+      orgId?: string;
+      email?: string;
+    };
+    if (!orgId || !email) return json(400, { error: "orgId and email required" });
+    if (action === "export") {
+      requireGrant(event, "subscribers:manage", orgId);
+      const data = await exportSubscriber(stores(), orgId, email);
+      return json(200, { found: data !== undefined, data });
+    }
+    if (action === "erase") {
+      requireGrant(event, "subscribers:delete", orgId);
+      return json(200, { erased: await eraseSubscriber(stores(), clock, orgId, email) });
+    }
+    return json(400, { error: "action must be export or erase" });
   } catch (e) {
     return fail(e);
   }

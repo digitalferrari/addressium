@@ -250,3 +250,23 @@ export async function manualSuppress(
   }
   return { suppressed: true, subscriberFlipped: false };
 }
+
+/**
+ * Lift an org-scoped suppression (#102) — the inverse of manualSuppress. Removes
+ * the org suppression entry and flips a suppressed subscriber back to active so
+ * they can receive mail again. Global entries (hard bounces/complaints) are NOT
+ * lifted here — those are deployment-wide and must be cleared deliberately.
+ */
+export async function liftSuppression(
+  stores: Stores,
+  input: { orgId: string; email: string },
+): Promise<{ lifted: true; subscriberReactivated: boolean }> {
+  const email = input.email.toLowerCase();
+  await stores.suppression.remove(input.orgId, email, "org");
+  const subscriber = await stores.subscribers.findByEmail(input.orgId, email);
+  if (subscriber && subscriber.status === "suppressed") {
+    await stores.subscribers.put({ ...subscriber, status: "active" });
+    return { lifted: true, subscriberReactivated: true };
+  }
+  return { lifted: true, subscriberReactivated: false };
+}
