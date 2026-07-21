@@ -34,9 +34,11 @@ import {
   setAiConfig,
   setBranding,
   setListPresentation,
+  sanitizeEmailHtml,
   saveCampaignDraft,
   saveList,
   saveSegment,
+  saveTemplate,
   setListVisibility,
   signup,
   signupMany,
@@ -203,12 +205,16 @@ export async function scheduleCampaignHandler(event: HttpEvent): Promise<HttpRes
   try {
     const body = schemas.scheduleCampaignSchema.parse(JSON.parse(event.body ?? "{}"));
     requireGrant(event, "campaigns:schedule", body.orgId); // admin-only (§4.12)
+    // Raw-HTML bodies get the baseline sanitizer before they're stored/sent.
+    const template = "html" in body.template
+      ? { html: sanitizeEmailHtml(body.template.html) }
+      : body.template;
     const descriptor: SendDescriptor = {
       orgId: body.orgId,
       campaignId: body.campaignId,
       listId: body.listId,
       subject: body.subject,
-      template: body.template,
+      template,
     };
     const oneOffName = `camp-${body.orgId}-${body.campaignId}`;
     switch (body.when.type) {
@@ -386,6 +392,28 @@ export async function campaignsHandler(event: HttpEvent): Promise<HttpResult> {
     requireGrant(event, "reports:view", orgId);
     const campaign = await stores().campaigns.get(orgId, campaignId);
     return campaign ? json(200, campaign) : json(404, { error: "not found" });
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+/** GET /orgs/{org}/templates — list. GET …/templates/{id} — one. POST /templates — save. */
+export async function templatesHandler(event: HttpEvent): Promise<HttpResult> {
+  try {
+    const method = event.requestContext?.http?.method ?? (event.body ? "POST" : "GET");
+    if (method === "POST") {
+      const input = schemas.saveTemplateSchema.parse(JSON.parse(event.body ?? "{}"));
+      requireGrant(event, "campaigns:manage", input.orgId);
+      return json(200, await saveTemplate(stores(), input));
+    }
+    const orgId = event.pathParameters?.org ?? "";
+    requireGrant(event, "reports:view", orgId);
+    const templateId = event.pathParameters?.id;
+    if (templateId) {
+      const t = await stores().templates.get(orgId, templateId);
+      return t ? json(200, t) : json(404, { error: "not found" });
+    }
+    return json(200, await stores().templates.list(orgId));
   } catch (e) {
     return fail(e);
   }

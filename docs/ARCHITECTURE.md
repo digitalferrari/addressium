@@ -542,6 +542,22 @@ address + unsubscribe) and `List-Unsubscribe` headers, and **sanitizes** pasted
 HTML — a rep cannot send a non-compliant blast. Raw HTML gets a responsiveness
 warning. Templates declare their **merge-tag and ad-slot** placeholders (§4.14).
 
+**One send-time HTML pipeline.** Whatever the authoring mode, a body reaches the
+sender as either structured **blocks** or an **HTML** string, and the per-recipient
+render does the same security-relevant transforms: merge tags are
+**escape-substituted**, every `<a>` gets the recipient's magic-link token in the
+**fragment** plus a stable `data-linkid`, and a **link-map** is built for click
+tracking. HTML bodies additionally pass a **baseline sanitizer** (strips
+`<script>`/active content and `javascript:`/`data:` URLs) at save and schedule
+time — defense-in-depth over the fact that templates are authored by trusted RBAC
+operators and merge values are escaped separately.
+
+**Build status.** Shipped: raw-HTML + block bodies end-to-end — a **Template**
+store/screen, the render pipeline above, and a **Compose** HTML body mode.
+Pending (Phase 2): the **GrapesJS** visual editor embed, the **MJML→HTML compile**
+step (so `visual`/`mjml` templates become sendable), and a **hardened DOM
+sanitizer** to replace the baseline pass.
+
 ### 4.16 Campaign types & series reporting
 
 Every campaign is **one-off** or part of an **ongoing series** (daily / weekly /

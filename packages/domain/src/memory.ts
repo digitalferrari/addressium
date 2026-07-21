@@ -17,6 +17,7 @@ import type {
   Subscriber,
   Subscription,
   SuppressionEntry,
+  Template,
   UsageRecord,
 } from "@addressium/core";
 import type {
@@ -37,6 +38,7 @@ import type {
   SendClaimStore,
   SendDescriptor,
   SendScheduleStore,
+  TemplateStore,
   SendQueue,
   SentMessage,
   Stores,
@@ -219,6 +221,19 @@ export class MemCampaignSeries implements CampaignSeriesStore {
   }
 }
 
+export class MemTemplates implements TemplateStore {
+  private map = new Map<string, Template>();
+  async get(orgId: string, templateId: string) {
+    return this.map.get(subKey(orgId, templateId));
+  }
+  async put(t: Template) {
+    this.map.set(subKey(t.orgId, t.templateId), t);
+  }
+  async list(orgId: string) {
+    return [...this.map.values()].filter((t) => t.orgId === orgId);
+  }
+}
+
 export class MemSendSchedules implements SendScheduleStore {
   private map = new Map<string, SendScheduleState>();
   async get(orgId: string, scheduleId: string) {
@@ -332,6 +347,7 @@ export function memStores(): Stores {
     campaigns: new MemCampaigns(),
     series: new MemCampaignSeries(),
     schedules: new MemSendSchedules(),
+    templates: new MemTemplates(),
     alerts: new MemAlertConfigs(),
     usage: new MemUsage(),
     segments: new MemSegments(),

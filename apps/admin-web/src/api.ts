@@ -83,6 +83,27 @@ export interface OrgMeta {
   setupComplete: boolean;
 }
 
+export type TemplateMode = "visual" | "mjml" | "raw_html";
+export interface Template {
+  orgId: string;
+  templateId: string;
+  name: string;
+  mode: TemplateMode;
+  source: string;
+  version: number;
+  mergeTags: string[];
+  adSlots: string[];
+}
+export interface SaveTemplateBody {
+  orgId: string;
+  templateId: string;
+  name: string;
+  mode: TemplateMode;
+  source: string;
+  mergeTags?: string[];
+  adSlots?: string[];
+}
+
 export interface AdminList {
   orgId: string;
   listId: string;
@@ -101,12 +122,13 @@ export type ScheduleWhen =
   | { type: "at"; at: string }
   | { type: "recurring"; cron: string; timezone?: string };
 
+export type EmailTemplateBody = { blocks: EmailBlock[] } | { html: string };
 export interface ScheduleCampaignBody {
   orgId: string;
   campaignId: string;
   listId: string;
   subject: string;
-  template: { blocks: EmailBlock[] };
+  template: EmailTemplateBody;
   when: ScheduleWhen;
 }
 
@@ -132,6 +154,8 @@ export const api = {
   orgMeta: (org: string) => call<OrgMeta>("GET", `/orgs/${org}`),
   lists: (org: string) => call<AdminList[]>("GET", `/orgs/${org}/lists`),
   schedules: (org: string) => call<SendScheduleState[]>("GET", `/orgs/${org}/schedules`),
+  templates: (org: string) => call<Template[]>("GET", `/orgs/${org}/templates`),
+  saveTemplate: (body: SaveTemplateBody) => call<Template>("POST", `/templates`, body),
   scheduleCampaign: (body: ScheduleCampaignBody) => call<ScheduleResult>("POST", `/campaigns/schedule`, body),
   scheduleLifecycle: (orgId: string, scheduleId: string, action: "start" | "pause" | "archive") =>
     call<SendScheduleState>("POST", `/campaigns/lifecycle`, { orgId, scheduleId, action }),

@@ -17,9 +17,11 @@ import type {
   ListVisibility,
   Organization,
   Segment,
+  Template,
 } from "@addressium/core";
 import { schemas } from "@addressium/core";
 import type { Clock, Stores } from "./ports.js";
+import { sanitizeEmailHtml } from "./render.js";
 
 const ZERO_COUNTERS: HotCounters = {
   sent: 0,
@@ -85,6 +87,29 @@ export async function saveCampaignDraft(
   };
   await stores.campaigns.put(campaign);
   return campaign;
+}
+
+/**
+ * Save a reusable template (create or edit, §4.15). Raw HTML is passed through a
+ * baseline sanitizer at save time; the stored version bumps on each edit so the
+ * archive can pin a specific version. MJML source is stored verbatim (compiled
+ * at send in Phase 2).
+ */
+export async function saveTemplate(stores: Stores, input: schemas.SaveTemplateInput): Promise<Template> {
+  const existing = await stores.templates.get(input.orgId, input.templateId);
+  const source = input.mode === "raw_html" ? sanitizeEmailHtml(input.source) : input.source;
+  const template: Template = {
+    orgId: input.orgId,
+    templateId: input.templateId,
+    name: input.name,
+    mode: input.mode,
+    source,
+    version: (existing?.version ?? 0) + 1,
+    mergeTags: input.mergeTags,
+    adSlots: input.adSlots,
+  };
+  await stores.templates.put(template);
+  return template;
 }
 
 /** Create or update a segment definition. */

@@ -58,8 +58,8 @@ test("buildEdition uses the lead title as subject and items as editorial blocks"
   const edition = buildEdition(items, { baseCampaignId: "daily", editionKey: "2026-07-20" });
   assert.equal(edition.editionId, "daily-2026-07-20");
   assert.equal(edition.subject, "Markets rally");
-  assert.equal(edition.template.blocks.length, 2);
-  assert.equal(edition.template.blocks[0]?.kind, "editorial");
+  assert.equal(edition.template.blocks?.length, 2);
+  assert.equal(edition.template.blocks?.[0]?.kind, "editorial");
 });
 
 test("planLaunchDescriptor builds from feed items, else stamps a fresh id", () => {
