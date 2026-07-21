@@ -24,6 +24,11 @@ owner's AWS account.
   idle; you pay AWS directly (~$0.10 per 1,000 emails via SES).
 - **Multi-organization** — run several publications as isolated silos (per-org
   subscriber pool, signing key and sending identity) from one deployment.
+- **Dev/test orgs** — mark an org `environment: "dev"` to rehearse real campaigns
+  on the exact same production workflows. A dev org is its own full-domain silo
+  (e.g. `devsummitdaily.com` beside `summitdaily.com`), so a test blast can't
+  reach a live list; the console flags it with a **DEV** badge and its spend is
+  excluded from cost rollups.
 - **Email done well** — signup forms, double opt-in, preference center,
   broadcasts + ongoing series, and drip automations.
 - **Deliverability built in** — DKIM/SPF/DMARC setup, RFC 8058 one-click
