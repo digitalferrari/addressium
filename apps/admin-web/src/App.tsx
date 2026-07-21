@@ -8,6 +8,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { completeLoginIfPresent, decodeClaims, getTokens, login, logout } from "./auth.js";
 import { grantFromClaims, can, type Grant } from "./rbac.js";
+import { VisualEditor } from "./VisualEditor.js";
 import { api, type Branding, type CampaignReport, type EmailBlock, type ListPresentation, type ScheduleWhen, type SendScheduleState, type SetupState, type Template, type TemplateMode, type UsageRecord } from "./api.js";
 
 type View = "dashboard" | "setup" | "templates" | "compose" | "report" | "usage" | "schedules" | "branding" | "presentation" | "subscribers" | "settings";
@@ -439,16 +440,27 @@ function Templates({ org }: { org: string }) {
         <div style={{ display: "flex", gap: 8 }}>
           <input value={templateId} onChange={(e) => setTemplateId(e.target.value)} placeholder="template id" style={{ flex: 1 }} disabled={busy} />
           <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Display name" style={{ flex: 2 }} disabled={busy} />
-          <select value={mode} onChange={(e) => setMode(e.target.value as TemplateMode)} disabled={busy}>
+          <select value={mode} onChange={(e) => { setMode(e.target.value as TemplateMode); setPreview(null); }} disabled={busy}>
             <option value="raw_html">raw_html</option>
             <option value="mjml">mjml</option>
+            <option value="visual">visual</option>
           </select>
         </div>
-        <label style={{ marginTop: 12 }}>{mode === "mjml" ? "MJML source" : "HTML source"} — {"{{merge}}"} tags allowed</label>
-        <textarea value={source} onChange={(e) => { setSource(e.target.value); setPreview(null); }} rows={12}
-          placeholder={mode === "mjml" ? "<mjml>…</mjml>" : "<h1>Hello {{first_name}}</h1>\n<a href=\"https://…\">Read more</a>"}
-          style={{ width: "100%", fontFamily: "monospace" }} />
-        {mode === "mjml" && (
+        {mode === "visual" ? (
+          <div style={{ marginTop: 12 }}>
+            <label>Visual builder — drag blocks; outputs MJML on “Apply to template”</label>
+            <VisualEditor initialMjml={source} onApply={(m) => { setSource(m); setPreview(null); }} />
+            {source.trim() && <p className="muted" style={{ margin: "6px 0 0" }}>MJML captured ({source.length} chars). Compile &amp; preview or Save below.</p>}
+          </div>
+        ) : (
+          <>
+            <label style={{ marginTop: 12 }}>{mode === "mjml" ? "MJML source" : "HTML source"} — {"{{merge}}"} tags allowed</label>
+            <textarea value={source} onChange={(e) => { setSource(e.target.value); setPreview(null); }} rows={12}
+              placeholder={mode === "mjml" ? "<mjml>…</mjml>" : "<h1>Hello {{first_name}}</h1>\n<a href=\"https://…\">Read more</a>"}
+              style={{ width: "100%", fontFamily: "monospace" }} />
+          </>
+        )}
+        {(mode === "mjml" || mode === "visual") && (
           <div style={{ marginTop: 8 }}>
             <button className="btn ghost" onClick={compile} disabled={!source.trim()}>Compile &amp; preview</button>
             {preview && preview.errors.length > 0 && (
@@ -508,7 +520,7 @@ function Compose({ org, onScheduled }: { org: string; onScheduled: () => void })
     (when !== "at" || at !== "") && (when !== "recurring" || cron.trim() !== "");
 
   const htmlTemplates = (templates.data ?? []).filter((t) => t.mode === "raw_html");
-  const mjmlTemplates = (templates.data ?? []).filter((t) => t.mode === "mjml");
+  const mjmlTemplates = (templates.data ?? []).filter((t) => t.mode === "mjml" || t.mode === "visual");
 
   const submit = async () => {
     setMsg(""); setBusy(true);
