@@ -47,8 +47,10 @@ import {
 } from "aws-cdk-lib/aws-stepfunctions";
 import { LambdaInvoke } from "aws-cdk-lib/aws-stepfunctions-tasks";
 import { CfnWebACLAssociation } from "aws-cdk-lib/aws-wafv2";
+import { Stream, StreamMode } from "aws-cdk-lib/aws-kinesis";
 import { StaticSite } from "./static-site.js";
 import { makeCloudFrontWebAcl, makeRegionalWebAcl } from "./waf.js";
+import { wireAnalytics } from "./analytics.js";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../../..");
 const svc = (rel: string) => resolve(REPO_ROOT, rel);
@@ -69,12 +71,22 @@ export class ControlPlaneStack extends Stack {
     const mirrorCtx = this.node.tryGetContext("enableOpenSearchMirror") as boolean | string | undefined;
     const enableOpenSearchMirror = mirrorCtx === true || mirrorCtx === "true";
 
+    // Reporting read-model (§4.23) is opt-in — when on, the table fans its change
+    // stream out to Kinesis for the analytics data lake (separate from the
+    // DynamoDB Streams the OpenSearch mirror uses).
+    const analyticsCtx = this.node.tryGetContext("enableAnalytics") as boolean | string | undefined;
+    const enableAnalytics = analyticsCtx === true || analyticsCtx === "true";
+    const analyticsStream = enableAnalytics
+      ? new Stream(this, "AnalyticsStream", { streamMode: StreamMode.ON_DEMAND })
+      : undefined;
+
     const table = new Table(this, "Table", {
       partitionKey: { name: "pk", type: AttributeType.STRING },
       sortKey: { name: "sk", type: AttributeType.STRING },
       billingMode: BillingMode.PAY_PER_REQUEST,
       pointInTimeRecovery: true,
       stream: enableOpenSearchMirror ? StreamViewType.NEW_AND_OLD_IMAGES : undefined,
+      kinesisStream: analyticsStream,
       removalPolicy: props.stage === "prod" ? RemovalPolicy.RETAIN : RemovalPolicy.DESTROY,
     });
     table.addGlobalSecondaryIndex({
@@ -547,6 +559,25 @@ export class ControlPlaneStack extends Stack {
     new CfnOutput(this, "PublicSiteUrl", { value: publicSite.distribution.domainName });
     new CfnOutput(this, "PublicSiteBucket", { value: publicSite.bucket.bucketName });
     new CfnOutput(this, "AuditBucketName", { value: auditBucket.bucketName });
-    void analyticsBucket;
+
+    // ---- reporting read-model (§4.23) ----
+    if (enableAnalytics && analyticsStream) {
+      const transformFn = fn("AnalyticsExportFn", svc("services/analytics-export/src/index.ts"), "handler");
+      const snapshotFn = fn("AnalyticsSnapshotFn", svc("services/analytics-export/src/index.ts"), "exportHandler", {
+        TABLE_ARN: table.tableArn,
+        ANALYTICS_BUCKET: analyticsBucket.bucketName,
+      });
+      wireAnalytics(this, {
+        stage: props.stage,
+        table,
+        analyticsBucket,
+        analyticsStream,
+        transformFn,
+        exportFn: snapshotFn,
+      });
+      new CfnOutput(this, "AnalyticsBucketName", { value: analyticsBucket.bucketName });
+    } else {
+      void analyticsBucket;
+    }
   }
 }

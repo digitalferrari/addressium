@@ -606,6 +606,38 @@ opt-in, per-org **win-back → sunset** automation (`Organization.reengagement`)
   invoked by the automations service on a recurring EventBridge schedule, the same
   mechanism recurring editions and drip journeys use.
 
+### 4.23 Reporting read-model (analytics tier)
+
+The DynamoDB table is tuned for the **sending** path — key-based reads/writes,
+partitioned by org and campaign. Cross-campaign cohort questions ("how many
+subscribers engaged with ≥K of the last N editions", funnels, retention, per-user
+history) are the opposite access pattern: wide scans and aggregations that would
+be slow and expensive against DynamoDB and would put reporting load on the
+sending path. So reporting is a **separate read-model** (CQRS) — an opt-in
+(context `enableAnalytics`), append-mostly copy of the data in a columnar data
+lake that reporting owns and can be rebuilt from at any time.
+
+- **Fact tier (near-real-time).** The table streams every change to a **Kinesis**
+  stream; **Firehose** reads it and invokes a small transformation Lambda that
+  keeps only engagement-event inserts and flattens each to a columnar row, landing
+  newline-delimited JSON in **S3** under `events/org_id=…/event_date=…/`
+  (dynamically partitioned). A **Glue** table with **partition projection**
+  catalogues it — no crawler, partitions resolve at query time.
+- **Dimension tier (nightly).** A scheduled **point-in-time export** dumps the
+  whole table to `entities/` with **zero read-capacity cost** (it reads continuous
+  backups, not the table), giving subscriber/campaign/list snapshots to join
+  against.
+- **Query.** **Athena** SQL against the `events` table, in a per-deployment
+  workgroup. See `docs/reporting/queries.sql` for the canonical cohort/funnel
+  queries. Partition pruning on `org_id` + `event_date` keeps scans (and cost)
+  small; storage is cheap S3 at rest.
+- **Clicks over opens.** Reporting weights **clicks**; opens are MPP-inflated and
+  reported only for comparison (§4.22).
+- **Freshness is deliberately decoupled.** Facts are seconds-to-minutes behind
+  (Firehose buffering); dimensions up to a day. That lag is fine for reporting and
+  is the price of keeping the analytics plane off the sending path. GDPR erasure
+  (§4.19) must also reach the lake — rewrite/rebuild affected partitions.
+
 ---
 
 ## 5. Data model

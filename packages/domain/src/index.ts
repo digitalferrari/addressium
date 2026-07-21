@@ -28,6 +28,7 @@ export * from "./admin.js";
 export * from "./drip.js";
 export * from "./resend.js";
 export * from "./reengagement.js";
+export * from "./analytics-export.js";
 export * from "./themes.js";
 export * from "./audit.js";
 export * from "./analytics-ai.js";
