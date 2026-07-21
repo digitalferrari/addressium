@@ -8,9 +8,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { completeLoginIfPresent, decodeClaims, getTokens, login, logout } from "./auth.js";
 import { grantFromClaims, can, type Grant } from "./rbac.js";
-import { api, type Branding, type CampaignReport, type ListPresentation } from "./api.js";
+import { api, type Branding, type CampaignReport, type ListPresentation, type UsageRecord } from "./api.js";
 
-type View = "dashboard" | "report" | "branding" | "presentation" | "subscribers" | "settings";
+type View = "dashboard" | "report" | "usage" | "branding" | "presentation" | "subscribers" | "settings";
 
 export function App() {
   const [ready, setReady] = useState(false);
@@ -82,6 +82,7 @@ function Console() {
         <nav className="nav" style={{ marginTop: 16 }}>
           <NavItem id="dashboard" label="Dashboard" />
           <NavItem id="report" label="Campaign report" cap="reports:view" />
+          <NavItem id="usage" label="Usage & cost" cap="reports:view" />
           <NavItem id="subscribers" label="Subscribers" cap="subscribers:manage" />
           <NavItem id="branding" label="Branding" cap="branding:manage" />
           <NavItem id="presentation" label="Presentation" cap="branding:manage" />
@@ -97,6 +98,7 @@ function Console() {
       <main className="main">
         {view === "dashboard" && <Dashboard org={org} />}
         {view === "report" && <Report org={org} grant={grant} />}
+        {view === "usage" && <Usage org={org} />}
         {view === "subscribers" && <Subscribers org={org} />}
         {view === "branding" && <BrandingEditor org={org} />}
         {view === "presentation" && <PresentationEditor org={org} />}
@@ -228,6 +230,61 @@ function Kpi({ n, l }: { n: number; l: string }) {
   return <div className="kpi"><div className="n">{n}</div><div className="l">{l}</div></div>;
 }
 const pct = (x: number) => `${(x * 100).toFixed(1)}%`;
+
+const usd = (n: number) => `$${n.toFixed(2)}`;
+const gb = (bytes: number) => `${(bytes / 1_073_741_824).toFixed(2)} GB`;
+
+function Usage({ org }: { org: string }) {
+  const { data, error, loading } = useAsync(() => api.usage(org), [org]);
+  const rows = useMemo(() => {
+    const list: UsageRecord[] = Array.isArray(data) ? data : data ? [data] : [];
+    return [...list].sort((a, b) => b.period.localeCompare(a.period));
+  }, [data]);
+  const latest = rows[0];
+  return (
+    <div>
+      <h1 className="h1">Usage &amp; cost · {org || "—"}</h1>
+      {loading && <div className="card muted">Loading…</div>}
+      {error && <p className="err">{error}</p>}
+      {!loading && !error && rows.length === 0 && (
+        <div className="card muted">No usage recorded yet. Metering populates once the scheduled job has run for a period.</div>
+      )}
+      {latest && (
+        <div className="card">
+          <div className="muted" style={{ marginBottom: 8 }}>Latest period · {latest.period}</div>
+          <div className="kpis">
+            <Kpi n={Number(usd(latest.cost.total).slice(1))} l="total $" />
+            <Kpi n={latest.emailsSent} l="emails sent" />
+            <Kpi n={Number(gb(latest.athenaBytesScanned).split(" ")[0])} l="GB scanned (Athena)" />
+            <Kpi n={latest.dedicatedIps} l="dedicated IPs" />
+          </div>
+        </div>
+      )}
+      {rows.length > 0 && (
+        <div className="card">
+          <div className="muted" style={{ marginBottom: 8 }}>Cost by period (email · storage · dedicated IP · Athena scan)</div>
+          <table>
+            <thead>
+              <tr><th>Period</th><th>Email</th><th>Storage</th><th>Ded. IP</th><th>Athena</th><th>Total</th></tr>
+            </thead>
+            <tbody>
+              {rows.map((r) => (
+                <tr key={r.period}>
+                  <td>{r.period}</td>
+                  <td>{usd(r.cost.email)}</td>
+                  <td>{usd(r.cost.storage)}</td>
+                  <td>{usd(r.cost.dedicatedIp)}</td>
+                  <td title={gb(r.athenaBytesScanned)}>{usd(r.cost.athena)}</td>
+                  <td className="t-strong">{usd(r.cost.total)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
 
 function Subscribers({ org }: { org: string }) {
   const [email, setEmail] = useState("");

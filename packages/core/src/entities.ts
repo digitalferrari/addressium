@@ -388,6 +388,7 @@ export interface CostRates {
   perEmail: number; // SES per-message
   perGbStorageMonth: number; // S3 archive
   perDedicatedIpMonth: number; // SES dedicated IP lease
+  perTbScanned: number; // Athena data scanned (reporting read-model, §4.23)
 }
 
 /** Aggregated usage + estimated cost for one org over one billing period. */
@@ -397,7 +398,9 @@ export interface UsageRecord {
   emailsSent: number;
   storageBytes: number;
   dedicatedIps: number;
-  cost: { email: number; storage: number; dedicatedIp: number; total: number };
+  /** Athena bytes scanned this period (reporting read-model, §4.23). */
+  athenaBytesScanned: number;
+  cost: { email: number; storage: number; dedicatedIp: number; athena: number; total: number };
   computedAt: string;
 }
 

@@ -49,8 +49,9 @@ export async function handler(event: ReportEvent) {
 
 /**
  * Metering ingest (§11, #26). A scheduled job feeds per-org/period usage — email
- * volume from our counters, storageBytes + dedicatedIps from AWS metrics — and
- * we apply the cost model and persist the record for the Usage screen.
+ * volume from our counters, storageBytes + dedicatedIps + athenaBytesScanned from
+ * AWS metrics — and we apply the cost model and persist the record for the Usage
+ * screen. Athena scan is attributed per org from the workgroup's query stats.
  */
 export interface UsageIngestEvent {
   orgId: string;
@@ -58,6 +59,8 @@ export interface UsageIngestEvent {
   emailsSent: number;
   storageBytes: number;
   dedicatedIps: number;
+  /** Athena bytes scanned this period (reporting read-model, §4.23). Optional. */
+  athenaBytesScanned?: number;
 }
 
 export async function usageIngestHandler(event: UsageIngestEvent) {
@@ -104,9 +107,16 @@ export async function usageHandler(event: {
   pathParameters?: { org?: string; period?: string } | null;
   orgId?: string;
   period?: string;
+  requestContext?: { authorizer?: { jwt?: { claims?: Record<string, string> } } };
 }) {
   const orgId = event.pathParameters?.org ?? event.orgId;
   if (!orgId) return { statusCode: 400, headers: {}, body: JSON.stringify({ error: "org required" }) };
+  try {
+    authorize(grantFromClaims(event.requestContext?.authorizer?.jwt?.claims ?? {}), "reports:view", orgId);
+  } catch (e) {
+    const msg = (e as Error).message;
+    return { statusCode: msg.startsWith("Forbidden") ? 403 : 400, headers: {}, body: JSON.stringify({ error: msg }) };
+  }
   const period = event.pathParameters?.period ?? event.period;
   const s = stores();
   const body = period ? await s.usage.get(orgId, period) : await s.usage.listByOrg(orgId);

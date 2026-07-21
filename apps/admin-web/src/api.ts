@@ -52,8 +52,19 @@ export interface CampaignReport {
   abResults?: { aScore: number; bScore: number; winner?: "A" | "B"; metric: string };
 }
 
+export interface UsageRecord {
+  period: string;
+  emailsSent: number;
+  storageBytes: number;
+  dedicatedIps: number;
+  athenaBytesScanned: number;
+  cost: { email: number; storage: number; dedicatedIp: number; athena: number; total: number };
+  computedAt: string;
+}
+
 export const api = {
   lists: (org: string) => call<unknown[]>("GET", `/orgs/${org}/lists`),
+  usage: (org: string) => call<UsageRecord[] | null>("GET", `/orgs/${org}/usage`),
   saveList: (input: unknown) => call<unknown>("POST", `/lists`, input),
   setVisibility: (orgId: string, listId: string, visibility: "open" | "closed") =>
     call<unknown>("POST", `/lists/visibility`, { orgId, listId, visibility }),

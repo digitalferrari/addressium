@@ -448,6 +448,13 @@ export class ControlPlaneStack extends Stack {
       integration: new HttpLambdaIntegration("ReportInt", reportFn),
       authorizer: adminAuth,
     });
+    // Usage & cost (§11) — surfaced on the admin Usage screen.
+    const usageFn = fn("UsageFn", reportingEntry, "usageHandler", apiEnv);
+    table.grantReadData(usageFn);
+    const usageInt = new HttpLambdaIntegration("UsageInt", usageFn);
+    api.addRoutes({ path: "/orgs/{org}/usage", methods: [HttpMethod.GET], integration: usageInt, authorizer: adminAuth });
+    api.addRoutes({ path: "/orgs/{org}/usage/{period}", methods: [HttpMethod.GET], integration: usageInt, authorizer: adminAuth });
+
     const analyzeFn = fn("AnalyzeFn", reportingEntry, "analyzeHandler", apiEnv);
     table.grantReadData(analyzeFn);
     analyzeFn.addToRolePolicy(

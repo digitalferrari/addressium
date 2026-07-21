@@ -140,6 +140,12 @@ export function wireAnalytics(scope: Construct, props: AnalyticsWiringProps): vo
     name: `addressium-${stage}`,
     workGroupConfiguration: {
       resultConfiguration: { outputLocation: `s3://${bucket}/athena-results/` },
+      // Cost guardrail: a single query may scan at most 10 GB, so a missing
+      // partition filter or a runaway JOIN can't quietly run up an Athena bill.
+      bytesScannedCutoffPerQuery: 10 * 1024 * 1024 * 1024,
+      // Publish per-query DataScannedInBytes to CloudWatch so the metering job
+      // can attribute Athena spend per org (§11).
+      publishCloudWatchMetricsEnabled: true,
     },
   });
 

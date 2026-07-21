@@ -15,7 +15,11 @@ export const DEFAULT_COST_RATES: CostRates = {
   perEmail: 0.0001, // $0.10 / 1,000 messages
   perGbStorageMonth: 0.023,
   perDedicatedIpMonth: 24.95,
+  perTbScanned: 5.0, // Athena: $5 / TB scanned
 };
+
+const BYTES_PER_GB = 1_073_741_824;
+const BYTES_PER_TB = 1_099_511_627_776;
 
 export interface UsageInputs {
   orgId: string;
@@ -23,13 +27,16 @@ export interface UsageInputs {
   emailsSent: number;
   storageBytes: number;
   dedicatedIps: number;
+  /** Athena bytes scanned this period; optional (0 when the analytics tier is off). */
+  athenaBytesScanned?: number;
 }
 
 export function estimateCost(inputs: UsageInputs, rates: CostRates): UsageRecord["cost"] {
   const email = inputs.emailsSent * rates.perEmail;
-  const storage = (inputs.storageBytes / 1_073_741_824) * rates.perGbStorageMonth;
+  const storage = (inputs.storageBytes / BYTES_PER_GB) * rates.perGbStorageMonth;
   const dedicatedIp = inputs.dedicatedIps * rates.perDedicatedIpMonth;
-  return { email, storage, dedicatedIp, total: email + storage + dedicatedIp };
+  const athena = ((inputs.athenaBytesScanned ?? 0) / BYTES_PER_TB) * rates.perTbScanned;
+  return { email, storage, dedicatedIp, athena, total: email + storage + dedicatedIp + athena };
 }
 
 /** Sum "emailsSent" from a set of campaigns' hot counters (our own metric). */
@@ -50,6 +57,7 @@ export async function recordUsage(
     emailsSent: inputs.emailsSent,
     storageBytes: inputs.storageBytes,
     dedicatedIps: inputs.dedicatedIps,
+    athenaBytesScanned: inputs.athenaBytesScanned ?? 0,
     cost: estimateCost(inputs, rates),
     computedAt: clock.now().toISOString(),
   };
