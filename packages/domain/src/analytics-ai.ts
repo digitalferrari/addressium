@@ -23,7 +23,9 @@ export interface AnalyticsAdvisor {
   analyze(prompt: string): Promise<AnalysisResult>;
 }
 
-const EMAIL_RE = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi;
+// Domain written as dot-separated labels (no `.` inside the class) so the class
+// and the literal dot can't overlap — removes the polynomial-ReDoS ambiguity.
+const EMAIL_RE = /[A-Z0-9._%+-]+@[A-Z0-9-]+(?:\.[A-Z0-9-]+)+/gi;
 
 /** Strip anything email-shaped — belt-and-braces even though we only pass aggregates. */
 export function redactForLlm(text: string): string {
