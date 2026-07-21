@@ -43,3 +43,40 @@ th { color: var(--ink-2); font-weight: 600; }
 .bar { height: 8px; background: var(--accent); border-radius: 4px; }
 .swatch { width: 22px; height: 22px; border-radius: 6px; border: 1px solid var(--line); display: inline-block; vertical-align: middle; }
 .center { display: grid; place-items: center; min-height: 100vh; }
+
+/* ---- Motion system (#119) — subtle, CSS-first, reduced-motion aware ---- */
+:root { --dur-1: 140ms; --dur-2: 240ms; --ease: cubic-bezier(0.2, 0.7, 0.2, 1); }
+
+@keyframes fadeUp { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+@keyframes blurIn { from { opacity: 0; filter: blur(6px); transform: translateY(6px); } to { opacity: 1; filter: none; transform: none; } }
+@keyframes shimmer { to { transform: translateX(100%); } }
+
+/* Route/view transition: the keyed .view wrapper remounts per screen and replays. */
+.view { animation: fadeUp var(--dur-2) var(--ease) both; }
+
+/* Login card gets a slightly richer blur-in (Magic UI "blur fade", ported to CSS). */
+.center .card { animation: blurIn var(--dur-2) var(--ease) both; }
+
+/* Interactive feedback. */
+button.btn { transition: background var(--dur-1) var(--ease), transform var(--dur-1) var(--ease), opacity var(--dur-1) var(--ease); }
+button.btn:hover:not(:disabled) { transform: translateY(-1px); }
+button.btn:active:not(:disabled) { transform: translateY(0) scale(0.98); }
+.nav button { transition: background var(--dur-1) var(--ease), color var(--dur-1) var(--ease), transform var(--dur-1) var(--ease); }
+.nav button:hover { transform: translateX(2px); }
+.nav button.active { box-shadow: inset 2px 0 0 var(--accent); }
+input, select, textarea { transition: border-color var(--dur-1) var(--ease), box-shadow var(--dur-1) var(--ease); }
+input:focus, select:focus, textarea:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(79, 140, 255, 0.15); }
+
+/* Shimmer skeletons for loading states. */
+.skeleton { position: relative; overflow: hidden; background: #0f1319; border: 1px solid var(--line); border-radius: 8px; }
+.skeleton::after { content: ""; position: absolute; inset: 0; transform: translateX(-100%); background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.06), transparent); animation: shimmer 1.4s infinite; }
+.sk-line { height: 12px; margin: 10px 0; }
+.sk-kpi { height: 52px; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}
