@@ -31,6 +31,8 @@ import { HttpLambdaIntegration } from "aws-cdk-lib/aws-apigatewayv2-integrations
 import { HttpUserPoolAuthorizer } from "aws-cdk-lib/aws-apigatewayv2-authorizers";
 import { Topic } from "aws-cdk-lib/aws-sns";
 import { LambdaSubscription } from "aws-cdk-lib/aws-sns-subscriptions";
+import { Alarm, ComparisonOperator, TreatMissingData } from "aws-cdk-lib/aws-cloudwatch";
+import { SnsAction } from "aws-cdk-lib/aws-cloudwatch-actions";
 import { Secret } from "aws-cdk-lib/aws-secretsmanager";
 import { Role, ServicePrincipal, PolicyStatement } from "aws-cdk-lib/aws-iam";
 import { CfnScheduleGroup } from "aws-cdk-lib/aws-scheduler";
@@ -124,8 +126,19 @@ export class ControlPlaneStack extends Stack {
       ),
       removalPolicy: RemovalPolicy.RETAIN,
     });
-    const sendQueue = new Queue(this, "SendQueue", { visibilityTimeout: Duration.minutes(5) });
+    // Send pipeline queue with a dead-letter queue (#92): a message that fails
+    // to send `maxReceiveCount` times lands in the DLQ instead of being lost, so
+    // it can be inspected and replayed. Alarms below page ops when it fills.
+    const sendDlq = new Queue(this, "SendDlq", { retentionPeriod: Duration.days(14) });
+    const sendQueue = new Queue(this, "SendQueue", {
+      visibilityTimeout: Duration.minutes(5),
+      deadLetterQueue: { queue: sendDlq, maxReceiveCount: 5 },
+    });
     const sesEvents = new Topic(this, "SesEventsTopic");
+    // Ops alerts topic (#92): infra-level CloudWatch alarms (DLQ depth, queue
+    // age, Lambda errors/throttles) publish here. Subscribe your ops channel;
+    // this is the same escalation path as the domain-layer deliverability alerts.
+    const opsAlerts = new Topic(this, "OpsAlertsTopic");
 
     // ---- admin pool (control plane, seeded so first login works — §9.1) ----
     const adminPool = new UserPool(this, "AdminPool", {
@@ -171,6 +184,21 @@ export class ControlPlaneStack extends Stack {
         bundling: { format: "esm" as never, target: "node20" },
       });
 
+    // ses:SendEmail scoped to *this account's* SES identities + configuration
+    // sets (#93). Per-org identities/config-sets are created by provisioning at
+    // runtime so their exact ARNs can't be enumerated here, but restricting to
+    // this account/region's `identity/*` and `configuration-set/*` is a real
+    // tightening from `resources: ["*"]` (blocks sending as any other account's
+    // verified identity). A fresh statement per caller keeps roles independent.
+    const sesSendScoped = () =>
+      new PolicyStatement({
+        actions: ["ses:SendEmail"],
+        resources: [
+          Stack.of(this).formatArn({ service: "ses", resource: "identity", resourceName: "*" }),
+          Stack.of(this).formatArn({ service: "ses", resource: "configuration-set", resourceName: "*" }),
+        ],
+      });
+
     const apiEntry = svc("services/api/src/index.ts");
     const apiEnv = {
       CONFIRM_SECRET_ARN: confirmSecret.secretArn,
@@ -184,7 +212,7 @@ export class ControlPlaneStack extends Stack {
         "https://your-site.example/confirm",
     });
     signupFn.addToRolePolicy(
-      new PolicyStatement({ actions: ["ses:SendEmail"], resources: ["*"] }),
+      sesSendScoped(),
     );
     const signupBatchFn = fn("SignupBatchFn", apiEntry, "signupBatchHandler", {
       ...apiEnv,
@@ -193,7 +221,7 @@ export class ControlPlaneStack extends Stack {
         "https://your-site.example/confirm",
     });
     signupBatchFn.addToRolePolicy(
-      new PolicyStatement({ actions: ["ses:SendEmail"], resources: ["*"] }),
+      sesSendScoped(),
     );
     // The embed widget's reCAPTCHA secret is org-configured at runtime (#62).
     signupBatchFn.addToRolePolicy(
@@ -222,9 +250,7 @@ export class ControlPlaneStack extends Stack {
         conditions: { StringEquals: { "aws:ResourceTag/app": "addressium" } },
       }),
     );
-    senderFn.addToRolePolicy(
-      new PolicyStatement({ actions: ["ses:SendEmail"], resources: ["*"] }),
-    );
+    senderFn.addToRolePolicy(sesSendScoped());
     const eventsFn = fn("EventsFn", svc("services/events/src/index.ts"), "handler");
 
     // Launch handler for recurring series (EventBridge Scheduler target, §4.16).
@@ -246,7 +272,7 @@ export class ControlPlaneStack extends Stack {
       }),
     );
     dripStepFn.addToRolePolicy(
-      new PolicyStatement({ actions: ["ses:SendEmail"], resources: ["*"] }),
+      sesSendScoped(),
     );
 
     const waitStep = new Wait(this, "DripWait", {
@@ -330,8 +356,10 @@ export class ControlPlaneStack extends Stack {
     webhookSecret.grantRead(entitlementFn);
     webhookSecret.grantRead(identityFn);
     archiveBucket.grantReadWrite(senderFn);
-    // TODO: grant senderFn kms:Sign on the per-org signing keys (resolved at
-    // runtime); grant SES send. Not scoped here since keys are per-org (§4.11).
+    // kms:Sign is scoped by the addressium key-tag condition and ses:SendEmail to
+    // this account's SES identities/config-sets (#93). Per-org signing keys are
+    // created by provisioning at runtime and tagged app=addressium, so the tag
+    // condition covers them without enumerating ARNs here (§4.11).
 
     // ---- wiring ----
     const api = new HttpApi(this, "HttpApi");
@@ -466,6 +494,50 @@ export class ControlPlaneStack extends Stack {
     });
 
     senderFn.addEventSource(new SqsEventSource(sendQueue));
+
+    // ---- infra alarms (#92) — page ops on a stuck/failing send pipeline ----
+    const alarmAction = new SnsAction(opsAlerts);
+    const alarm = (id: string, a: Alarm) => {
+      a.addAlarmAction(alarmAction);
+      return a;
+    };
+    // Anything in the DLQ means messages exhausted their retries — investigate.
+    alarm("SendDlqNotEmptyAlarm", new Alarm(this, "SendDlqNotEmptyAlarm", {
+      metric: sendDlq.metricApproximateNumberOfMessagesVisible({ period: Duration.minutes(1) }),
+      threshold: 0,
+      comparisonOperator: ComparisonOperator.GREATER_THAN_THRESHOLD,
+      evaluationPeriods: 1,
+      treatMissingData: TreatMissingData.NOT_BREACHING,
+      alarmDescription: "addressium: messages in the send dead-letter queue",
+    }));
+    // Oldest message age climbing = the sender isn't draining the queue.
+    alarm("SendQueueAgeAlarm", new Alarm(this, "SendQueueAgeAlarm", {
+      metric: sendQueue.metricApproximateAgeOfOldestMessage({ period: Duration.minutes(5) }),
+      threshold: Duration.minutes(15).toSeconds(),
+      comparisonOperator: ComparisonOperator.GREATER_THAN_THRESHOLD,
+      evaluationPeriods: 1,
+      treatMissingData: TreatMissingData.NOT_BREACHING,
+      alarmDescription: "addressium: send queue backing up (oldest message > 15m)",
+    }));
+    // Lambda errors + throttles across the critical send path.
+    for (const [label, f] of [["Sender", senderFn], ["Launch", launchFn], ["DripStep", dripStepFn]] as const) {
+      alarm(`${label}ErrorsAlarm`, new Alarm(this, `${label}ErrorsAlarm`, {
+        metric: f.metricErrors({ period: Duration.minutes(5) }),
+        threshold: 0,
+        comparisonOperator: ComparisonOperator.GREATER_THAN_THRESHOLD,
+        evaluationPeriods: 1,
+        treatMissingData: TreatMissingData.NOT_BREACHING,
+        alarmDescription: `addressium: ${label} Lambda errors`,
+      }));
+      alarm(`${label}ThrottlesAlarm`, new Alarm(this, `${label}ThrottlesAlarm`, {
+        metric: f.metricThrottles({ period: Duration.minutes(5) }),
+        threshold: 0,
+        comparisonOperator: ComparisonOperator.GREATER_THAN_THRESHOLD,
+        evaluationPeriods: 1,
+        treatMissingData: TreatMissingData.NOT_BREACHING,
+        alarmDescription: `addressium: ${label} Lambda throttles`,
+      }));
+    }
     sesEvents.addSubscription(new LambdaSubscription(eventsFn));
 
     // ---- WAF (managed rule sets + per-IP rate limit + signup CAPTCHA, §5, #20) ----
@@ -559,6 +631,8 @@ export class ControlPlaneStack extends Stack {
     new CfnOutput(this, "HttpApiUrl", { value: api.apiEndpoint });
     new CfnOutput(this, "SendQueueUrl", { value: sendQueue.queueUrl });
     new CfnOutput(this, "SesEventsTopicArn", { value: sesEvents.topicArn });
+    new CfnOutput(this, "OpsAlertsTopicArn", { value: opsAlerts.topicArn });
+    new CfnOutput(this, "SendDlqUrl", { value: sendDlq.queueUrl });
     new CfnOutput(this, "AdminSiteUrl", { value: adminSite.distribution.domainName });
     new CfnOutput(this, "AdminSiteBucket", { value: adminSite.bucket.bucketName });
     new CfnOutput(this, "PublicSiteUrl", { value: publicSite.distribution.domainName });
