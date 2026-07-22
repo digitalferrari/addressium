@@ -1331,6 +1331,17 @@ function PresentationEditor({ org }: { org: string }) {
   const [listId, setListId] = useState("");
   const [p, setP] = useState<ListPresentation>(DEFAULT_PRESENTATION);
   const [msg, setMsg] = useState("");
+  // Prefill with the selected list's *current* toggles so Save doesn't silently
+  // clobber them with defaults (#143). The admin lists payload already carries
+  // `presentation`; fall back to defaults for a list that has none set yet.
+  useEffect(() => {
+    if (!listId) {
+      setP(DEFAULT_PRESENTATION);
+      return;
+    }
+    const current = (lists.data ?? []).find((l) => l.listId === listId)?.presentation;
+    setP({ ...DEFAULT_PRESENTATION, ...(current ?? {}) });
+  }, [listId, lists.data]);
   const toggle = (k: keyof ListPresentation) => setP({ ...p, [k]: !p[k] });
   const save = async () => {
     setMsg("");
@@ -1378,6 +1389,20 @@ function AiSettings({ org }: { org: string }) {
   const [model, setModel] = useState("");
   const [apiKey, setApiKey] = useState("");
   const [msg, setMsg] = useState("");
+  // Reflect the saved provider so the form isn't blank when one is already
+  // configured (#144). The key is never returned, so it stays empty; re-saving
+  // requires re-entering it, which is the intended, safe behavior.
+  useEffect(() => {
+    let live = true;
+    api.orgMeta(org)
+      .then((m) => {
+        if (!live || !m.aiConfig) return;
+        setVendor(m.aiConfig.vendor);
+        setModel(m.aiConfig.model);
+      })
+      .catch(() => undefined);
+    return () => { live = false; };
+  }, [org]);
   const save = async () => {
     setMsg("");
     try { await api.setAiConfig(org, vendor, model, apiKey); setApiKey(""); setMsg("Saved (key stored in Secrets Manager)"); }

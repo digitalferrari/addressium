@@ -362,6 +362,9 @@ export async function orgMetaHandler(event: HttpEvent): Promise<HttpResult> {
       name: org.name,
       environment: org.environment ?? "prod",
       setupComplete: org.setupComplete,
+      // Surface the configured AI provider (vendor + model only) so the console
+      // can reflect saved state; the API key/secret ARN is never echoed (#144).
+      aiConfig: org.aiConfig ? { vendor: org.aiConfig.vendor, model: org.aiConfig.model } : undefined,
     });
   } catch (e) {
     return fail(e);

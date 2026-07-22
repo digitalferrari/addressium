@@ -70,6 +70,17 @@ function EmbedSnippet() {
   const snippet =
     `<div data-addressium data-org="${ORG}" data-list="YOUR_LIST_ID"></div>\n` +
     `<script async src="${src}"></script>`;
+  const [copied, setCopied] = useState(false);
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(snippet);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      // Clipboard API unavailable (insecure context / old browser) — the user
+      // can still select the snippet manually.
+    }
+  };
   return (
     <div className="card">
       <p className="muted">
@@ -77,6 +88,7 @@ function EmbedSnippet() {
         addressium API (double opt-in). No cookies, no tracking.
       </p>
       <pre>{snippet}</pre>
+      <button onClick={() => void copy()}>{copied ? "Copied!" : "Copy snippet"}</button>
     </div>
   );
 }

@@ -81,6 +81,8 @@ export interface OrgMeta {
   name: string;
   environment: "prod" | "dev";
   setupComplete: boolean;
+  /** Configured AI analytics provider (vendor + model only; key never echoed) — #144. */
+  aiConfig?: { vendor: string; model: string };
 }
 
 export type TemplateMode = "visual" | "mjml" | "raw_html";
@@ -110,6 +112,8 @@ export interface AdminList {
   name: string;
   visibility?: "open" | "closed";
   fromAddress?: string;
+  /** Current subscriber-site presentation toggles (#33) — used to prefill the Presentation editor. */
+  presentation?: ListPresentation;
 }
 
 export type EmailBlock =
