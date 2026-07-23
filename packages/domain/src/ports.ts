@@ -187,7 +187,11 @@ export interface SentMessage {
   to: string;
   subject: string;
   html: string;
-  /** RFC 8058 one-click unsubscribe header value. */
+  /** Optional plain-text alternative part. Improves deliverability/spam scoring
+   *  and is expected by many clients; the SES adapter emits it as Body.Text. */
+  text?: string;
+  /** RFC 8058 List-Unsubscribe header value, angle-bracketed. An `https` URI
+   *  supports one-click POST; a `mailto:` value does not (see SesEmailSender). */
   listUnsubscribe: string;
 }
 export interface EmailSender {

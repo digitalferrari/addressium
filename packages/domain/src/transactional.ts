@@ -20,11 +20,21 @@ export function buildConfirmationEmail(
     `<p><a href="${escapeHtml(confirmUrl)}">Confirm subscription</a></p>`,
     `<p style="font-size:12px;color:#777">${escapeHtml(list.complianceFooter)}<br>${escapeHtml(list.physicalAddress)}</p>`,
   ].join("\n");
+  const text = [
+    `Please confirm your subscription to ${list.name}.`,
+    `Confirm: ${confirmUrl}`,
+    ``,
+    list.complianceFooter,
+    list.physicalAddress,
+  ].join("\n");
   return {
     from: list.fromAddress,
     to: toEmail,
     subject: `Confirm your subscription to ${list.name}`,
     html,
+    text,
+    // Transactional opt-in confirmation: mailto-only List-Unsubscribe (no
+    // one-click POST — the SES adapter omits the One-Click header for mailto).
     listUnsubscribe: `<mailto:${list.fromAddress}>`,
   };
 }
@@ -44,11 +54,21 @@ export function buildBatchConfirmationEmail(
     `<p><a href="${escapeHtml(confirmUrl)}">Confirm all subscriptions</a></p>`,
     `<p style="font-size:12px;color:#777">${escapeHtml(first.complianceFooter)}<br>${escapeHtml(first.physicalAddress)}</p>`,
   ].join("\n");
+  const text = [
+    `Please confirm your subscription to:`,
+    ...lists.map((l) => `- ${l.name}`),
+    ``,
+    `Confirm all: ${confirmUrl}`,
+    ``,
+    first.complianceFooter,
+    first.physicalAddress,
+  ].join("\n");
   return {
     from: first.fromAddress,
     to: toEmail,
     subject: `Confirm your subscriptions (${lists.length})`,
     html,
+    text,
     listUnsubscribe: `<mailto:${first.fromAddress}>`,
   };
 }
