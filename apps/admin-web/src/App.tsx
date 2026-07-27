@@ -6,7 +6,7 @@
  * console mirrors capabilities only to hide/disable controls.
  */
 import { useEffect, useMemo, useState } from "react";
-import { completeLoginIfPresent, decodeClaims, getTokens, login, logout } from "./auth.js";
+import { completeLoginIfPresent, decodeClaims, getTokens, isExpired, login, logout } from "./auth.js";
 import { grantFromClaims, can, type Grant } from "./rbac.js";
 import { VisualEditor } from "./VisualEditor.js";
 import { api, type Branding, type CampaignReport, type DripStepDef, type EmailBlock, type ListPresentation, type ScheduleWhen, type SendScheduleState, type SetupState, type Template, type TemplateMode, type UsageRecord } from "./api.js";
@@ -21,7 +21,10 @@ export function App() {
     completeLoginIfPresent()
       .catch(() => undefined)
       .finally(() => {
-        setAuthed(getTokens() !== null);
+        // An expired token used to leave the app believing it was signed in,
+        // so every call 401'd into a swallowed catch and the operator saw blank
+        // panels with no prompt to re-authenticate (#197).
+        setAuthed(!isExpired(getTokens()));
         setReady(true);
       });
   }, []);

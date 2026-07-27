@@ -77,6 +77,14 @@ const ROLE_NAMES = new Set<RoleName>(["developer_admin", "editor", "analyst", "s
  * list of orgIds). Throws if the role claim is missing/invalid.
  */
 export function grantFromClaims(claims: Record<string, string | undefined>): Grant {
+  // Token-type confusion guard. Cognito ID tokens carry `custom:*` attributes;
+  // access tokens do not. We standardize on the ID token (#161), so reject an
+  // access token presented in its place. Checked only when the claim is present
+  // so non-Cognito fixtures/tests remain usable — real tokens always carry it.
+  const tokenUse = claims["token_use"];
+  if (tokenUse !== undefined && tokenUse !== "id") {
+    throw new ForbiddenError("reports:view", "*");
+  }
   const role = claims["custom:role"];
   if (!role || !ROLE_NAMES.has(role as RoleName)) {
     throw new ForbiddenError("reports:view", "*");

@@ -12,7 +12,12 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
     method,
     headers: {
       "content-type": "application/json",
-      ...(tokens ? { authorization: `Bearer ${tokens.accessToken}` } : {}),
+      // The ID token, not the access token: Cognito access tokens never carry
+      // `custom:*` attributes, so the server's RBAC claims (custom:role /
+      // custom:orgs) were never arriving and every call 403'd (#161). The
+      // authorizer validates `aud` against this client, and the server asserts
+      // token_use === "id" so the two token types can't be confused.
+      ...(tokens ? { authorization: `Bearer ${tokens.idToken}` } : {}),
     },
     body: body === undefined ? undefined : JSON.stringify(body),
   });

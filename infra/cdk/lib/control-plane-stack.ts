@@ -15,18 +15,27 @@
  */
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
-import { Stack, type StackProps, RemovalPolicy, Duration, CfnOutput } from "aws-cdk-lib";
+import { Stack, type StackProps, RemovalPolicy, Duration, CfnOutput, Lazy } from "aws-cdk-lib";
 import type { Construct } from "constructs";
 import { AttributeType, BillingMode, StreamViewType, Table } from "aws-cdk-lib/aws-dynamodb";
 import { Bucket, BlockPublicAccess, ObjectLockRetention } from "aws-cdk-lib/aws-s3";
 import { Queue } from "aws-cdk-lib/aws-sqs";
-import { Mfa, UserPool, UserPoolClient, CfnUserPoolUser } from "aws-cdk-lib/aws-cognito";
+import {
+  Mfa,
+  UserPool,
+  UserPoolClient,
+  CfnUserPoolUser,
+  StringAttribute,
+  OAuthScope,
+  ClientAttributes,
+  AccountRecovery,
+} from "aws-cdk-lib/aws-cognito";
 import { Runtime } from "aws-cdk-lib/aws-lambda";
 import { NodejsFunction } from "aws-cdk-lib/aws-lambda-nodejs";
 import { SqsEventSource, DynamoEventSource } from "aws-cdk-lib/aws-lambda-event-sources";
 import { StartingPosition } from "aws-cdk-lib/aws-lambda";
 import { CfnCollection, CfnSecurityPolicy, CfnAccessPolicy } from "aws-cdk-lib/aws-opensearchserverless";
-import { HttpApi, HttpMethod } from "aws-cdk-lib/aws-apigatewayv2";
+import { HttpApi, HttpMethod, CorsHttpMethod } from "aws-cdk-lib/aws-apigatewayv2";
 import { HttpLambdaIntegration } from "aws-cdk-lib/aws-apigatewayv2-integrations";
 import { HttpUserPoolAuthorizer } from "aws-cdk-lib/aws-apigatewayv2-authorizers";
 import { Topic } from "aws-cdk-lib/aws-sns";
@@ -61,6 +70,14 @@ export interface ControlPlaneStackProps extends StackProps {
   stage: string;
   adminEmails: string[];
   adminHostedUiDomainPrefix: string;
+  /**
+   * Public URL of the admin console, used for the Cognito callback/logout URLs
+   * and API CORS. Defaults to this stack's own CloudFront distribution; set it
+   * when the console is served from a custom domain.
+   */
+  adminAppUrl?: string;
+  /** Public URL of the subscriber/public site. Defaults to its distribution. */
+  publicAppUrl?: string;
 }
 
 export class ControlPlaneStack extends Stack {
@@ -140,12 +157,44 @@ export class ControlPlaneStack extends Stack {
     // this is the same escalation path as the domain-layer deliverability alerts.
     const opsAlerts = new Topic(this, "OpsAlertsTopic");
 
+    // The SPA distributions are created near the end of this stack, but the
+    // Cognito callback URLs and the API's CORS origins need them. Lazy defers
+    // resolution to synth, after the whole constructor has run, so we keep a
+    // single source of truth instead of hardcoding a URL.
+    let adminSite: StaticSite | undefined;
+    let publicSite: StaticSite | undefined;
+    // Origins carry NO trailing slash — browsers send `Origin: https://host`, so
+    // a stored "https://host/" would never match and CORS would silently fail.
+    // The OAuth callback does need the trailing slash (the SPA's redirect_uri is
+    // `window.location.origin + "/"`), so it is appended separately below.
+    const siteOrigin = (get: () => StaticSite | undefined, what: string) =>
+      Lazy.string({
+        produce: () => {
+          const site = get();
+          if (!site) throw new Error(`${what} was never created`);
+          return `https://${site.distribution.domainName}`;
+        },
+      });
+    const stripSlash = (u: string) => u.replace(/\/+$/, "");
+    const adminOrigin = props.adminAppUrl ? stripSlash(props.adminAppUrl) : siteOrigin(() => adminSite, "AdminSite");
+    const publicOrigin = props.publicAppUrl ? stripSlash(props.publicAppUrl) : siteOrigin(() => publicSite, "PublicSite");
+    // Token-safe concatenation: this resolves to an Fn::Join at synth.
+    const adminCallbackUrl = `${adminOrigin}/`;
+
     // ---- admin pool (control plane, seeded so first login works — §9.1) ----
     const adminPool = new UserPool(this, "AdminPool", {
       selfSignUpEnabled: false,
       mfa: Mfa.REQUIRED,
       mfaSecondFactor: { otp: true, sms: false },
       signInAliases: { email: true },
+      accountRecovery: AccountRecovery.EMAIL_ONLY,
+      // Server-side RBAC derives the caller's grant from these claims. Without
+      // them declared they cannot be set on a user at all, so grantFromClaims
+      // threw and EVERY RBAC-gated endpoint returned 403 (#161).
+      customAttributes: {
+        role: new StringAttribute({ mutable: true }),
+        orgs: new StringAttribute({ mutable: true }),
+      },
       removalPolicy: props.stage === "prod" ? RemovalPolicy.RETAIN : RemovalPolicy.DESTROY,
     });
     adminPool.addDomain("AdminHostedUi", {
@@ -155,6 +204,22 @@ export class ControlPlaneStack extends Stack {
       userPool: adminPool,
       generateSecret: false,
       authFlows: { userSrp: true },
+      // Don't leak whether an admin address exists.
+      preventUserExistenceErrors: true,
+      // Omitting `oAuth` takes CDK's defaults: callbackUrls ["https://example.com"]
+      // (so Hosted-UI login fails with redirect_mismatch), the IMPLICIT grant
+      // enabled (tokens in the URL fragment, bypassing PKCE), and the
+      // aws.cognito.signin.user.admin scope. All three are wrong here (#160).
+      oAuth: {
+        flows: { authorizationCodeGrant: true, implicitCodeGrant: false },
+        scopes: [OAuthScope.OPENID, OAuthScope.EMAIL, OAuthScope.PROFILE],
+        callbackUrls: [adminCallbackUrl],
+        logoutUrls: [adminCallbackUrl],
+      },
+      // role/orgs must NEVER be client-writable, or a token could self-promote
+      // via UpdateUserAttributes. readAttributes stays at the default so the
+      // claims still appear in the ID token.
+      writeAttributes: new ClientAttributes().withStandardAttributes({ email: true }),
     });
     props.adminEmails.forEach((email, i) => {
       new CfnUserPoolUser(this, `AdminSeed${i}`, {
@@ -370,7 +435,18 @@ export class ControlPlaneStack extends Stack {
     // condition covers them without enumerating ARNs here (§4.11).
 
     // ---- wiring ----
-    const api = new HttpApi(this, "HttpApi");
+    // The SPAs are served from their own CloudFront origins, so every call is
+    // cross-origin. Without this, the admin console's authorization +
+    // content-type headers force a preflight that fails and NO browser request
+    // to this API succeeds (#189).
+    const api = new HttpApi(this, "HttpApi", {
+      corsPreflight: {
+        allowOrigins: [adminOrigin, publicOrigin],
+        allowHeaders: ["authorization", "content-type"],
+        allowMethods: [CorsHttpMethod.GET, CorsHttpMethod.POST],
+        maxAge: Duration.hours(1),
+      },
+    });
     api.addRoutes({
       path: "/signup",
       methods: [HttpMethod.POST],
@@ -642,8 +718,9 @@ export class ControlPlaneStack extends Stack {
 
     // ---- frontends (static SPAs on S3 + CloudFront, §4.1–4.2) ----
     const prod = props.stage === "prod";
-    const adminSite = new StaticSite(this, "AdminSite", { prod, webAclId: cfWebAcl.attrArn }); // apps/admin-web
-    const publicSite = new StaticSite(this, "PublicSite", { prod, webAclId: cfWebAcl.attrArn }); // apps/subscriber-web + public-web
+    // Assign the hoisted bindings the Cognito callback URLs and CORS resolve from.
+    adminSite = new StaticSite(this, "AdminSite", { prod, webAclId: cfWebAcl.attrArn }); // apps/admin-web
+    publicSite = new StaticSite(this, "PublicSite", { prod, webAclId: cfWebAcl.attrArn }); // apps/subscriber-web + public-web
 
     // ---- outputs ----
     new CfnOutput(this, "AdminPoolId", { value: adminPool.userPoolId });
