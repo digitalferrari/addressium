@@ -240,7 +240,12 @@ export class ControlPlaneStack extends Stack {
 
     // The sender resolves each org's KMS key + SES config from the org record at
     // send time (§4.11), so no per-org env here.
-    const senderFn = fn("SenderFn", svc("services/sender/src/index.ts"), "handler");
+    // The sender re-enqueues fan-out slices onto the same queue, so it needs the
+    // queue URL (services/sender reads SEND_QUEUE_URL at module scope and calls
+    // it on the first, unsliced message of every campaign) and send permission.
+    const senderFn = fn("SenderFn", svc("services/sender/src/index.ts"), "handler", {
+      SEND_QUEUE_URL: sendQueue.queueUrl,
+    });
     // Per-org signing keys are created by provisioning at runtime, so we can't
     // enumerate their ARNs here; scope by an addressium key-tag condition + SES.
     senderFn.addToRolePolicy(
@@ -251,12 +256,14 @@ export class ControlPlaneStack extends Stack {
       }),
     );
     senderFn.addToRolePolicy(sesSendScoped());
+    sendQueue.grantSendMessages(senderFn); // fan-out slices back onto the queue
     const eventsFn = fn("EventsFn", svc("services/events/src/index.ts"), "handler");
 
     // Launch handler for recurring series (EventBridge Scheduler target, §4.16).
     const launchFn = fn("LaunchFn", svc("services/automations/src/index.ts"), "handler", {
       SEND_QUEUE_URL: sendQueue.queueUrl,
     });
+    sendQueue.grantSendMessages(launchFn); // each firing enqueues an edition
 
     // ---- drip automations state machine (§4.6, #23) ----
     // Each step: Wait(waitSeconds) → Task(dripStepHandler) → Choice(done?) loop.
@@ -264,6 +271,7 @@ export class ControlPlaneStack extends Stack {
     const dripStepFn = fn("DripStepFn", svc("services/automations/src/index.ts"), "dripStepHandler", {
       SEND_QUEUE_URL: sendQueue.queueUrl,
     });
+    sendQueue.grantSendMessages(dripStepFn);
     dripStepFn.addToRolePolicy(
       new PolicyStatement({
         actions: ["kms:Sign"],
