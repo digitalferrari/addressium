@@ -83,9 +83,14 @@ export function grantFromClaims(claims: Record<string, string | undefined>): Gra
   }
   const orgsRaw = (claims["custom:orgs"] ?? "").trim();
   // Empty ⇒ no orgs (deny by default); "*" ⇒ all orgs.
-  const orgs: string[] | "*" =
-    orgsRaw === "*" ? "*" : orgsRaw.split(",").map((o) => o.trim()).filter(Boolean);
-  return { role: role as RoleName, orgs };
+  if (orgsRaw === "*") return { role: role as RoleName, orgs: "*" };
+  const parts = orgsRaw.split(",").map((o) => o.trim()).filter(Boolean);
+  // "*" is a wildcard ONLY as the entire claim. A list containing it (e.g.
+  // "orgA,*") must never widen scope: Cedar's set membership would have matched
+  // the smuggled element and granted every org, diverging from inScope() — which
+  // denies — so the two authorization paths disagreed. Reject outright.
+  if (parts.includes("*")) throw new ForbiddenError("reports:view", "*");
+  return { role: role as RoleName, orgs: parts };
 }
 
 export function can(role: RoleName, capability: Capability): boolean {

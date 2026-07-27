@@ -39,14 +39,32 @@ const stores = () => (_stores ??= new DynamoStores(env("TABLE_NAME")));
 const clock = new SystemClock();
 const TTL = Number(process.env.MAGIC_TTL_SECONDS ?? 60 * 60 * 24 * 14);
 
+/**
+ * Normalize an edition key into something safe to embed in a campaign id.
+ *
+ * The scheduler substitutes `<aws.scheduler.scheduled-time>` with this firing's
+ * time (e.g. `2026-07-27T13:00:00Z`) — stable across retries of that firing, so
+ * the send stays idempotent. If substitution did not happen (local invoke, or a
+ * legacy schedule created before #162), fall back to the current UTC hour so a
+ * retry within the hour still collapses onto the same edition rather than
+ * double-sending.
+ */
+function editionKeyFrom(raw: string | undefined, now: Date): string {
+  const s = (raw ?? "").trim();
+  const usable = s && !s.startsWith("<") ? s : now.toISOString().slice(0, 13);
+  return usable.replace(/[^0-9A-Za-z]/g, "").slice(0, 16) || "edition";
+}
+
 /** Accept the rich payload, or a bare descriptor (legacy) which we wrap. */
-function normalize(input: RecurringLaunchPayload | SendDescriptor): RecurringLaunchPayload {
-  if ("descriptor" in input) return input;
-  return { descriptor: input, editionKey: "edition" };
+function normalize(input: RecurringLaunchPayload | SendDescriptor, now: Date): RecurringLaunchPayload {
+  if ("descriptor" in input) {
+    return { ...input, editionKey: editionKeyFrom(input.editionKey, now) };
+  }
+  return { descriptor: input, editionKey: editionKeyFrom(undefined, now) };
 }
 
 export async function handler(input: RecurringLaunchPayload | SendDescriptor) {
-  const payload = normalize(input);
+  const payload = normalize(input, clock.now());
   // Lifecycle gate (§4.6): if the series was paused or archived, skip this
   // firing entirely. The EventBridge schedule keeps ticking (we never delete
   // it) but no edition is built or enqueued until it's resumed.
@@ -58,6 +76,14 @@ export async function handler(input: RecurringLaunchPayload | SendDescriptor) {
   const items = payload.feed
     ? await fetchFeedItems(payload.feed.url, payload.feed.format)
     : undefined;
+  // A feed that yielded no usable items must NOT become an edition. parseFeed
+  // returns [] rather than throwing for a truncated body or an HTML error page
+  // served with 200, and [] is truthy — so this used to build an edition with
+  // zero blocks and send a BLANK email to the entire list. Worse, the edition id
+  // is claimed on send, so it could never be corrected and re-sent (#174).
+  if (payload.feed && (!items || items.length === 0)) {
+    return { ok: true, skipped: "empty-feed", campaignId: payload.descriptor.campaignId };
+  }
   const descriptor = planLaunchDescriptor(payload, items);
   await queue().enqueue(descriptor);
   return { ok: true, enqueued: descriptor.campaignId };

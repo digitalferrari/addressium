@@ -172,6 +172,18 @@ export async function sendToSubscriber(
   return { sent: true };
 }
 
+/**
+ * A template with no content renders to an empty body. Sending that to a whole
+ * list is worse than failing — the send is claimed on the campaign id, so the
+ * edition can never be corrected and re-sent (#174). Fail loudly instead.
+ */
+export function templateIsEmpty(t: EmailTemplate): boolean {
+  // `EmailTemplate` uses optional, mutually-exclusive fields (see render.ts), so
+  // check for presence the same way buildLinkMap does rather than via `in`.
+  if (t.html != null) return t.html.trim() === "";
+  return (t.blocks ?? []).length === 0;
+}
+
 export async function sendCampaign(
   stores: Stores,
   sender: EmailSender,
@@ -182,6 +194,9 @@ export async function sendCampaign(
 ): Promise<SendResult> {
   const list = await stores.lists.get(input.orgId, input.listId);
   if (!list) throw new Error("unknown list");
+  if (templateIsEmpty(input.template)) {
+    throw new Error(`refusing to send empty template for campaign ${input.campaignId}`);
+  }
 
   // Lifecycle gate: a paused or archived one-off never sends (§4.6). Checked
   // before the idempotency claim so resuming can still send later. Recurring

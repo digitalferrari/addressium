@@ -30,10 +30,25 @@ let _stores: DynamoStores | undefined;
 const stores = () => (_stores ??= new DynamoStores(env("TABLE_NAME")));
 let _queue: SqsSendQueue | undefined;
 const queue = () => (_queue ??= new SqsSendQueue(env("SEND_QUEUE_URL")));
-const TTL = Number(process.env.MAGIC_TTL_SECONDS ?? 60 * 60 * 24 * 14);
+/**
+ * Numeric env with a fail-fast guard. `Number("typo")` is NaN, and `NaN <= 0` is
+ * false — so a malformed value slipped past every downstream guard: a NaN rate
+ * made the TokenBucket a no-op (unthrottled), and a NaN chunk size made
+ * planFanOut yield `limit: NaN`, so `slice(0, NaN)` returned [] and the campaign
+ * claimed itself then "succeeded" having sent to nobody (#201).
+ */
+function numEnv(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (raw === undefined || raw === "") return fallback;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) throw new Error(`env ${name} must be a positive number, got ${raw}`);
+  return n;
+}
+
+const TTL = numEnv("MAGIC_TTL_SECONDS", 60 * 60 * 24 * 14);
 // SES max send rate (msgs/sec) this worker paces to; and the fan-out chunk size.
-const SES_RATE = Number(process.env.SES_MAX_SEND_RATE ?? 14);
-const CHUNK_SIZE = Number(process.env.SEND_CHUNK_SIZE ?? 2000);
+const SES_RATE = numEnv("SES_MAX_SEND_RATE", 14);
+const CHUNK_SIZE = numEnv("SEND_CHUNK_SIZE", 2000);
 
 export async function handler(event: SqsEvent) {
   const s = stores();

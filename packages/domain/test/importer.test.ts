@@ -32,6 +32,22 @@ test("import creates subscribers + subscriptions, dedupes and reports counts", a
   assert.ok(ann);
   assert.equal(ann?.attributes?.["first"], "Ann"); // first-seen row wins
   const sub = await stores.subscriptions.get(ORG, ann!.sub, LIST);
+  // Default is `pending`, not `confirmed` (#192): an import must not silently
+  // assert double opt-in it has no consent record for.
+  assert.equal(sub?.status, "pending");
+});
+
+test("import only marks rows confirmed when the caller asks explicitly", async () => {
+  const stores = memStores();
+  const clock = new SystemClock();
+  await importCsvSubscribers(stores, clock, {
+    orgId: ORG,
+    listId: LIST,
+    csv: ["email", "opted-in@x.com"].join("\n"),
+    status: "confirmed",
+  });
+  const s = await stores.subscribers.findByEmail(ORG, "opted-in@x.com");
+  const sub = await stores.subscriptions.get(ORG, s!.sub, LIST);
   assert.equal(sub?.status, "confirmed");
 });
 

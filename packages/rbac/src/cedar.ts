@@ -31,10 +31,13 @@ export function buildPolicySet(): string {
       const roles = rolesWith(cap).map((r) => `"${r}"`).join(", ");
       // permit when the principal's role holds the capability AND the principal
       // is scoped to all orgs ("*") or to this resource's org.
+      // Scope is expressed as a dedicated boolean (`allOrgs`), never as a magic
+      // "*" string inside the org set — a set-membership test would match a "*"
+      // smuggled into a comma list and grant every tenant.
       return (
         `permit(principal, action == Action::"${cap}", resource)\n` +
         `when { [${roles}].contains(principal.role) &&\n` +
-        `       (principal.orgs.contains("*") || principal.orgs.contains(resource.orgId)) };`
+        `       (principal.allOrgs || principal.orgs.contains(resource.orgId)) };`
       );
     })
     .join("\n\n");
@@ -48,7 +51,10 @@ export class CedarAuthorizer {
 
   /** Cedar decision for (grant → capability on orgId). True = allow. */
   isAllowed(grant: Grant, capability: Capability, orgId: string): boolean {
-    const orgs = grant.orgs === "*" ? ["*"] : grant.orgs;
+    const allOrgs = grant.orgs === "*";
+    // Defense in depth: even if a "*" reached the list form, it is just an org
+    // id here and cannot satisfy the scope condition.
+    const orgs = allOrgs ? [] : grant.orgs;
     const result = cedar.isAuthorized({
       principal: { type: "User", id: "caller" },
       action: { type: "Action", id: capability },
@@ -56,7 +62,7 @@ export class CedarAuthorizer {
       context: {},
       policies: { staticPolicies: this.policies },
       entities: [
-        { uid: { type: "User", id: "caller" }, attrs: { role: grant.role, orgs }, parents: [] },
+        { uid: { type: "User", id: "caller" }, attrs: { role: grant.role, orgs, allOrgs }, parents: [] },
         { uid: { type: "Org", id: orgId }, attrs: { orgId }, parents: [] },
       ],
     });

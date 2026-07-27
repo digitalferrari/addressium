@@ -260,7 +260,14 @@ export async function scheduleCampaignHandler(event: HttpEvent): Promise<HttpRes
           name: `series-${body.orgId}-${body.campaignId}`,
           cron: body.when.cron,
           timezone,
-          payload: descriptor,
+          // Must be a RecurringLaunchPayload, not a bare descriptor: the launch
+          // handler's legacy branch hardcodes editionKey "edition", which made
+          // every firing compute the SAME campaign id — so the first edition
+          // claimed it and every later firing was silently skipped (#162).
+          // EventBridge Scheduler substitutes the context attribute below with
+          // this firing's scheduled time, and it is stable across retries of
+          // that firing, so idempotency still holds.
+          payload: { descriptor, editionKey: "<aws.scheduler.scheduled-time>" },
         });
         await markScheduleActive(stores(), clock, {
           orgId: body.orgId,

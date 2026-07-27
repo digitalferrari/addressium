@@ -11,8 +11,11 @@ test("buildPolicySet emits one Cedar permit per capability", () => {
   const text = buildPolicySet();
   assert.match(text, /permit\(principal, action == Action::"reports:view", resource\)/);
   assert.match(text, /permit\(principal, action == Action::"newsletters:close", resource\)/);
-  // org-scope condition present on every permit
-  assert.match(text, /principal\.orgs\.contains\("\*"\) \|\| principal\.orgs\.contains\(resource\.orgId\)/);
+  // Org-scope condition present on every permit. Scope-to-all is a dedicated
+  // boolean, never a "*" string inside the org set — a set-membership test
+  // matched a "*" smuggled into a comma-separated claim (#168).
+  assert.match(text, /principal\.allOrgs \|\| principal\.orgs\.contains\(resource\.orgId\)/);
+  assert.doesNotMatch(text, /orgs\.contains\("\*"\)/);
 });
 
 test("Cedar decisions match the role matrix + org scope", () => {

@@ -76,6 +76,10 @@ export class EventBridgeScheduler implements CampaignScheduler {
           Arn: this.cfg.launchArn,
           RoleArn: this.cfg.roleArn,
           Input: JSON.stringify(input.payload),
+          // Bound retries. The default is 185 attempts over 24h, so a feed
+          // origin returning 503 (or a permanently-fatal error like an SSRF
+          // block) would be re-fetched ~185 times per firing (#175).
+          RetryPolicy: { MaximumRetryAttempts: 2, MaximumEventAgeInSeconds: 900 },
         },
       }),
     );
