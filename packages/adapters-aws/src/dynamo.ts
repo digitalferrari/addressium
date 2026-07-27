@@ -407,5 +407,13 @@ export class DynamoStores implements Stores {
         throw e;
       }
     },
+    release: async (orgId, campaignId) => {
+      await this.doc.send(
+        new DeleteCommand({
+          TableName: this.tableName,
+          Key: { pk: `${org(orgId)}#CAMPAIGN#${campaignId}`, sk: "SENDCLAIM" },
+        }),
+      );
+    },
   };
 }

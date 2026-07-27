@@ -306,6 +306,9 @@ export class MemSendClaims implements SendClaimStore {
     this.set.add(k);
     return true;
   }
+  async release(orgId: string, campaignId: string) {
+    this.set.delete(`${orgId}#${campaignId}`);
+  }
 }
 
 /** Captures "sent" mail so tests can inspect exactly what would go out. */

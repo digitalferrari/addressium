@@ -120,6 +120,12 @@ export interface EntitlementStore {
 export interface SendClaimStore {
   /** True if newly claimed (dispatch it); false if already dispatched. */
   claim(orgId: string, campaignId: string): Promise<boolean>;
+  /**
+   * Give a claim back when the dispatch it guarded did NOT happen, so a retry
+   * can try that recipient again. Without this a failed send burns the claim and
+   * the recipient is silently never emailed (#163). Must be idempotent.
+   */
+  release(orgId: string, campaignId: string): Promise<void>;
 }
 
 export interface CampaignStore {
