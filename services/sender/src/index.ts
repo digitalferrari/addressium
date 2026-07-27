@@ -53,10 +53,15 @@ const CHUNK_SIZE = numEnv("SEND_CHUNK_SIZE", 2000);
 export async function handler(event: SqsEvent) {
   const s = stores();
   const results = [];
+  // Per-message failures, reported back to SQS so ONLY the failing message is
+  // redelivered. Previously any throw failed the whole batch and redelivered
+  // the already-processed messages, re-sending delivered mail (#177).
+  const batchItemFailures: Array<{ itemIdentifier: string }> = [];
   // One shared token bucket paces every send this invocation makes to SES.
   const throttle = new TokenBucket(SES_RATE, Math.max(1, Math.ceil(SES_RATE)), clock);
 
   for (const record of event.Records ?? []) {
+   try {
     const descriptor = JSON.parse(record.body) as SendDescriptor;
     const org = await s.organizations.get(descriptor.orgId);
     if (!org) throw new Error(`unknown org ${descriptor.orgId}`);
@@ -85,6 +90,14 @@ export async function handler(event: SqsEvent) {
     const ses = new SesEmailSender(org.sesConfigSet);
 
     results.push(await sendCampaign(s, ses, magic, clock, descriptor, { throttle }));
+   } catch (e) {
+     // Isolate the failure to this message. Without an identifier SQS can't be
+     // told which one failed, so fall back to failing loudly.
+     const id = record.messageId;
+     if (!id) throw e;
+     console.error("send record failed", { messageId: id, error: (e as Error).message });
+     batchItemFailures.push({ itemIdentifier: id });
+   }
   }
-  return { batchItemFailures: [], results };
+  return { batchItemFailures, results };
 }

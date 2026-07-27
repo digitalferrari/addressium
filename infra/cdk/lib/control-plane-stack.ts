@@ -18,7 +18,7 @@ import { dirname, resolve } from "node:path";
 import { Stack, type StackProps, RemovalPolicy, Duration, CfnOutput, Lazy } from "aws-cdk-lib";
 import type { Construct } from "constructs";
 import { AttributeType, BillingMode, StreamViewType, Table } from "aws-cdk-lib/aws-dynamodb";
-import { Bucket, BlockPublicAccess, ObjectLockRetention } from "aws-cdk-lib/aws-s3";
+import { Bucket, BlockPublicAccess, ObjectLockRetention, StorageClass } from "aws-cdk-lib/aws-s3";
 import { Queue } from "aws-cdk-lib/aws-sqs";
 import {
   Mfa,
@@ -41,6 +41,7 @@ import { HttpUserPoolAuthorizer } from "aws-cdk-lib/aws-apigatewayv2-authorizers
 import { Topic } from "aws-cdk-lib/aws-sns";
 import { LambdaSubscription } from "aws-cdk-lib/aws-sns-subscriptions";
 import { Alarm, ComparisonOperator, TreatMissingData } from "aws-cdk-lib/aws-cloudwatch";
+import { LogGroup, RetentionDays } from "aws-cdk-lib/aws-logs";
 import { SnsAction } from "aws-cdk-lib/aws-cloudwatch-actions";
 import { Secret } from "aws-cdk-lib/aws-secretsmanager";
 import { Role, ServicePrincipal, PolicyStatement } from "aws-cdk-lib/aws-iam";
@@ -127,6 +128,39 @@ export class ControlPlaneStack extends Stack {
     const analyticsBucket = new Bucket(this, "AnalyticsBucket", {
       blockPublicAccess: BlockPublicAccess.BLOCK_ALL,
       enforceSSL: true,
+      // Versioned like ArchiveBucket: the Firehose and export roles hold
+      // s3:DeleteObject*, so without this the fact tier is unrecoverable.
+      versioned: true,
+      // Nothing expired anything here, while a FULL-table export ran nightly
+      // into entities/ forever — unbounded cost, and every pre-erasure snapshot
+      // kept a GDPR-erased subscriber's PII alive indefinitely (#185, #164).
+      lifecycleRules: [
+        {
+          id: "expire-athena-results",
+          prefix: "athena-results/",
+          expiration: Duration.days(14),
+          abortIncompleteMultipartUploadAfter: Duration.days(3),
+        },
+        {
+          id: "expire-entity-snapshots",
+          prefix: "entities/",
+          expiration: Duration.days(30),
+          noncurrentVersionExpiration: Duration.days(7),
+        },
+        {
+          id: "expire-transform-errors",
+          prefix: "events-errors/",
+          expiration: Duration.days(30),
+        },
+        {
+          id: "archive-events",
+          prefix: "events/",
+          transitions: [
+            { storageClass: StorageClass.GLACIER_INSTANT_RETRIEVAL, transitionAfter: Duration.days(90) },
+          ],
+          noncurrentVersionExpiration: Duration.days(30),
+        },
+      ],
     });
     // Audit log backed by S3 Object Lock (WORM) — history can't be rewritten
     // even by an admin (§4.19, docs/SECURITY.md §4.3, #29). COMPLIANCE mode +
@@ -229,6 +263,10 @@ export class ControlPlaneStack extends Stack {
         userAttributes: [
           { name: "email", value: email },
           { name: "email_verified", value: "true" },
+          // Bootstrap admins need a grant or they authenticate successfully and
+          // then 403 on everything — grantFromClaims requires both claims (#161).
+          { name: "custom:role", value: "developer_admin" },
+          { name: "custom:orgs", value: "*" },
         ],
       });
     });
@@ -247,6 +285,12 @@ export class ControlPlaneStack extends Stack {
         timeout: Duration.seconds(30),
         environment: { ...baseEnv, ...extraEnv },
         bundling: { format: "esm" as never, target: "node20" },
+        // Lambda's default log retention is NEVER EXPIRE. With ~40 functions
+        // that is unbounded CloudWatch cost forever (#187).
+        logGroup: new LogGroup(this, `${id}Logs`, {
+          retention: props.stage === "prod" ? RetentionDays.THREE_MONTHS : RetentionDays.ONE_WEEK,
+          removalPolicy: RemovalPolicy.DESTROY,
+        }),
       });
 
     // ses:SendEmail scoped to *this account's* SES identities + configuration
@@ -589,7 +633,19 @@ export class ControlPlaneStack extends Stack {
       authorizer: adminAuth,
     });
 
-    senderFn.addEventSource(new SqsEventSource(sendQueue));
+    // reportBatchItemFailures is required for the handler's `batchItemFailures`
+    // return value to mean anything. Without it one throw failed the WHOLE batch
+    // and redelivered the other 9 messages — re-sending already-delivered mail,
+    // up to maxReceiveCount times (#177). maxConcurrency bounds the aggregate
+    // SES rate: the TokenBucket is per-invocation, so N concurrent senders
+    // otherwise multiply the configured rate by N (#176).
+    senderFn.addEventSource(
+      new SqsEventSource(sendQueue, {
+        batchSize: 10,
+        reportBatchItemFailures: true,
+        maxConcurrency: 5,
+      }),
+    );
 
     // ---- infra alarms (#92) — page ops on a stuck/failing send pipeline ----
     const alarmAction = new SnsAction(opsAlerts);
@@ -615,8 +671,22 @@ export class ControlPlaneStack extends Stack {
       treatMissingData: TreatMissingData.NOT_BREACHING,
       alarmDescription: "addressium: send queue backing up (oldest message > 15m)",
     }));
-    // Lambda errors + throttles across the critical send path.
-    for (const [label, f] of [["Sender", senderFn], ["Launch", launchFn], ["DripStep", dripStepFn]] as const) {
+    // Lambda errors + throttles across the critical send path AND the public
+    // surface. Previously only the three send-path functions were alarmed, so a
+    // failing signup, confirm, unsubscribe, webhook, or SES-event handler was
+    // completely silent — including bounce/complaint processing (#187).
+    for (const [label, f] of [
+      ["Sender", senderFn],
+      ["Launch", launchFn],
+      ["DripStep", dripStepFn],
+      ["Events", eventsFn],
+      ["Signup", signupFn],
+      ["SignupBatch", signupBatchFn],
+      ["Confirm", confirmFn],
+      ["Unsubscribe", unsubscribeFn],
+      ["EntitlementWebhook", entitlementFn],
+      ["IdentityWebhook", identityFn],
+    ] as const) {
       alarm(`${label}ErrorsAlarm`, new Alarm(this, `${label}ErrorsAlarm`, {
         metric: f.metricErrors({ period: Duration.minutes(5) }),
         threshold: 0,
@@ -634,6 +704,24 @@ export class ControlPlaneStack extends Stack {
         alarmDescription: `addressium: ${label} Lambda throttles`,
       }));
     }
+    // DynamoDB pressure — throttles here surface as failed sends and 5xx well
+    // before anything else notices.
+    alarm("TableThrottleAlarm", new Alarm(this, "TableThrottleAlarm", {
+      metric: table.metric("ThrottledRequests", { period: Duration.minutes(5), statistic: "Sum" }),
+      threshold: 0,
+      comparisonOperator: ComparisonOperator.GREATER_THAN_THRESHOLD,
+      evaluationPeriods: 1,
+      treatMissingData: TreatMissingData.NOT_BREACHING,
+      alarmDescription: "addressium: DynamoDB throttled requests",
+    }));
+    alarm("TableSystemErrorsAlarm", new Alarm(this, "TableSystemErrorsAlarm", {
+      metric: table.metric("SystemErrors", { period: Duration.minutes(5), statistic: "Sum" }),
+      threshold: 0,
+      comparisonOperator: ComparisonOperator.GREATER_THAN_THRESHOLD,
+      evaluationPeriods: 1,
+      treatMissingData: TreatMissingData.NOT_BREACHING,
+      alarmDescription: "addressium: DynamoDB system errors",
+    }));
     sesEvents.addSubscription(new LambdaSubscription(eventsFn));
 
     // ---- WAF (managed rule sets + per-IP rate limit + signup CAPTCHA, §5, #20) ----
