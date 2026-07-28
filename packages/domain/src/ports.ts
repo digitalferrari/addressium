@@ -12,6 +12,7 @@ import type {
   EmailArchive,
   EngagementEvent,
   EntitlementSync,
+  ImportMapping,
   List,
   Organization,
   Segment,
@@ -82,6 +83,15 @@ export interface ListStore {
   get(orgId: string, listId: string): Promise<List | undefined>;
   put(l: List): Promise<void>;
   list(orgId: string): Promise<List[]>;
+}
+
+/** Saved import mappings (#216), looked up by header fingerprint. */
+export interface ImportMappingStore {
+  list(orgId: string): Promise<ImportMapping[]>;
+  /** Every mapping saved against this header set — usually zero or one. */
+  findByFingerprint(orgId: string, fingerprint: string): Promise<ImportMapping[]>;
+  put(m: ImportMapping): Promise<void>;
+  remove(orgId: string, mappingId: string): Promise<void>;
 }
 
 export interface SegmentStore {
@@ -314,5 +324,6 @@ export interface Stores {
   alerts: AlertConfigStore;
   usage: UsageStore;
   segments: SegmentStore;
+  importMappings: ImportMappingStore;
   dripSequences: DripSequenceStore;
 }

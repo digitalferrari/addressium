@@ -245,12 +245,21 @@ export type ColumnMapping =
 export interface MappingPlan {
   columns: Record<string, ColumnMapping>;
 }
+export interface SavedMapping {
+  mappingId: string;
+  name: string;
+  fingerprint: string;
+  plan: MappingPlan;
+  updatedAt: string;
+}
 export interface ImportPreview {
   headers: string[];
   sample: Record<string, string>[];
   rowCount: number;
   fingerprint: string;
   suggested: MappingPlan;
+  /** Mappings already saved against this exact header set (#216). */
+  saved: SavedMapping[];
   problems: { column?: string; problem: string }[];
 }
 export interface MappedImportReport {
@@ -311,6 +320,8 @@ export const api = {
     if (!res.ok) throw new Error(`export failed: ${res.status} ${await res.text()}`);
     return res.text();
   },
+  saveMapping: (orgId: string, name: string, fingerprint: string, plan: MappingPlan) =>
+    call<SavedMapping>("POST", `/orgs/${orgId}/import/mappings`, { name, fingerprint, plan }),
   importPreview: (orgId: string, csv: string, consentBasis?: "explicit" | "implicit") =>
     call<ImportPreview>("POST", `/orgs/${orgId}/import/preview`, { csv, consentBasis }),
   importMapped: (orgId: string, body: {

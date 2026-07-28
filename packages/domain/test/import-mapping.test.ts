@@ -273,3 +273,60 @@ test("DEFAULT_TRISTATE has no value in both lists", () => {
   const overlap = DEFAULT_TRISTATE.subscribed.filter((s) => DEFAULT_TRISTATE.declined.includes(s));
   assert.deepEqual(overlap, []);
 });
+
+test("a saved mapping is found again for a reshuffled re-export", async () => {
+  const { memStores } = await import("../src/memory.js");
+  const stores = memStores();
+  const headers = ["Address", "Attributes.SD_Skiing", "User.UserAttributes.firstName"];
+  const fingerprint = headerFingerprint(headers);
+
+  await stores.importMappings.put({
+    orgId: "summit",
+    mappingId: "m1",
+    name: "Monthly Pinpoint export",
+    fingerprint,
+    plan: { columns: { Address: { kind: "email" } } },
+    updatedAt: "2026-07-28T00:00:00Z",
+  });
+
+  // Next month's file: same columns, different order. Remapping 73 columns by
+  // hand every month is how one column ends up wrong.
+  const reshuffled = ["User.UserAttributes.firstName", "Address", "Attributes.SD_Skiing"];
+  const hits = await stores.importMappings.findByFingerprint("summit", headerFingerprint(reshuffled));
+  assert.equal(hits.length, 1);
+  assert.equal(hits[0]?.name, "Monthly Pinpoint export");
+});
+
+test("a mapping saved for a different file shape is not offered", async () => {
+  const { memStores } = await import("../src/memory.js");
+  const stores = memStores();
+  await stores.importMappings.put({
+    orgId: "summit",
+    mappingId: "m1",
+    name: "Mailchimp",
+    fingerprint: headerFingerprint(["Email Address", "FNAME"]),
+    plan: { columns: {} },
+    updatedAt: "2026-07-28T00:00:00Z",
+  });
+
+  const hits = await stores.importMappings.findByFingerprint(
+    "summit",
+    headerFingerprint(["Address", "OptOut"]),
+  );
+  assert.deepEqual(hits, [], "an unrelated file must not inherit someone else's mapping");
+});
+
+test("saved mappings are scoped to their org", async () => {
+  const { memStores } = await import("../src/memory.js");
+  const stores = memStores();
+  const fp = headerFingerprint(["email"]);
+  await stores.importMappings.put({
+    orgId: "summit",
+    mappingId: "m1",
+    name: "theirs",
+    fingerprint: fp,
+    plan: { columns: {} },
+    updatedAt: "t",
+  });
+  assert.deepEqual(await stores.importMappings.findByFingerprint("ledger", fp), []);
+});

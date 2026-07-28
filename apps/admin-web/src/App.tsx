@@ -1026,6 +1026,7 @@ function ImportMapper({ org }: { org: string }) {
   const [preview, setPreview] = useState<ImportPreview | null>(null);
   const [plan, setPlan] = useState<MappingPlan | null>(null);
   const [report, setReport] = useState<MappedImportReport | null>(null);
+  const [mappingName, setMappingName] = useState("");
   const [defaults, setDefaults] = useState<NewListDefaults>({ fromAddress: "", complianceFooter: "", physicalAddress: "" });
   const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState(false);
@@ -1100,6 +1101,20 @@ function ImportMapper({ org }: { org: string }) {
           <div className="muted" style={{ margin: "8px 0" }}>
             {preview.headers.length} columns, {preview.rowCount} rows.
           </div>
+
+          {preview.saved.length > 0 && (
+            <div className="card">
+              <strong>Saved mappings for this file shape</strong>
+              <div className="muted">
+                Matched on the header set, ignoring order — a reshuffled re-export still matches.
+              </div>
+              {preview.saved.map((m) => (
+                <button key={m.mappingId} className="btn ghost" style={{ marginRight: 8 }} onClick={() => setPlan(m.plan)}>
+                  Use “{m.name}”
+                </button>
+              ))}
+            </div>
+          )}
 
           {createsList && (
             <div className="card">
@@ -1176,6 +1191,25 @@ function ImportMapper({ org }: { org: string }) {
               })}
             </tbody>
           </table>
+
+          <div className="card">
+            <label>
+              Save this mapping as
+              <input value={mappingName} onChange={(e) => setMappingName(e.target.value)} placeholder="Monthly Pinpoint export" />
+            </label>
+            <button
+              className="btn ghost"
+              disabled={busy || !mappingName.trim()}
+              onClick={async () => {
+                try {
+                  await api.saveMapping(org, mappingName, preview.fingerprint, plan);
+                  setMsg(`Saved “${mappingName}” — it will be offered next time this file shape appears.`);
+                } catch (e) { setMsg((e as Error).message); }
+              }}
+            >
+              Save mapping
+            </button>
+          </div>
 
           <button className="btn ghost" disabled={busy} onClick={() => run(true)}>Dry run</button>
           <button className="btn" disabled={busy} onClick={() => run(false)} style={{ marginLeft: 8 }}>

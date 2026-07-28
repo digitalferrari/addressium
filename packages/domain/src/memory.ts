@@ -11,6 +11,7 @@ import type {
   EmailArchive,
   EngagementEvent,
   EntitlementSync,
+  ImportMapping,
   List,
   Organization,
   Segment,
@@ -49,6 +50,7 @@ import type {
   SuppressionStore,
   UsageStore,
   VersionStore,
+  ImportMappingStore,
 } from "./ports.js";
 import { ZERO_COUNTERS } from "./admin.js";
 
@@ -397,6 +399,23 @@ export class MemScheduler implements CampaignScheduler {
   }
 }
 
+export class MemImportMappings implements ImportMappingStore {
+  private map = new Map<string, ImportMapping>();
+  private key = (orgId: string, id: string) => `${orgId}#${id}`;
+  async list(orgId: string) {
+    return [...this.map.values()].filter((m) => m.orgId === orgId);
+  }
+  async findByFingerprint(orgId: string, fingerprint: string) {
+    return (await this.list(orgId)).filter((m) => m.fingerprint === fingerprint);
+  }
+  async put(m: ImportMapping) {
+    this.map.set(this.key(m.orgId, m.mappingId), m);
+  }
+  async remove(orgId: string, mappingId: string) {
+    this.map.delete(this.key(orgId, mappingId));
+  }
+}
+
 export function memStores(): Stores {
   const events = new MemEvents();
   const campaigns = new MemCampaigns();
@@ -421,6 +440,7 @@ export function memStores(): Stores {
     alerts: new MemAlertConfigs(),
     usage: new MemUsage(),
     segments: new MemSegments(),
+    importMappings: new MemImportMappings(),
     dripSequences: new MemDripSequences(),
   };
 }

@@ -800,14 +800,57 @@ export async function importPreviewHandler(event: HttpEvent): Promise<HttpResult
       knownLists: lists.map((l) => ({ listId: l.listId, name: l.name })),
       ...(body.consentBasis ? { consentBasis: body.consentBasis } : {}),
     });
+    // Offer any mapping already saved against this header set (#216). A
+    // 73-column export remapped by hand every month is how one column ends up
+    // wrong; matching is order-insensitive so a reshuffled re-export still hits.
+    const saved = await stores().importMappings.findByFingerprint(orgId, preview.fingerprint);
     return json(200, {
       headers: preview.headers,
       sample: preview.sample,
       rowCount: preview.rowCount,
       fingerprint: preview.fingerprint,
       suggested: plan,
+      saved,
       problems: validateMapping(plan, preview.headers),
     });
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+/** GET/POST /orgs/{org}/import/mappings — saved column mappings (#216). */
+export async function importMappingsHandler(event: HttpEvent): Promise<HttpResult> {
+  try {
+    const orgId = event.pathParameters?.org ?? "";
+    requireGrant(event, "subscribers:manage", orgId);
+    const method = event.requestContext?.http?.method ?? (event.body ? "POST" : "GET");
+    if (method === "GET") return json(200, await stores().importMappings.list(orgId));
+
+    const body = JSON.parse(event.body ?? "{}") as {
+      mappingId?: string;
+      name?: string;
+      fingerprint?: string;
+      plan?: unknown;
+      remove?: boolean;
+    };
+    if (body.remove) {
+      if (!body.mappingId) return json(400, { error: "mappingId required" });
+      await stores().importMappings.remove(orgId, body.mappingId);
+      return json(200, { ok: true });
+    }
+    if (!body.name?.trim() || !body.fingerprint || !body.plan) {
+      return json(400, { error: "name, fingerprint and plan required" });
+    }
+    const mapping = {
+      orgId,
+      mappingId: body.mappingId ?? `map_${clock.now().getTime()}`,
+      name: body.name.trim(),
+      fingerprint: body.fingerprint,
+      plan: body.plan,
+      updatedAt: clock.now().toISOString(),
+    };
+    await stores().importMappings.put(mapping);
+    return json(200, mapping);
   } catch (e) {
     return fail(e);
   }
@@ -1130,6 +1173,8 @@ const ADMIN_ROUTES: Record<string, RouteHandler> = {
   "GET /orgs/{org}/export": exportHandler,
   "POST /orgs/{org}/import/preview": importPreviewHandler,
   "POST /orgs/{org}/import/mapped": importMappedHandler,
+  "GET /orgs/{org}/import/mappings": importMappingsHandler,
+  "POST /orgs/{org}/import/mappings": importMappingsHandler,
   "POST /privacy": privacyHandler,
   "POST /orgs/branding": brandingHandler,
   "GET /orgs/{org}/alerts": alertConfigHandler,

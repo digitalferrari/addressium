@@ -481,6 +481,27 @@ export interface AlertConfig {
   notifyTargets: string[];
 }
 
+/**
+ * A saved import column mapping (#216).
+ *
+ * Keyed by a fingerprint of the file's header SET, order-insensitive — a
+ * publisher re-exporting monthly gets shuffled columns and the same mapping
+ * should still be offered. Without this, a 73-column Pinpoint export has to be
+ * remapped by hand every single month, which is how an operator ends up
+ * clicking through it and getting one column wrong.
+ */
+export interface ImportMapping {
+  orgId: OrgId;
+  /** Stable id; the operator names these. */
+  mappingId: string;
+  name: string;
+  /** `headerFingerprint(headers)` — what makes a saved mapping re-offerable. */
+  fingerprint: string;
+  /** The plan itself; shape owned by @addressium/domain. */
+  plan: unknown;
+  updatedAt: string;
+}
+
 /** Cost model inputs (USD) for per-org chargeback (§11). Operator-configurable. */
 export interface CostRates {
   perEmail: number; // SES per-message

@@ -29,6 +29,7 @@ import type {
   EmailArchive,
   EngagementEvent,
   EntitlementSync,
+  ImportMapping,
   List,
   Organization,
   Segment,
@@ -50,6 +51,7 @@ import type {
   EventStore,
   ListStore,
   OrganizationStore,
+  ImportMappingStore,
   SegmentStore,
   SendClaimStore,
   SendScheduleStore,
@@ -269,6 +271,31 @@ export class DynamoStores implements Stores {
         KeyConditionExpression: "pk = :pk AND begins_with(sk, :s)",
         ExpressionAttributeValues: { ":pk": org(orgId), ":s": "SEGMENT#" },
       }),
+  };
+
+  /**
+   * Saved import mappings (#216). Listed per org and filtered by fingerprint in
+   * memory: an org has a handful of these, so a GSI would cost more than the
+   * scan it saves.
+   */
+  importMappings: ImportMappingStore = {
+    list: (orgId) =>
+      this.queryAll<ImportMapping>({
+        TableName: this.tableName,
+        KeyConditionExpression: "pk = :pk AND begins_with(sk, :s)",
+        ExpressionAttributeValues: { ":pk": org(orgId), ":s": "IMPMAP#" },
+      }),
+    findByFingerprint: async (orgId, fingerprint) =>
+      (await this.importMappings.list(orgId)).filter((m) => m.fingerprint === fingerprint),
+    put: (m) => this.put({ pk: org(m.orgId), sk: `IMPMAP#${m.mappingId}`, data: m }),
+    remove: async (orgId, mappingId) => {
+      await this.doc.send(
+        new DeleteCommand({
+          TableName: this.tableName,
+          Key: { pk: org(orgId), sk: `IMPMAP#${mappingId}` },
+        }),
+      );
+    },
   };
 
   suppression: SuppressionStore = {

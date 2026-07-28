@@ -844,6 +844,8 @@ export class ControlPlaneStack extends Stack {
     // Field mapper (#216): preview writes nothing; mapped runs the import.
     adminRoute("ImportPreviewFn", "importPreviewHandler", HttpMethod.POST, "/orgs/{org}/import/preview");
     adminRoute("ImportMappedFn", "importMappedHandler", HttpMethod.POST, "/orgs/{org}/import/mapped");
+    adminRoute("ImportMappingsGetFn", "importMappingsHandler", HttpMethod.GET, "/orgs/{org}/import/mappings");
+    adminRoute("ImportMappingsPostFn", "importMappingsHandler", HttpMethod.POST, "/orgs/{org}/import/mappings");
     adminRoute("PrivacyFn", "privacyHandler", HttpMethod.POST, "/privacy");
     adminRoute("BrandingPostFn", "brandingHandler", HttpMethod.POST, "/orgs/branding");
     // Deliverability thresholds — these drive the auto-halt (#217).
