@@ -617,16 +617,26 @@ export class ControlPlaneStack extends Stack {
     // ---- admin CRUD + branding + presentation + AI config (§4.1, #18/#31/#32/#33) ----
     // Each handler is a small Lambda; admin routes sit behind the JWT authorizer,
     // then the handler enforces role + org scope from the claims.
-    const adminRoute = (id: string, handler: string, method: HttpMethod, path: string, env = apiEnv) => {
-      const f = fn(id, apiEntry, handler, env);
-      table.grantReadWriteData(f);
+    // ONE function serves every authenticated route, dispatching internally on
+    // API Gateway's routeKey. Previously each of these 27 routes got its own
+    // Lambda — 27 copies of the same bundle, each with a cold start, a log
+    // group and an IAM role, for a data model that never changes (#213).
+    //
+    // Routes stay registered INDIVIDUALLY rather than as a catch-all: the JWT
+    // authorizer attaches per route, so a `$default` would have erased the
+    // public/authenticated boundary. This keeps the boundary and drops the
+    // duplication.
+    const adminApiFn = fn("AdminApiFn", apiEntry, "adminRouter", apiEnv);
+    table.grantReadWriteData(adminApiFn);
+    const adminApiInt = new HttpLambdaIntegration("AdminApiInt", adminApiFn);
+    const adminRoute = (_id: string, _handler: string, method: HttpMethod, path: string) => {
       api.addRoutes({
         path,
         methods: [method],
-        integration: new HttpLambdaIntegration(`${id}Int`, f),
+        integration: adminApiInt,
         authorizer: adminAuth,
       });
-      return f;
+      return adminApiFn;
     };
     // ---- provisioning + tokens (#198) ----
     // Both services existed in the repo but were NEVER deployed: no Lambda, no

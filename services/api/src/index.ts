@@ -66,6 +66,8 @@ export interface HttpEvent {
   pathParameters?: Record<string, string | undefined> | null;
   queryStringParameters?: Record<string, string | undefined> | null;
   requestContext?: {
+    /** "METHOD /path" as registered in API Gateway; drives router dispatch. */
+    routeKey?: string;
     http?: { method?: string };
     authorizer?: { jwt?: { claims?: Record<string, string | undefined> } };
   };
@@ -816,3 +818,92 @@ export async function identitySyncHandler(event: HttpEvent): Promise<HttpResult>
     return fail(e);
   }
 }
+
+// ---- routers (#213) -------------------------------------------------------
+//
+// Twenty-seven single-route Lambdas all bundled THIS file and differed only in
+// which exported handler they invoked — 27 copies of one bundle, each with its
+// own cold start, log group and IAM role, for a data model that never changes.
+// These routers collapse them while keeping every route registered in API
+// Gateway individually, which matters: the JWT authorizer is attached per route,
+// so a catch-all would have erased the public/authenticated boundary.
+//
+// Two routers rather than one, deliberately. They bundle the same code, but the
+// dispatch tables are disjoint, so a routing mistake in the public function
+// cannot reach an admin handler — and their IAM roles can differ. The
+// `requireGrant` calls inside each admin handler remain the second layer.
+
+type RouteHandler = (event: HttpEvent) => Promise<HttpResult>;
+
+/** Behind the Cognito JWT authorizer. Every handler also calls requireGrant. */
+const ADMIN_ROUTES: Record<string, RouteHandler> = {
+  "GET /orgs/{org}": orgMetaHandler,
+  "GET /orgs/{org}/setup": setupStateHandler,
+  "GET /orgs/{org}/lists": listsHandler,
+  "POST /lists": listsHandler,
+  "POST /lists/visibility": listVisibilityHandler,
+  "POST /lists/presentation": listPresentationHandler,
+  "GET /orgs/{org}/campaigns": campaignsListHandler,
+  "GET /orgs/{org}/campaigns/{id}": campaignsHandler,
+  "POST /campaigns": campaignsHandler,
+  "GET /orgs/{org}/schedules": schedulesListHandler,
+  "POST /campaigns/lifecycle": scheduleLifecycleHandler,
+  "GET /orgs/{org}/templates": templatesHandler,
+  "GET /orgs/{org}/templates/{id}": templatesHandler,
+  "POST /templates": templatesHandler,
+  "GET /orgs/{org}/segments": segmentsHandler,
+  "POST /segments": segmentsHandler,
+  "GET /orgs/{org}/drip-sequences": dripSequencesHandler,
+  "POST /drip-sequences": dripSequencesHandler,
+  "GET /orgs/{org}/subscribers": subscribersListHandler,
+  "GET /orgs/{org}/suppressions": suppressionsListHandler,
+  "POST /subscribers/suppress": subscriberSuppressHandler,
+  "POST /subscribers/unsubscribe": subscriberUnsubscribeHandler,
+  "POST /subscribers/unsuppress": subscriberUnsuppressHandler,
+  "POST /orgs/{org}/import": importHandler,
+  "POST /privacy": privacyHandler,
+  "POST /orgs/branding": brandingHandler,
+  "POST /orgs/ai-config": aiConfigHandler,
+};
+
+/** Unauthenticated. Deliberately excludes every admin handler. */
+const PUBLIC_ROUTES: Record<string, RouteHandler> = {
+  "POST /signup": signupHandler,
+  "POST /signup/batch": signupBatchHandler,
+  "GET /confirm": confirmHandler,
+  "POST /unsubscribe": unsubscribeHandler,
+  "GET /orgs/{org}/lists/{list}/public": publicListHandler,
+  "GET /version": versionHandler,
+  "POST /webhooks/entitlement": entitlementSyncHandler,
+  "POST /webhooks/identity": identitySyncHandler,
+};
+
+/**
+ * API Gateway supplies `routeKey` ("METHOD /path" with path parameters in their
+ * template form). Falling back to method+rawPath would NOT be equivalent — a
+ * concrete path like `/orgs/acme` doesn't match the `/orgs/{org}` key — so an
+ * absent routeKey is an error rather than something to paper over.
+ */
+async function dispatch(
+  table: Record<string, RouteHandler>,
+  event: HttpEvent,
+): Promise<HttpResult> {
+  const routeKey = event.requestContext?.routeKey;
+  if (!routeKey) return json(500, { error: "no routeKey on request" });
+  const handler = table[routeKey];
+  // A 404 here means CDK registered a route this router doesn't know about.
+  // The route-parity test exists so that mismatch is caught at build time.
+  if (!handler) return json(404, { error: `no handler for ${routeKey}` });
+  return handler(event);
+}
+
+export const adminRouter = (event: HttpEvent): Promise<HttpResult> =>
+  dispatch(ADMIN_ROUTES, event);
+export const publicRouter = (event: HttpEvent): Promise<HttpResult> =>
+  dispatch(PUBLIC_ROUTES, event);
+
+/** Exported so the route-parity test can assert against the CDK route list. */
+export const ROUTE_KEYS = {
+  admin: Object.keys(ADMIN_ROUTES),
+  public: Object.keys(PUBLIC_ROUTES),
+};
