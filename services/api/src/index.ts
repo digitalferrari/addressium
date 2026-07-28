@@ -33,6 +33,7 @@ import {
   evaluateSetup,
   isHoneypotTripped,
   markScheduleActive,
+  scheduleName,
   transitionSchedule,
   type EmailTemplate,
   provisionSubscriberAccount,
@@ -367,7 +368,9 @@ export async function scheduleCampaignHandler(event: HttpEvent): Promise<HttpRes
       subject: body.subject,
       template,
     };
-    const oneOffName = `camp-${body.orgId}-${body.campaignId}`;
+    // Not string concatenation: `-` is legal inside both ids, so the old
+    // `camp-${orgId}-${campaignId}` was ambiguous across tenants (#196).
+    const oneOffName = scheduleName("camp", body.orgId, body.campaignId);
     switch (body.when.type) {
       // "now" and "at" both become one-off schedules placed at least 5 minutes
       // out (§4.6), so the send stays cancellable until it fires.
@@ -391,7 +394,7 @@ export async function scheduleCampaignHandler(event: HttpEvent): Promise<HttpRes
           timezone = orgRec?.defaultTimezone ?? process.env.DEFAULT_TIMEZONE ?? "UTC";
         }
         await scheduler().scheduleRecurring({
-          name: `series-${body.orgId}-${body.campaignId}`,
+          name: scheduleName("series", body.orgId, body.campaignId),
           cron: body.when.cron,
           timezone,
           // Must be a RecurringLaunchPayload, not a bare descriptor: the launch

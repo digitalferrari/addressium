@@ -62,6 +62,24 @@ export interface SendResult {
   halted?: boolean;
 }
 
+/**
+ * The idempotency key for "this campaign has already been sent to this
+ * subscriber" (#196).
+ *
+ * `#` is the separator precisely because `idSchema` forbids it in a campaignId,
+ * which makes the join unambiguous: a campaign literally named `promo#x` used to
+ * produce the same key as campaign `promo` and a subscriber whose id started
+ * `x`, and the loser was silently skipped as "already sent" — a subscriber who
+ * never receives the campaign, with nothing in any log to say why.
+ *
+ * subscriberId is a UUID, so it cannot contain `#` either; the campaign
+ * constraint alone is enough, but both halves are worth stating because a change
+ * to either one reopens this.
+ */
+export function sendClaimKey(campaignId: string, subscriberId: string): string {
+  return `${campaignId}#${subscriberId}`;
+}
+
 /** How often the halt flag is re-read mid-loop (in recipients). */
 const HALT_CHECK_EVERY = 100;
 
@@ -279,10 +297,13 @@ export async function sendToSubscriber(
 ): Promise<SendOneResult> {
   const list = await stores.lists.get(input.orgId, input.listId);
   if (!list) throw new Error("unknown list");
-  if (!(await stores.sendClaims.claim(input.orgId, `${input.campaignId}#${input.subscriberId}`))) {
+  // One expression, used for both the claim and its release. They were built
+  // separately and had to agree by inspection; a claim released under a
+  // different key is a subscriber who can never be sent this campaign again.
+  const claimKey = sendClaimKey(input.campaignId, input.subscriberId);
+  if (!(await stores.sendClaims.claim(input.orgId, claimKey))) {
     return { sent: false, reason: "already-sent" };
   }
-  const claimKey = `${input.campaignId}#${input.subscriberId}`;
   // Any exit that does NOT dispatch must give the claim back, or a transient
   // failure permanently prevents this subscriber from ever receiving the step —
   // which, in the re-engagement sweep, then sunsets them unread (#163, #181).

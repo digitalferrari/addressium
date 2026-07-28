@@ -185,6 +185,49 @@ operator's own user pool is optional, and is the operator's business
   `authorize()` (§10, #30). Cedar is in place, not planned.
 - CI carries **cross-tenant tests** ("can a grant for org A read/write org B?")
   as a required gate.
+- **Tenant-supplied ids are a constrained charset** — `idSchema` in
+  `packages/core/src/schemas.ts`: `^[a-z0-9][a-z0-9_-]*$`, at most 64 characters,
+  applied to `orgId`, `listId`, `campaignId`, `segmentId`, `templateId`,
+  `sequenceId` and `stepId` (#196).
+
+  DynamoDB is *not* the reason. That key design is sound: composite partitions
+  have disjoint sort-key namespaces, and no cross-tenant item collision was
+  constructible. The exposure is that these ids leak into namespaces that are
+  **flat and not ours** — EventBridge Scheduler names, the send-claim key, S3
+  keys, Secrets Manager names, KMS aliases, OpenSearch indices, the magic-link
+  `issuer`. Two concrete failures existed:
+
+  - **Cross-tenant denial of scheduling.** `camp-${orgId}-${campaignId}` was
+    ambiguous because `-` is legal inside both ids — org `acme` + campaign `x-1`
+    and org `acme-x` + campaign `1` both produced `camp-acme-x-1`. Scheduler
+    names are account-wide and `CreateSchedule` is not an upsert, so the second
+    tenant got a `ConflictException`. Now built by `scheduleName()`, which joins
+    on `.` (forbidden by the charset) and falls back to a digest of the exact
+    pair past the 64-character Scheduler limit — never a truncation, which would
+    reintroduce the collision at the cut point.
+  - **Silently skipped recipients.** The send-claim key is
+    `${campaignId}#${subscriberId}`, so a campaign named `promo#0` collided with
+    campaign `promo` and a subscriber id starting `0`. The loser was recorded as
+    "already sent" and never received the campaign. `#` is now forbidden in a
+    campaign id, which is what makes the separator unambiguous.
+
+  The charset and the two separators are one design, not three: widening the
+  charset without revisiting `scheduleName()` and `sendClaimKey()` puts both
+  collisions back. `packages/domain/test/id-hardening.test.ts` asserts them
+  together for that reason.
+- **Unauthenticated inputs are bounded.** `POST /signup/batch` caps `listIds` at
+  50 (the handler walks them sequentially — 50,000 ids was 50,000 round-trips
+  from one anonymous request), and subscriber `attributes` are capped at 32 keys
+  of ≤1024 characters each. Unbounded, an anonymous caller could write a
+  subscriber item up to DynamoDB's 400 KB ceiling that every later read pays for.
+- **Provisioning validates the org id it is given**, not just the one it derives.
+  The handler read `event.orgId` off the *raw* event, bypassing `slugifyOrgId`
+  entirely; that value then reached S3 keys, a Secrets Manager name, a KMS alias
+  and the magic-link `issuer`. It is now checked at the handler *and* in
+  `provisionOrganization`, so a caller arriving by another route cannot skip it.
+  A display name that slugs past 64 characters fails loudly rather than being
+  truncated — truncation would hand org B the org A record on the idempotency
+  check.
 
 ### 4.3 Admin authorization & audit
 

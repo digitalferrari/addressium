@@ -8,6 +8,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { completeLoginIfPresent, decodeClaims, getTokens, isExpired, login, logout } from "./auth.js";
 import { grantFromClaims, can, type Grant } from "./rbac.js";
+import { idProblem, isValidId, suggestId } from "./ids.js";
 import { VisualEditor } from "./VisualEditor.js";
 // Subpath import, NOT the package barrel: the barrel re-exports modules that
 // import node:crypto, which the browser bundle cannot resolve. The cost model
@@ -415,7 +416,9 @@ function Templates({ org }: { org: string }) {
     } catch (e) { setMsg(String(e)); }
     finally { setBusy(false); }
   };
-  const valid = templateId.trim() && name.trim() && source.trim();
+  // The id charset is enforced server-side (#196); gate here so the operator
+  // is not handed a raw zod issue array after filling in a whole template.
+  const valid = isValidId(templateId.trim()) && name.trim() && source.trim();
   const rows = list.data ?? data ?? [];
 
   return (
@@ -533,7 +536,7 @@ function Compose({ org, onScheduled }: { org: string; onScheduled: () => void })
   );
   const bodyValid = bodyMode === "blocks" ? blocksValid : bodyMode === "html" ? html.trim() !== "" : mjml.trim() !== "";
   const valid =
-    !!listId && campaignId.trim() !== "" && subject.trim() !== "" && bodyValid &&
+    !!listId && isValidId(campaignId.trim()) && subject.trim() !== "" && bodyValid &&
     (when !== "at" || at !== "") && (when !== "recurring" || cron.trim() !== "");
 
   const htmlTemplates = (templates.data ?? []).filter((t) => t.mode === "raw_html");
@@ -945,7 +948,7 @@ function Segments({ org }: { org: string }) {
     } catch (e) { setMsg(String(e)); }
     finally { setBusy(false); }
   };
-  const valid = segmentId.trim() && name.trim() && predicate.trim();
+  const valid = isValidId(segmentId.trim()) && name.trim() && predicate.trim();
 
   return (
     <div>
@@ -1527,8 +1530,8 @@ function Drips({ org }: { org: string }) {
     finally { setBusy(false); }
   };
 
-  const stepsValid = steps.length > 0 && steps.every((s) => s.stepId.trim() && s.listId && s.templateId && s.subject.trim());
-  const valid = sequenceId.trim() && name.trim() && stepsValid && (triggerKind === "manual" || !!triggerListId);
+  const stepsValid = steps.length > 0 && steps.every((s) => isValidId(s.stepId.trim()) && s.listId && s.templateId && s.subject.trim());
+  const valid = isValidId(sequenceId.trim()) && name.trim() && stepsValid && (triggerKind === "manual" || !!triggerListId);
 
   return (
     <div>
@@ -1958,8 +1961,9 @@ function Newsletters({ org }: { org: string }) {
     visibility: "open" as "open" | "closed",
   });
 
+  const listIdProblem = idProblem(form.listId.trim());
   const ready =
-    form.listId.trim() && form.name.trim() && form.fromAddress.trim() &&
+    form.listId.trim() && !listIdProblem && form.name.trim() && form.fromAddress.trim() &&
     form.complianceFooter.trim() && form.physicalAddress.trim();
 
   const create = async () => {
@@ -2009,6 +2013,22 @@ function Newsletters({ org }: { org: string }) {
       <div className="card">
         <strong>Create a newsletter</strong>
         {field("listId", "List id", "ledger — used in URLs, cannot change later")}
+        {/* The server rejects anything outside the id charset with a 400 (#196),
+            and this value is permanent — so say so before the operator commits,
+            and offer the slug of the name they already typed. */}
+        {listIdProblem && <p className="err" style={{ margin: "-4px 0 8px" }}>List id {listIdProblem}</p>}
+        {!form.listId.trim() && suggestId(form.name) && (
+          <p className="muted" style={{ margin: "-4px 0 8px" }}>
+            Suggested:{" "}
+            <button
+              className="btn ghost"
+              style={{ padding: "0 6px" }}
+              onClick={() => setForm({ ...form, listId: suggestId(form.name) })}
+            >
+              <code>{suggestId(form.name)}</code>
+            </button>
+          </p>
+        )}
         {field("name", "Name", "The Ledger")}
         {field("description", "Description (optional)", "Daily business briefing")}
         {field("fromAddress", "From address", "ledger@yourdomain.example")}

@@ -42,7 +42,26 @@ export async function handler(event: ProvisionEvent) {
     return { statusCode: 400, headers: {}, body: JSON.stringify({ error: parsed.error.issues }) };
   }
 
-  const result = await provisionOrganization(stores(), providers, parsed.data, { orgId: event.orgId });
+  // `event.orgId` overrides the slug derived from the name, and it came off the
+  // RAW event — so `slugifyOrgId` was bypassed entirely and an unchecked string
+  // went on to be interpolated into S3 keys, a Secrets Manager name, an
+  // OpenSearch index, a KMS alias, and the magic-link `issuer`. `createOrgSchema`
+  // has no `orgId` field to catch it, so it is validated explicitly here rather
+  // than by being "parsed" through a schema that never looks at it (#196).
+  let orgId: string | undefined;
+  if (event.orgId !== undefined) {
+    const id = schemas.idSchema.safeParse(event.orgId);
+    if (!id.success) {
+      return {
+        statusCode: 400,
+        headers: {},
+        body: JSON.stringify({ error: id.error.issues.map((i) => ({ ...i, path: ["orgId"] })) }),
+      };
+    }
+    orgId = id.data;
+  }
+
+  const result = await provisionOrganization(stores(), providers, parsed.data, { orgId });
   return {
     statusCode: result.alreadyExisted ? 200 : 201,
     headers: { "content-type": "application/json" },

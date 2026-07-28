@@ -23,6 +23,50 @@ export const templateMode = z.enum(["visual", "mjml", "raw_html"]);
  */
 export const emailSchema = z.string().email().max(254);
 
+/**
+ * A tenant-supplied identifier — `orgId`, `listId`, `campaignId`, `segmentId`,
+ * `templateId`, `sequenceId` (#196).
+ *
+ * DynamoDB is not the reason for this. The key design there is sound: composite
+ * partitions have disjoint sort-key namespaces, so no cross-tenant item
+ * collision was constructible. These ids leak into OTHER namespaces that are not
+ * prefix-disjoint and are not ours — EventBridge Scheduler names, S3 keys,
+ * Secrets Manager names, OpenSearch indices, the magic-link `issuer`, and the
+ * send-claim key. `z.string().min(1)` let `#`, `/`, `:` and whitespace through
+ * to all of them.
+ *
+ * The charset deliberately excludes `.`, `#` and `/`, which is what makes those
+ * three usable as unambiguous delimiters downstream — see `scheduleName` and the
+ * send-claim key. Widening this charset silently reintroduces every collision it
+ * closes, so it is the single place to change and the tests say so.
+ *
+ * 64 characters is the EventBridge Scheduler name limit less its prefix, and
+ * comfortably under every other limit in play.
+ */
+export const idSchema = z
+  .string()
+  .min(1)
+  .max(64)
+  .regex(
+    /^[a-z0-9][a-z0-9_-]*$/,
+    "must be lowercase a-z, 0-9, `_` or `-`, and start with a letter or digit",
+  );
+
+/**
+ * Subscriber attributes (#196).
+ *
+ * `z.record(z.string(), z.string())` bounded nothing, and `POST /signup` is
+ * unauthenticated — so an anonymous caller could write a subscriber item up to
+ * DynamoDB's 400 KB ceiling, once per address, and every later read of that
+ * subscriber pays for it. The caps are generous for the real use (a handful of
+ * merge tags: city, plan, first name) and cheap to raise deliberately.
+ */
+export const attributesSchema = z
+  .record(z.string().min(1).max(64), z.string().max(1024))
+  .refine((a) => Object.keys(a).length <= 32, {
+    message: "at most 32 attributes",
+  });
+
 export const consentSchema = z.object({
   timestamp: z.string().datetime(),
   ip: z.string(),
@@ -31,28 +75,31 @@ export const consentSchema = z.object({
 
 /** Public signup payload (unauthenticated, per §4.2). */
 export const signupSchema = z.object({
-  orgId: z.string().min(1),
+  orgId: idSchema,
   email: z.string().email(),
-  listId: z.string().min(1),
-  attributes: z.record(z.string(), z.string()).optional(),
+  listId: idSchema,
+  attributes: attributesSchema.optional(),
   sourceUrl: z.string().url().optional(),
 });
 export type SignupInput = z.infer<typeof signupSchema>;
 
 /** Multi-list signup from the "All newsletters" page — one double opt-in covers all (§4.2). */
 export const signupManySchema = z.object({
-  orgId: z.string().min(1),
+  orgId: idSchema,
   email: z.string().email(),
-  listIds: z.array(z.string().min(1)).min(1),
-  attributes: z.record(z.string(), z.string()).optional(),
+  // Bounded (#196): the handler walks these sequentially, so an
+  // unauthenticated POST with 50,000 ids was 50,000 round-trips from one
+  // request. Nobody signs up to more newsletters than an org publishes.
+  listIds: z.array(idSchema).min(1).max(50),
+  attributes: attributesSchema.optional(),
   sourceUrl: z.string().url().optional(),
 });
 export type SignupManyInput = z.infer<typeof signupManySchema>;
 
 /** Create-newsletter payload (admin). */
 export const createListSchema = z.object({
-  orgId: z.string().min(1),
-  listId: z.string().min(1),
+  orgId: idSchema,
+  listId: idSchema,
   name: z.string().min(1),
   description: z.string().optional(),
   optInPolicy,
@@ -68,14 +115,14 @@ export type CreateListInput = z.infer<typeof createListSchema>;
 
 /** Save-campaign-draft payload (admin). */
 export const saveCampaignSchema = z.object({
-  orgId: z.string().min(1),
-  campaignId: z.string().min(1),
+  orgId: idSchema,
+  campaignId: idSchema,
   type: z.enum(["one_off", "series_edition"]),
   seriesId: z.string().optional(),
   subject: z.string().min(1),
   previewText: z.string().optional(),
-  templateId: z.string().min(1),
-  audience: z.object({ listId: z.string().optional(), segmentId: z.string().optional() }),
+  templateId: idSchema,
+  audience: z.object({ listId: idSchema.optional(), segmentId: idSchema.optional() }),
 });
 export type SaveCampaignInput = z.infer<typeof saveCampaignSchema>;
 
@@ -116,8 +163,8 @@ export const emailTemplateSchema = z.union([
 
 /** Create/update a reusable template (§4.15). Source is MJML for visual/mjml, HTML for raw_html. */
 export const saveTemplateSchema = z.object({
-  orgId: z.string().min(1),
-  templateId: z.string().min(1),
+  orgId: idSchema,
+  templateId: idSchema,
   name: z.string().min(1),
   mode: templateMode,
   source: z.string().min(1),
@@ -128,9 +175,9 @@ export type SaveTemplateInput = z.infer<typeof saveTemplateSchema>;
 
 /** Compose + schedule payload (§4.6): send now, at an instant, or recurring cron. */
 export const scheduleCampaignSchema = z.object({
-  orgId: z.string().min(1),
-  campaignId: z.string().min(1),
-  listId: z.string().min(1),
+  orgId: idSchema,
+  campaignId: idSchema,
+  listId: idSchema,
   subject: z.string().min(1),
   template: emailTemplateSchema,
   when: z.union([
@@ -187,8 +234,8 @@ export const segmentPredicateSchema = z.object({
 export type SegmentPredicateInput = z.infer<typeof segmentPredicateSchema>;
 
 export const saveSegmentSchema = z.object({
-  orgId: z.string().min(1),
-  segmentId: z.string().min(1),
+  orgId: idSchema,
+  segmentId: idSchema,
   name: z.string().min(1),
   predicate: segmentPredicateSchema,
 });
@@ -196,20 +243,20 @@ export type SaveSegmentInput = z.infer<typeof saveSegmentSchema>;
 
 /** Create/update drip-sequence payload (admin, #104). */
 export const saveDripSequenceSchema = z.object({
-  orgId: z.string().min(1),
-  sequenceId: z.string().min(1),
+  orgId: idSchema,
+  sequenceId: idSchema,
   name: z.string().min(1),
   trigger: z.union([
-    z.object({ kind: z.literal("signup"), listId: z.string().min(1) }),
+    z.object({ kind: z.literal("signup"), listId: idSchema }),
     z.object({ kind: z.literal("manual") }),
   ]),
   steps: z
     .array(
       z.object({
-        stepId: z.string().min(1),
+        stepId: idSchema,
         waitSeconds: z.number().int().min(0),
-        listId: z.string().min(1),
-        templateId: z.string().min(1),
+        listId: idSchema,
+        templateId: idSchema,
         subject: z.string().min(1),
         requireEntitlement: entitlement.optional(),
       }),
@@ -220,14 +267,14 @@ export type SaveDripSequenceInput = z.infer<typeof saveDripSequenceSchema>;
 
 /** Manual suppression payload (admin). */
 export const manualSuppressSchema = z.object({
-  orgId: z.string().min(1),
+  orgId: idSchema,
   email: z.string().email(),
 });
 export type ManualSuppressInput = z.infer<typeof manualSuppressSchema>;
 
 /** Inbound entitlement sync from the billing system of record (§4.3). */
 export const entitlementSyncSchema = z.object({
-  orgId: z.string().min(1),
+  orgId: idSchema,
   subscriberEmail: z.string().email(),
   entitlement,
   source: z.string().min(1),
@@ -243,11 +290,11 @@ export type EntitlementSyncInput = z.infer<typeof entitlementSyncSchema>;
  */
 export const identitySyncSchema = z
   .object({
-    orgId: z.string().min(1),
+    orgId: idSchema,
     externalId: z.string().min(1),
     action: z.enum(["upsert", "delete"]).default("upsert"),
     email: z.string().email().optional(),
-    attributes: z.record(z.string(), z.string()).optional(),
+    attributes: attributesSchema.optional(),
     source: z.string().min(1).default("user-pool"),
   })
   .refine((d) => d.action === "delete" || !!d.email, {
@@ -263,7 +310,7 @@ export type IdentitySyncInput = z.infer<typeof identitySyncSchema>;
  * mis-typed rule rather than an intended one.
  */
 export const saveAlertConfigSchema = z.object({
-  orgId: z.string().min(1),
+  orgId: idSchema,
   snsTopicArn: z.string().optional(),
   rules: z
     .array(

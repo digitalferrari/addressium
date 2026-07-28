@@ -9,8 +9,40 @@
  * ticking, and a paused series can be resumed later. Archiving is a terminal
  * "put it away" state that likewise keeps the record and its history.
  */
+import { createHash } from "node:crypto";
 import type { ScheduleKind, ScheduleStatus, SendScheduleState } from "@addressium/core";
 import type { Clock, SendDescriptor, Stores } from "./ports.js";
+
+/** EventBridge Scheduler caps a schedule name at 64 characters. */
+const SCHEDULE_NAME_MAX = 64;
+
+/**
+ * The EventBridge Scheduler name for a campaign's schedule (#196).
+ *
+ * Scheduler names are a FLAT, account-wide namespace — nothing about them is
+ * per-tenant — and `CreateSchedule` is not an upsert. The old
+ * `camp-${orgId}-${campaignId}` was ambiguous because `-` is legal inside both
+ * ids: org `acme` + campaign `x-1` and org `acme-x` + campaign `1` both produced
+ * `camp-acme-x-1`, so whichever tenant scheduled second got a
+ * `ConflictException`. One org could deny scheduling to another by guessing a
+ * name — and would also hit it by accident.
+ *
+ * `.` is the separator because `idSchema` forbids it, which is what makes the
+ * join unambiguous. Constraining the ids alone would NOT have fixed this: the
+ * charset still allows `-`.
+ *
+ * Over 64 characters the readable form is replaced wholesale by a digest of the
+ * exact pair. Truncating the readable form instead would put the collision back
+ * at the cut point, which is the failure this function exists to prevent.
+ */
+export function scheduleName(kind: "camp" | "series", orgId: string, campaignId: string): string {
+  const readable = `${kind}.${orgId}.${campaignId}`;
+  if (readable.length <= SCHEDULE_NAME_MAX) return readable;
+  // NUL separates the two ids inside the digest so `("ab","c")` and `("a","bc")`
+  // hash differently — the same ambiguity, one layer down.
+  const digest = createHash("sha256").update(`${orgId}\u0000${campaignId}`).digest("hex");
+  return `${kind}.${digest.slice(0, SCHEDULE_NAME_MAX - kind.length - 1)}`;
+}
 
 /**
  * May a send under this schedule fire? Only when active. A missing record

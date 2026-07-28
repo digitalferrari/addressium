@@ -10,6 +10,7 @@
  * and the operation is idempotent on orgId.
  */
 import type { Organization, schemas } from "@addressium/core";
+import { schemas as s } from "@addressium/core";
 import type { Stores } from "./ports.js";
 import { defaultAlertConfig } from "./alerts.js";
 
@@ -91,7 +92,15 @@ export async function provisionOrganization(
   input: CreateOrgInput,
   opts: { orgId?: string } = {},
 ): Promise<ProvisionResult> {
-  const orgId = opts.orgId ?? slugifyOrgId(input.name);
+  // Whichever way the id arrived — an explicit override or a slug derived from
+  // the display name — it goes on to be interpolated into S3 keys, a Secrets
+  // Manager name, a KMS alias, an OpenSearch index and the magic-link `issuer`.
+  // Checked HERE as well as at the handler because those namespaces are not
+  // ours, and a caller that reaches this function by another route (a script, a
+  // future queue consumer) must not be able to skip it. A long display name can
+  // also slug past 64 characters; truncating would silently hand org B the org A
+  // record on the idempotency check, so it fails loudly instead (#196).
+  const orgId = s.idSchema.parse(opts.orgId ?? slugifyOrgId(input.name));
 
   // Idempotent: re-running returns the existing org (never double-provisions).
   const existing = await stores.organizations.get(orgId);
