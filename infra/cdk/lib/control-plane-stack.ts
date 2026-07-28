@@ -58,6 +58,7 @@ import {
   Choice,
   Condition,
   DefinitionBody,
+  Fail,
   JsonPath,
   StateMachine,
   Succeed,
@@ -688,6 +689,29 @@ export class ControlPlaneStack extends Stack {
       }),
       outputPath: "$.Payload",
     });
+    // A transient Lambda failure — throttle, cold-start timeout, a blip — used to
+    // abort the whole execution, dropping that subscriber out of the sequence
+    // mid-way with nothing to show it happened (#201). Retried with backoff, and
+    // a genuinely permanent failure ends in an explicit Fail state so it appears
+    // as a failed execution rather than a quiet Succeed.
+    runStep.addRetry({
+      errors: [
+        "Lambda.ServiceException",
+        "Lambda.AWSLambdaException",
+        "Lambda.SdkClientException",
+        "Lambda.TooManyRequestsException",
+        "States.TaskFailed",
+      ],
+      interval: Duration.seconds(5),
+      maxAttempts: 4,
+      backoffRate: 2,
+    });
+    const failed = new Fail(this, "DripFailed", {
+      cause: "drip step failed after retries",
+      error: "DripStepError",
+    });
+    runStep.addCatch(failed, { resultPath: "$.error" });
+
     const done = new Succeed(this, "DripDone");
     runStep.next(
       new Choice(this, "DripMore")
@@ -695,8 +719,17 @@ export class ControlPlaneStack extends Stack {
         .otherwise(waitStep.next(runStep)),
     );
     const dripStateMachine = new StateMachine(this, "DripStateMachine", {
-      definitionBody: DefinitionBody.fromChainable(runStep),
-      timeout: Duration.days(30),
+      // Starts at the WAIT, not the step (#201). Beginning at `runStep` fired
+      // step 0 the instant someone enrolled, so a sequence whose first step is
+      // "three days after signup" sent it immediately — the one step whose
+      // timing an onboarding drip most depends on. The starter supplies
+      // `nextStepIndex` and `nextWaitSeconds`; a zero wait is a no-op, so a
+      // genuinely immediate first step still behaves as before.
+      definitionBody: DefinitionBody.fromChainable(waitStep),
+      // A drip is measured in weeks and an onboarding or win-back sequence can
+      // run for months. 30 days silently truncated any of those mid-sequence.
+      // One year is the Step Functions Standard maximum.
+      timeout: Duration.days(365),
     });
     table.grantReadWriteData(dripStepFn);
     new CfnOutput(this, "DripStateMachineArn", { value: dripStateMachine.stateMachineArn });

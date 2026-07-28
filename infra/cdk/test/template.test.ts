@@ -428,3 +428,31 @@ test("the drip handler is told the SES rate so it can pace itself (#176)", () =>
     .Environment?.Variables ?? {};
   assert.ok(env.SES_MAX_SEND_RATE, "the drip path must know the rate it is dividing");
 });
+
+test("the drip machine waits before step 0, retries, and outlives 30 days (#201)", () => {
+  const machines = Object.values(template().findResources("AWS::StepFunctions::StateMachine"));
+  const drip = machines.find((m) =>
+    JSON.stringify((m.Properties as { DefinitionString?: unknown }).DefinitionString ?? "").includes("DripRunStep"),
+  );
+  assert.ok(drip, "the drip state machine exists");
+  const props = drip.Properties as { DefinitionString: unknown };
+  const def = JSON.parse(
+    // CDK renders the definition as an Fn::Join of literals and refs; the
+    // literals carry everything asserted here.
+    (((props.DefinitionString as { "Fn::Join"?: [string, unknown[]] })["Fn::Join"]?.[1] ?? [])
+      .filter((p): p is string => typeof p === "string")
+      .join("") || String(props.DefinitionString)
+    ).replace(/"Resource":"[^"]*$/, '"Resource":"x"}}}'),
+  ) as { StartAt: string; TimeoutSeconds?: number; States: Record<string, Record<string, unknown>> };
+
+  // Starting at the step fired step 0 immediately, so "three days after signup"
+  // arrived at signup.
+  assert.equal(def.StartAt, "DripWait", "the machine must wait before the first step");
+
+  // 30 days truncated any sequence longer than a month, mid-flight.
+  assert.ok((def.TimeoutSeconds ?? 0) > 30 * 24 * 60 * 60, "a drip can run for months");
+
+  const step = def.States.DripRunStep!;
+  assert.ok(Array.isArray(step.Retry) && step.Retry.length > 0, "a transient blip must not end the sequence");
+  assert.ok(Array.isArray(step.Catch) && step.Catch.length > 0, "a permanent failure must be visible");
+});
