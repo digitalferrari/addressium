@@ -59,8 +59,25 @@ function numEnv(name: string, fallback: number): number {
 }
 
 const TTL = numEnv("MAGIC_TTL_SECONDS", 60 * 60 * 24 * 14);
-// SES max send rate (msgs/sec) this worker paces to; and the fan-out chunk size.
-const SES_RATE = numEnv("SES_MAX_SEND_RATE", 14);
+/**
+ * The ACCOUNT's SES rate, and how many senders may run at once (#176).
+ *
+ * The TokenBucket is per-invocation. SQS→Lambda scales the sender out, so N
+ * concurrent invocations each pacing to the full account rate produce N × the
+ * quota — SES then throttles mid-loop, the claim is already burned, and the
+ * recipients in flight are silently lost (#163). Sustained throttling also costs
+ * sending reputation, which is far harder to get back than a slow campaign.
+ *
+ * So each invocation gets the account rate DIVIDED by the concurrency cap the
+ * event source enforces. CDK sets both from one constant; if the env is missing
+ * we assume the cap is in force and divide by its default rather than
+ * optimistically taking the whole quota.
+ */
+const SES_ACCOUNT_RATE = numEnv("SES_MAX_SEND_RATE", 14);
+const SENDER_MAX_CONCURRENCY = numEnv("SENDER_MAX_CONCURRENCY", 5);
+// Never below a trickle: a tiny account rate divided by the cap must still let a
+// campaign finish rather than stall at zero tokens.
+const SES_RATE = Math.max(0.1, SES_ACCOUNT_RATE / SENDER_MAX_CONCURRENCY);
 const CHUNK_SIZE = numEnv("SEND_CHUNK_SIZE", 2000);
 
 /**

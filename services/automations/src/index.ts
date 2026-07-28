@@ -11,6 +11,7 @@ import { DynamoStores, KmsMagicLinkSigner, SesEmailSender, SqsSendQueue } from "
 import type { Organization } from "@addressium/core";
 import {
   SystemClock,
+  TokenBucket,
   emailTemplateFromStored,
   escapeHtml,
   evaluateDripStep,
@@ -24,6 +25,33 @@ import {
   type SendDescriptor,
 } from "@addressium/domain";
 import { fetchFeedItems } from "@addressium/svc-feeds";
+
+/**
+ * Automations pace themselves to SES too (#176).
+ *
+ * `dripStepHandler` and `reengagementSweepHandler` passed NO throttle at all,
+ * despite `SendOneInput` and the sweep both supporting one — so a large drip
+ * cohort or win-back sweep ran flat out, competing with campaign sends for the
+ * same account quota. SES then throttles the loop mid-flight, and since the
+ * claim is already burned those recipients are silently lost (#163).
+ *
+ * Deliberately a fraction of the account rate rather than all of it: automations
+ * run alongside campaigns, and a win-back sweep that starves a scheduled send is
+ * the same failure wearing different clothes.
+ */
+function numEnv(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (raw === undefined || raw === "") return fallback;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) throw new Error(`env ${name} must be a positive number, got ${raw}`);
+  return n;
+}
+const AUTOMATION_SES_RATE = Math.max(
+  0.1,
+  numEnv("SES_MAX_SEND_RATE", 14) / numEnv("AUTOMATION_RATE_DIVISOR", 4),
+);
+const automationThrottle = () =>
+  new TokenBucket(AUTOMATION_SES_RATE, Math.max(1, Math.ceil(AUTOMATION_SES_RATE)), clock);
 
 function env(name: string): string {
   const v = process.env[name];
@@ -160,6 +188,7 @@ export async function dripStepHandler(event: DripStepEvent) {
       listId: step.listId,
       subject: step.subject,
       template,
+      throttle: automationThrottle(),
     });
   }
 
@@ -209,6 +238,9 @@ export async function reengagementSweepHandler(event: ReengagementSweepEvent) {
     listId: event.listId,
     subject,
     template,
+    // One bucket for the WHOLE sweep — a per-recipient bucket would pace
+    // nothing, since each would start full.
+    throttle: automationThrottle(),
   });
   return { ok: true, ...result };
 }

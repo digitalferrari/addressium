@@ -32,6 +32,7 @@ import {
 } from "aws-cdk-lib/aws-cognito";
 import { Runtime } from "aws-cdk-lib/aws-lambda";
 import { NodejsFunction } from "aws-cdk-lib/aws-lambda-nodejs";
+import type { CfnFunction } from "aws-cdk-lib/aws-lambda";
 import { SqsEventSource, DynamoEventSource } from "aws-cdk-lib/aws-lambda-event-sources";
 import { StartingPosition } from "aws-cdk-lib/aws-lambda";
 import { CfnCollection, CfnSecurityPolicy, CfnAccessPolicy } from "aws-cdk-lib/aws-opensearchserverless";
@@ -461,6 +462,48 @@ export class ControlPlaneStack extends Stack {
         ],
       });
 
+    /**
+     * Concurrent sender invocations (#176). The SES rate is an ACCOUNT limit but
+     * the TokenBucket is per-invocation, so this is the multiplier that has to
+     * be divided back out — see SENDER_MAX_CONCURRENCY below and the sender's
+     * own rate calculation.
+     */
+    const SENDER_MAX_CONCURRENCY = Number(
+      (this.node.tryGetContext("senderMaxConcurrency") as string | undefined) ?? 5,
+    );
+    /**
+     * The account's SES send rate (messages/second). Set it to YOUR quota — the
+     * default is the 14/s a fresh production account gets, which is wrong for
+     * anyone who has requested an increase, in the safe direction.
+     *
+     * Everything that sends divides this down rather than each taking it whole,
+     * so the aggregate stays inside the quota (#176).
+     */
+    const SES_MAX_SEND_RATE = String(
+      (this.node.tryGetContext("sesMaxSendRate") as string | undefined) ?? 14,
+    );
+
+    /**
+     * Guaranteed capacity for the routes that must answer during a big send
+     * (#176).
+     *
+     * `reservedConcurrentExecutions` carves a slice out of the account pool that
+     * nothing else can consume. Without it a large campaign's senders take the
+     * pool and throttle the PUBLIC endpoints — including `/unsubscribe`, which
+     * is a compliance obligation, not a feature. "We could not process your
+     * unsubscribe because we were busy sending you email" is the worst sentence
+     * this system could produce.
+     *
+     * Small numbers on purpose: this is a floor these functions always have, not
+     * a ceiling they are expected to reach.
+     */
+    const reservePublic = (f: NodejsFunction, n = 10): void => {
+      (f.node.defaultChild as CfnFunction).addPropertyOverride(
+        "ReservedConcurrentExecutions",
+        n,
+      );
+    };
+
     const apiEntry = svc("services/api/src/index.ts");
     const apiEnv = {
       CONFIRM_SECRET_ARN: confirmSecret.secretArn,
@@ -479,6 +522,7 @@ export class ControlPlaneStack extends Stack {
     );
     // /signup now verifies the org's reCAPTCHA secret too (#170).
     signupFn.addToRolePolicy(orgSecretsScoped());
+    reservePublic(signupFn);
     const signupBatchFn = fn("SignupBatchFn", apiEntry, "signupBatchHandler", {
       ...apiEnv,
       CONFIRM_URL_BASE:
@@ -490,6 +534,7 @@ export class ControlPlaneStack extends Stack {
     );
     // The embed widget's reCAPTCHA secret is org-configured at runtime (#62).
     signupBatchFn.addToRolePolicy(orgSecretsScoped());
+    reservePublic(signupBatchFn);
     /**
      * The ONLY role in this stack that may write to an operator's subscriber
      * pool (#23, #62). It is not wired to any API route — nothing can reach it
@@ -562,7 +607,10 @@ export class ControlPlaneStack extends Stack {
     // Invoke only, on that one function. `/confirm` can ask for provisioning; it
     // cannot perform it, and it cannot reach Cognito at all.
     subscriberAccountFn.grantInvoke(confirmFn);
+    reservePublic(confirmFn);
     const unsubscribeFn = fn("UnsubscribeFn", apiEntry, "unsubscribeHandler", apiEnv);
+    // The one route that must NEVER be starved by a send in progress.
+    reservePublic(unsubscribeFn, 20);
     const entitlementFn = fn("EntitlementFn", apiEntry, "entitlementSyncHandler", apiEnv);
     const identityFn = fn("IdentityFn", apiEntry, "identitySyncHandler", apiEnv);
 
@@ -573,6 +621,12 @@ export class ControlPlaneStack extends Stack {
     // it on the first, unsliced message of every campaign) and send permission.
     const senderFn = fn("SenderFn", svc("services/sender/src/index.ts"), "handler", {
       SEND_QUEUE_URL: sendQueue.queueUrl,
+      // How many senders may run at once. The sender divides the account SES
+      // rate by this to get its own per-invocation budget, so the AGGREGATE
+      // across all concurrent senders stays inside the quota (#176). One value,
+      // passed to both the event source and the code that has to respect it.
+      SENDER_MAX_CONCURRENCY: String(SENDER_MAX_CONCURRENCY),
+      SES_MAX_SEND_RATE,
       // RFC 8058 one-click unsubscribe: the header must point at the real route
       // and carry a signed token, so the sender needs both the API base and the
       // confirm secret (#178). Without them it degrades to a mailto header.
@@ -603,6 +657,9 @@ export class ControlPlaneStack extends Stack {
     // The domain owns the per-step choice; the machine just orchestrates.
     const dripStepFn = fn("DripStepFn", svc("services/automations/src/index.ts"), "dripStepHandler", {
       SEND_QUEUE_URL: sendQueue.queueUrl,
+      // Automations pace themselves too, at a fraction of the account rate —
+      // they run alongside campaigns and must not starve a scheduled send (#176).
+      SES_MAX_SEND_RATE,
     });
     sendQueue.grantSendMessages(dripStepFn);
     dripStepFn.addToRolePolicy(
@@ -968,6 +1025,7 @@ export class ControlPlaneStack extends Stack {
     // Public (no auth): branding + list view the subscriber site reads.
     const publicBrandingFn = fn("PublicBrandingFn", apiEntry, "brandingHandler", apiEnv);
     table.grantReadData(publicBrandingFn);
+    reservePublic(publicBrandingFn);
     api.addRoutes({
       path: "/orgs/{org}/branding",
       methods: [HttpMethod.GET],
@@ -978,6 +1036,7 @@ export class ControlPlaneStack extends Stack {
     // front door of the whole public site could only ever have returned 401.
     const publicDirectoryFn = fn("PublicDirectoryFn", apiEntry, "publicDirectoryHandler", apiEnv);
     table.grantReadData(publicDirectoryFn);
+    reservePublic(publicDirectoryFn);
     api.addRoutes({
       path: "/orgs/{org}/directory",
       methods: [HttpMethod.GET],
@@ -985,6 +1044,7 @@ export class ControlPlaneStack extends Stack {
     });
     const publicListFn = fn("PublicListFn", apiEntry, "publicListHandler", apiEnv);
     table.grantReadData(publicListFn);
+    reservePublic(publicListFn);
     api.addRoutes({
       path: "/orgs/{org}/lists/{list}/public",
       methods: [HttpMethod.GET],
@@ -1011,14 +1071,18 @@ export class ControlPlaneStack extends Stack {
     // reportBatchItemFailures is required for the handler's `batchItemFailures`
     // return value to mean anything. Without it one throw failed the WHOLE batch
     // and redelivered the other 9 messages — re-sending already-delivered mail,
-    // up to maxReceiveCount times (#177). maxConcurrency bounds the aggregate
-    // SES rate: the TokenBucket is per-invocation, so N concurrent senders
-    // otherwise multiply the configured rate by N (#176).
+    // up to maxReceiveCount times (#177).
+    //
+    // maxConcurrency bounds how many senders run at once. That alone is not the
+    // rate limit (#176): the TokenBucket is per-INVOCATION, so N concurrent
+    // senders each pacing to the full account rate produce N × the quota. The
+    // sender divides its rate by this number, which is why the value is passed
+    // to it as env rather than living in two places that can drift.
     senderFn.addEventSource(
       new SqsEventSource(sendQueue, {
         batchSize: 10,
         reportBatchItemFailures: true,
-        maxConcurrency: 5,
+        maxConcurrency: SENDER_MAX_CONCURRENCY,
       }),
     );
 

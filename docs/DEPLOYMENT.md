@@ -132,6 +132,8 @@ Pass with `-c key=value` on `cdk deploy`, or add to `cdk.json` → `context`:
 | Field | Meaning |
 | --- | --- |
 | `opsAlertTopicArn` | An **existing** SNS topic the 24 CloudWatch alarms publish to. Alert routing (PagerDuty, Slack, on-call rotation) is account-wide infrastructure; addressium consumes it rather than creating a competing topic (#22/#32/#67). |
+| `sesMaxSendRate` | Your account's SES send rate in messages/second. Defaults to **14**, what a fresh production account gets — set it to your real quota. Everything that sends divides this down rather than each taking it whole, so the aggregate stays inside the limit (#176). |
+| `senderMaxConcurrency` | How many sender Lambdas may run at once (default **5**). Sets the SQS event source's cap *and* the divisor the sender applies to `sesMaxSendRate`, from one value — the two drifting apart is worse than neither, because it looks configured. |
 | `opsAlertEmail` | Simple alternative for a setup with no existing topic — one email subscription. |
 
 Set **one** of them. With `opsAlertTopicArn`, no topic is created and no

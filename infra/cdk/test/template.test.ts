@@ -369,3 +369,62 @@ test("...and the flags actually turn it on (#228)", () => {
   assert.ok(Object.keys(t.findResources("AWS::Glue::Database")).length > 0);
   assert.ok(Object.keys(t.findResources("AWS::Athena::WorkGroup")).length > 0);
 });
+
+test("the send queue caps sender concurrency, and the sender divides by it (#176)", () => {
+  // The TokenBucket is per-INVOCATION. SQS→Lambda scales the sender out, so N
+  // concurrent invocations each pacing to the full account rate produce N × the
+  // quota — SES throttles mid-loop, the claim is already burned, and those
+  // recipients are silently lost. Both halves must be present: the cap, and the
+  // sender knowing what the cap is so it can divide.
+  const t = template();
+  const mappings = Object.values(t.findResources("AWS::Lambda::EventSourceMapping"));
+  const capped = mappings.filter(
+    (m) => (m.Properties as { ScalingConfig?: { MaximumConcurrency?: number } }).ScalingConfig
+      ?.MaximumConcurrency !== undefined,
+  );
+  assert.ok(capped.length > 0, "the send queue's event source must cap concurrency");
+
+  const fns = t.findResources("AWS::Lambda::Function");
+  const sender = Object.entries(fns).find(([k]) => k.startsWith("SenderFn"));
+  assert.ok(sender, "SenderFn exists");
+  const env = (sender[1].Properties as { Environment?: { Variables?: Record<string, string> } })
+    .Environment?.Variables ?? {};
+  assert.ok(env.SENDER_MAX_CONCURRENCY, "the sender must know the cap to divide by it");
+  assert.ok(env.SES_MAX_SEND_RATE, "and the account rate it is dividing");
+
+  // The two must agree — a cap of 5 with the sender told 10 is worse than
+  // neither, because it looks configured.
+  const cap = (capped[0]!.Properties as { ScalingConfig: { MaximumConcurrency: number } })
+    .ScalingConfig.MaximumConcurrency;
+  assert.equal(Number(env.SENDER_MAX_CONCURRENCY), cap, "cap and divisor must be one value");
+});
+
+test("public endpoints reserve concurrency so a big send cannot starve them (#176)", () => {
+  // /unsubscribe above all: "we could not process your unsubscribe because we
+  // were busy sending you email" is a compliance failure, not a slow page.
+  const fns = template().findResources("AWS::Lambda::Function");
+  const reserved = (prefix: string): number | undefined => {
+    const hit = Object.entries(fns).find(([k]) => k.startsWith(prefix));
+    assert.ok(hit, `${prefix} exists`);
+    return (hit[1].Properties as { ReservedConcurrentExecutions?: number })
+      .ReservedConcurrentExecutions;
+  };
+  for (const p of ["UnsubscribeFn", "ConfirmFn", "SignupFn", "PublicDirectoryFn"]) {
+    assert.ok((reserved(p) ?? 0) > 0, `${p} has no reserved concurrency`);
+  }
+  assert.ok(
+    (reserved("UnsubscribeFn") ?? 0) >= (reserved("SignupFn") ?? 0),
+    "unsubscribe is the one that must never be starved",
+  );
+});
+
+test("the drip handler is told the SES rate so it can pace itself (#176)", () => {
+  // dripStepHandler passed NO throttle at all, so a large cohort ran flat out
+  // against the same account quota a campaign was using.
+  const fns = template().findResources("AWS::Lambda::Function");
+  const drip = Object.entries(fns).find(([k]) => k.startsWith("DripStepFn"));
+  assert.ok(drip, "DripStepFn exists");
+  const env = (drip[1].Properties as { Environment?: { Variables?: Record<string, string> } })
+    .Environment?.Variables ?? {};
+  assert.ok(env.SES_MAX_SEND_RATE, "the drip path must know the rate it is dividing");
+});

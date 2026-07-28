@@ -365,7 +365,16 @@ compensate for a missing trap.
   last is open-ended so someone confirming mid-send is picked up rather than
   dropped past the final boundary.
 - A **token-bucket throttle** keeps aggregate send rate within the account's SES
-  quota so the sandbox/production sending limits are never exceeded.
+  quota. The bucket is per-INVOCATION, and SQS→Lambda scales the sender out, so
+  the cap and the rate have to be set together (#176): the event source bounds
+  concurrency, and the sender divides the account rate by that same number. One
+  CDK value feeds both — a cap of 5 with the sender told 10 is worse than
+  neither, because it looks configured. Drip and re-engagement pace themselves
+  from a fraction of the same quota, since they run alongside campaigns.
+- **Public routes reserve concurrency** so a large send cannot starve them.
+  `/unsubscribe` gets the largest reservation: "we could not process your
+  unsubscribe because we were busy sending you email" is a compliance failure,
+  not a slow page.
 - Every message is tagged (campaign id, subscriber id) via SES message tags so
   events can be attributed.
 - **Link classification** at render time: each link is tagged **editorial** or
