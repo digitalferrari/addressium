@@ -237,10 +237,15 @@ export interface ConfirmationTokenSigner {
 }
 
 /**
- * Provisions a subscriber Cognito account in the org's pool (opt-in, #62). This
- * is the one place addressium may WRITE to the pool, and only when explicitly
- * enabled — a port so it's injectable and the default (no-op) path never touches
- * Cognito.
+ * Provisions a subscriber Cognito account in the org's LINKED pool (#62). This
+ * is the one place addressium may WRITE to that pool, and it happens on double
+ * opt-in confirm for every org with magic links on — the token has to carry a
+ * pool `sub`, so there is nothing to opt into. A port so it stays injectable and
+ * an org with magic links off never touches Cognito at all.
+ *
+ * The adapter — not this interface's callers — validates and normalizes the
+ * address (it becomes the Cognito `Username`) and sets a random permanent
+ * password, so `ensureAccount` is more than a thin AdminCreateUser.
  */
 export interface SubscriberAccountProvisioner {
   /** Ensure a user exists for `email` in `poolId`; return its Cognito `sub`. Idempotent. */
@@ -253,6 +258,13 @@ export interface MagicLinkSigner {
   mint(input: {
     orgId: string;
     sub: string;
+    /**
+     * The subscriber's `sub` in the org's linked Cognito pool
+     * (`Subscriber.externalId`). Required: a token minted without it cannot be
+     * resolved to a pool user client-side, which is the whole point of the
+     * claim, so the send path skips the token instead of minting a useless one.
+     */
+    externalId: string;
     entitlement: "free" | "paid";
     entitlementAsof?: string;
   }): Promise<string>;

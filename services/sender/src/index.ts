@@ -122,17 +122,21 @@ export async function handler(event: SqsEvent) {
       }
     }
 
-    // Per-org signer (its KMS key) + per-org SES configuration set.
-    const magic = new KmsMagicLinkSigner(
-      {
-        keyId: org.magicLink.kmsKeyArn,
-        kid: org.magicLink.kid,
-        issuer: org.magicLink.issuer,
-        audience: org.magicLink.audience,
-        ttlSeconds: TTL,
-      },
-      clock,
-    );
+    // Per-org signer (its KMS key) + per-org SES configuration set. `magicLink`
+    // absent means the org has the feature off: no signer is built, so no KMS
+    // Sign call is made per recipient and the send costs nothing extra.
+    const magic = org.magicLink
+      ? new KmsMagicLinkSigner(
+          {
+            keyId: org.magicLink.kmsKeyArn,
+            kid: org.magicLink.kid,
+            issuer: org.magicLink.issuer,
+            audience: org.magicLink.audience,
+            ttlSeconds: TTL,
+          },
+          clock,
+        )
+      : undefined;
     const ses = new SesEmailSender(org.sesConfigSet);
 
     results.push(

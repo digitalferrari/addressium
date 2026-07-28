@@ -8,6 +8,7 @@
  * it to the send queue for the sender to drain. See ARCHITECTURE.md §4.6, §4.16.
  */
 import { DynamoStores, KmsMagicLinkSigner, SesEmailSender, SqsSendQueue } from "@addressium/adapters-aws";
+import type { Organization } from "@addressium/core";
 import {
   SystemClock,
   emailTemplateFromStored,
@@ -36,6 +37,26 @@ let _stores: DynamoStores | undefined;
 const stores = () => (_stores ??= new DynamoStores(env("TABLE_NAME")));
 const clock = new SystemClock();
 const TTL = Number(process.env.MAGIC_TTL_SECONDS ?? 60 * 60 * 24 * 14);
+
+/**
+ * Per-org magic-link signer, or `undefined` when the org has the feature off.
+ * Building no signer means no KMS Sign call per recipient — drip and
+ * re-engagement sends still go out, with untokenized editorial links that keep
+ * their link-ids so click tracking is unaffected (§4.9).
+ */
+function signerFor(org: Organization): KmsMagicLinkSigner | undefined {
+  if (!org.magicLink) return undefined;
+  return new KmsMagicLinkSigner(
+    {
+      keyId: org.magicLink.kmsKeyArn,
+      kid: org.magicLink.kid,
+      issuer: org.magicLink.issuer,
+      audience: org.magicLink.audience,
+      ttlSeconds: TTL,
+    },
+    clock,
+  );
+}
 
 /**
  * Normalize an edition key into something safe to embed in a campaign id.
@@ -121,16 +142,7 @@ export async function dripStepHandler(event: DripStepEvent) {
   if (decision.type === "send") {
     const org = await s.organizations.get(event.orgId);
     if (!org) throw new Error(`unknown org ${event.orgId}`);
-    const magic = new KmsMagicLinkSigner(
-      {
-        keyId: org.magicLink.kmsKeyArn,
-        kid: org.magicLink.kid,
-        issuer: org.magicLink.issuer,
-        audience: org.magicLink.audience,
-        ttlSeconds: TTL,
-      },
-      clock,
-    );
+    const magic = signerFor(org);
     const ses = new SesEmailSender(org.sesConfigSet);
     // Resolve the step's stored template and render it through the shared
     // pipeline (#95) — same merge-escape + link-tokenization + click-map as a
@@ -181,16 +193,7 @@ export async function reengagementSweepHandler(event: ReengagementSweepEvent) {
   const s = stores();
   const org = await s.organizations.get(event.orgId);
   if (!org) throw new Error(`unknown org ${event.orgId}`);
-  const magic = new KmsMagicLinkSigner(
-    {
-      keyId: org.magicLink.kmsKeyArn,
-      kid: org.magicLink.kid,
-      issuer: org.magicLink.issuer,
-      audience: org.magicLink.audience,
-      ttlSeconds: TTL,
-    },
-    clock,
-  );
+  const magic = signerFor(org);
   const ses = new SesEmailSender(org.sesConfigSet);
   const subject = event.subject ?? "Still want our newsletters?";
   const template: EmailTemplate = event.template ?? {

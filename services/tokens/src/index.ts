@@ -28,6 +28,19 @@ export async function handler(event: JwksEvent) {
   const org = await stores().organizations.get(orgId);
   if (!org) return { statusCode: 404, headers: {}, body: JSON.stringify({ error: "unknown org" }) };
 
+  // An org with magic links off has no signing key, so there is no key to
+  // publish. Serve an empty (but valid) JWKS rather than 404: a publisher site
+  // polling the endpoint gets a well-formed document it can cache, and any
+  // token presented against it fails verification — which is the correct
+  // outcome, since this org never mints one.
+  if (!org.magicLink) {
+    return {
+      statusCode: 200,
+      headers: { "content-type": "application/json", "cache-control": "public, max-age=300" },
+      body: JSON.stringify({ keys: [] }),
+    };
+  }
+
   const jwks = await provider.jwks(org.magicLink.kmsKeyArn, org.magicLink.kid);
   return {
     statusCode: 200,

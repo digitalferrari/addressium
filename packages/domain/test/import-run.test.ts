@@ -18,7 +18,9 @@ import type { Clock } from "../src/ports.js";
 const clock: Clock = { now: () => new Date("2026-01-01T00:00:00.000Z") };
 
 const ORG = "summit";
-const FIXTURE = fileURLToPath(new URL("./fixtures/pinpoint-export.csv", import.meta.url));
+// Resolved from the COMPILED location (dist/test/), because tsc does not
+// copy non-TS assets — so this walks back to the source tree.
+const FIXTURE = fileURLToPath(new URL("../../test/fixtures/pinpoint-export.csv", import.meta.url));
 const csv = (): string => readFileSync(FIXTURE, "utf8");
 
 const DEFAULTS: NewListDefaults = {

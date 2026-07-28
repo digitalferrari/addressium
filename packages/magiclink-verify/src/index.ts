@@ -25,10 +25,17 @@ import {
 export interface MagicLinkClaims extends JWTPayload {
   /**
    * addressium's durable subscriber id (`Subscriber.sub`) — NOT a Cognito
-   * subject. Link it to a user in the org's own pool via `Subscriber.externalId`
-   * if the org runs one (docs/ARCHITECTURE.md §4.10, §12).
+   * subject. The matching pool subject is `external_sub` (docs/ARCHITECTURE.md
+   * §4.10, §12).
    */
   sub: string;
+  /**
+   * The reader's `sub` in the org's own Cognito user pool. This is what lets a
+   * paywall resolve the reader against its OWN directory with no call back to
+   * addressium — the point of the whole token. Tokens are only minted for a
+   * subscriber whose pool account is known, so this claim is always present.
+   */
+  external_sub: string;
   /** Lite access only. */
   scope: "content:read";
   /** Session origin marker; must include "magic_link". */
@@ -133,6 +140,12 @@ export async function verifyMagicLinkToken(
   }
   if (typeof claims.sub !== "string" || claims.sub.length === 0) {
     throw new MagicLinkError("missing sub");
+  }
+  // Fail CLOSED, like every other claim above: a token with no pool subject
+  // cannot identify the reader in the operator's directory, and silently
+  // returning one would push that decision into every integrator's code.
+  if (typeof claims.external_sub !== "string" || claims.external_sub.length === 0) {
+    throw new MagicLinkError("missing external_sub");
   }
   return claims;
 }

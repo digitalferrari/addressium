@@ -68,7 +68,7 @@ export interface ResendResult {
 export async function resendToNonEngaged(
   stores: Stores,
   sender: EmailSender,
-  magic: MagicLinkSigner,
+  magic: MagicLinkSigner | undefined,
   clock: Clock,
   input: ResendInput,
 ): Promise<ResendResult> {

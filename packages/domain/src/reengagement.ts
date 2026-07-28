@@ -138,7 +138,7 @@ export interface ReengagementSweepResult {
 export async function runReengagementSweep(
   stores: Stores,
   sender: EmailSender,
-  magic: MagicLinkSigner,
+  magic: MagicLinkSigner | undefined,
   clock: Clock,
   input: ReengagementInput,
 ): Promise<ReengagementSweepResult> {

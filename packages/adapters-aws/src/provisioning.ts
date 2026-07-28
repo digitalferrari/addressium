@@ -1,9 +1,10 @@
 /**
  * AWS implementation of the domain ProvisioningProviders (docs/ARCHITECTURE.md
- * §4.11). Creates/links the subscriber Cognito pool, an asymmetric KMS signing
- * key (ES256, tagged app=addressium so IAM grants scope to it), and the SES
- * domain identity + configuration set with DKIM. Public-key export → JWKS is the
- * tokens service's job (KmsJwksProvider); here we just mint the key + kid.
+ * §4.11). Links (never creates) the operator's subscriber Cognito pool, creates
+ * an asymmetric KMS signing key (ES256, tagged app=addressium so IAM grants
+ * scope to it), and the SES domain identity + configuration set with DKIM.
+ * Public-key export → JWKS is the tokens service's job (KmsJwksProvider); here
+ * we just mint the key + kid.
  */
 import { KMSClient, CreateKeyCommand, CreateAliasCommand } from "@aws-sdk/client-kms";
 import {
@@ -17,7 +18,6 @@ import {
 } from "@aws-sdk/client-sesv2";
 import {
   CognitoIdentityProviderClient,
-  CreateUserPoolCommand,
   DescribeUserPoolCommand,
 } from "@aws-sdk/client-cognito-identity-provider";
 import type {
@@ -37,24 +37,31 @@ export class AwsProvisioningProviders implements ProvisioningProviders {
     private readonly cognito = new CognitoIdentityProviderClient({}),
   ) {}
 
-  async ensureSubscriberPool(orgId: string, spec: SubscriberPoolSpec): Promise<{ poolId: string }> {
-    if (spec.mode === "link") {
-      if (!spec.poolId) throw new Error("link mode requires an existing poolId");
-      // Validate the linked pool exists before we record it.
-      await this.cognito.send(new DescribeUserPoolCommand({ UserPoolId: spec.poolId }));
-      return { poolId: spec.poolId };
+  /**
+   * Link the operator's existing pool. addressium never CREATES a user pool: a
+   * pool carries far more configuration than we can sensibly own, and it is the
+   * operator's own directory (§4.10).
+   *
+   * We used to know the pool was email-addressable because we created it that
+   * way; for a linked pool that is an assumption, and every subscriber account
+   * is created with the normalized email as the Cognito `Username`. So prove it
+   * here — a wrong pool fails once, at configuration time, with a fix in the
+   * message, instead of once per subscriber as an opaque AdminCreateUser error.
+   */
+  async linkSubscriberPool(_orgId: string, spec: SubscriberPoolSpec): Promise<{ poolId: string }> {
+    const res = await this.cognito.send(new DescribeUserPoolCommand({ UserPoolId: spec.poolId }));
+    const emailAddressable =
+      (res.UserPool?.UsernameAttributes ?? []).includes("email") ||
+      (res.UserPool?.AliasAttributes ?? []).includes("email");
+    if (!emailAddressable) {
+      throw new Error(
+        `user pool ${spec.poolId} is not email-addressable: addressium addresses subscriber ` +
+          `accounts by email, so the pool must be created with UsernameAttributes ["email"] ` +
+          `(or have "email" as an alias attribute). Neither is changeable after pool creation — ` +
+          `link a pool that has it, or create one that does.`,
+      );
     }
-    const res = await this.cognito.send(
-      new CreateUserPoolCommand({
-        PoolName: `addressium-${orgId}-subscribers`,
-        UsernameAttributes: ["email"],
-        AutoVerifiedAttributes: ["email"],
-        UserPoolTags: { app: "addressium", orgId },
-      }),
-    );
-    const poolId = res.UserPool?.Id;
-    if (!poolId) throw new Error("Cognito did not return a pool id");
-    return { poolId };
+    return { poolId: spec.poolId };
   }
 
   async createSigningKey(orgId: string): Promise<SigningKey> {

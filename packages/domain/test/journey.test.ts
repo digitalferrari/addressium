@@ -26,6 +26,8 @@ import {
   buildClickMap,
   redactToken,
   type EmailTemplate,
+  provisionSubscriberAccount,
+  type Stores,
 } from "@addressium/domain";
 
 const ORG = "summit";
@@ -80,6 +82,23 @@ function tokenFrom(html: string): string {
   return need(m, "editorial link should carry a token in its fragment")[1]!;
 }
 
+
+/**
+ * Link the subscriber to the org's Cognito pool, as the confirm handler does in
+ * production (services/api). Without an externalId the send path deliberately
+ * mints NO token — so a journey test that skipped this would be asserting the
+ * untokenized path by accident.
+ */
+async function linkPoolAccount(stores: Stores, subscriberId: string): Promise<void> {
+  await provisionSubscriberAccount(
+    stores,
+    { ensureAccount: async () => ({ externalId: `pool-${subscriberId}` }) },
+    ORG,
+    "us-east-1_testpool",
+    subscriberId,
+  );
+}
+
 test("signup → double opt-in → send, and the magic-link token verifies", async () => {
   const h = await harness();
 
@@ -95,6 +114,7 @@ test("signup → double opt-in → send, and the magic-link token verifies", asy
 
   const confirmed = await confirmOptIn(h.stores, h.confirmSigner, h.clock, res.confirmationToken);
   assert.equal(confirmed.status, "confirmed");
+  await linkPoolAccount(h.stores, res.subscriber.sub);
 
   const out = await sendCampaign(h.stores, h.sender, h.magic, h.clock, {
     orgId: ORG,
@@ -127,7 +147,7 @@ test("signup → double opt-in → send, and the magic-link token verifies", asy
 
 test("verifier rejects wrong audience, tampering, and algorithm confusion", async () => {
   const h = await harness();
-  const token = await h.magic.mint({ orgId: ORG, sub: "abc", entitlement: "paid" });
+  const token = await h.magic.mint({ orgId: ORG, sub: "abc", externalId: "pool-abc", entitlement: "paid" });
 
   // wrong audience
   await assert.rejects(() =>
@@ -188,6 +208,7 @@ test("click map aggregates by link-id and the token is redacted at rest", async 
     attributes: { first_name: "Jordan" },
   });
   await confirmOptIn(h.stores, h.confirmSigner, h.clock, r.confirmationToken);
+  await linkPoolAccount(h.stores, r.subscriber.sub);
   await sendCampaign(h.stores, h.sender, h.magic, h.clock, {
     orgId: ORG,
     campaignId: "c3",

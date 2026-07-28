@@ -22,6 +22,8 @@ import {
   verifyWebhookSignature,
   buildEs256CompactJws,
   type EmailTemplate,
+  provisionSubscriberAccount,
+  type Stores,
 } from "@addressium/domain";
 import { generateKeyPair } from "jose";
 
@@ -66,6 +68,23 @@ async function harness() {
   return { stores, sender, clock, confirmSigner, magic, jwks };
 }
 
+
+/**
+ * Link the subscriber to the org's Cognito pool, as the confirm handler does in
+ * production (services/api). Without an externalId the send path deliberately
+ * mints NO token — so a journey test that skipped this would be asserting the
+ * untokenized path by accident.
+ */
+async function linkPoolAccount(stores: Stores, subscriberId: string): Promise<void> {
+  await provisionSubscriberAccount(
+    stores,
+    { ensureAccount: async () => ({ externalId: `pool-${subscriberId}` }) },
+    ORG,
+    "us-east-1_testpool",
+    subscriberId,
+  );
+}
+
 test("entitlement sync flips a subscriber to paid and the token then says paid", async () => {
   const h = await harness();
   const r = await signup(h.stores, h.confirmSigner, h.clock, {
@@ -74,6 +93,7 @@ test("entitlement sync flips a subscriber to paid and the token then says paid",
     listId: LIST,
   });
   await confirmOptIn(h.stores, h.confirmSigner, h.clock, r.confirmationToken);
+  await linkPoolAccount(h.stores, r.subscriber.sub);
 
   const updated = await applyEntitlementSync(h.stores, h.clock, {
     orgId: ORG,

@@ -57,10 +57,24 @@ export interface Organization {
   orgId: OrgId;
   name: string;
   domains: string[];
-  /** Cognito user pool, shared with this org's main website. */
-  subscriberPoolId: string;
-  /** Per-org magic-link signing config (resolved by the sender at send time). */
-  magicLink: {
+  /**
+   * Cognito user pool shared with this org's main website, LINK-ONLY: the
+   * operator creates and configures the pool, addressium only ever links to one
+   * (a pool has far too many configuration options to own in-app) and creates
+   * users inside it. Present if and only if `magicLink` is — see below.
+   */
+  subscriberPoolId?: string;
+  /**
+   * Per-org magic-link signing config (resolved by the sender at send time).
+   *
+   * ABSENT = the feature is OFF for this org: no linked pool, no KMS signing
+   * key, no JWKS, no entitlement claim and no token — editorial links render
+   * untokenized (still tracked) and addressium just sends the email. PRESENT
+   * requires `subscriberPoolId`, because the token carries the pool's `sub` so
+   * a paywall can resolve the reader entirely client-side (§4.9, §4.10).
+   * `schemas.createOrgSchema` enforces that pair at the API boundary.
+   */
+  magicLink?: {
     /** KMS asymmetric key ARN — the key never leaves KMS. */
     kmsKeyArn: string;
     /** JWKS key id published for this key. */
@@ -86,7 +100,7 @@ export interface Organization {
   aiConfig?: AiConfig;
   /** Subscriber-site branding/theme (§4.10, #31). */
   branding?: Branding;
-  /** Public-signup bot protection + optional post-verify account provisioning (#62). */
+  /** Public-signup bot protection (#62). */
   signupProtection?: SignupProtection;
   /**
    * Deployment environment for this org silo. `dev` orgs run on the exact same
@@ -130,12 +144,6 @@ export interface ReengagementPolicy {
 export interface SignupProtection {
   /** reCAPTCHA secret ARN for server-side verification. The site key lives in the embed snippet. */
   recaptchaSecretArn?: string;
-  /**
-   * When true, provision a subscriber Cognito account in the org's pool AFTER the
-   * subscriber clicks their double opt-in link. Off by default — addressium
-   * normally never writes to your user pool; this is an explicit opt-in.
-   */
-  createAccountsOnConfirm?: boolean;
 }
 
 export type AiVendor = "anthropic" | "openai" | "gemini";

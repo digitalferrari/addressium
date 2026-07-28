@@ -70,6 +70,7 @@ export class JoseMagicLinkSigner implements MagicLinkSigner {
   async mint(input: {
     orgId: string;
     sub: string;
+    externalId: string;
     entitlement: "free" | "paid";
     entitlementAsof?: string;
   }): Promise<string> {
@@ -77,6 +78,12 @@ export class JoseMagicLinkSigner implements MagicLinkSigner {
     return new SignJWT({
       scope: "content:read",
       amr: ["magic_link"],
+      // The reader's `sub` in the org's linked Cognito pool. Named
+      // `external_sub` — external to addressium, and NOT `sub`, which stays
+      // addressium's own subscriber id (§4.9). With both plus `entitlement`, a
+      // paywall resolves the reader and their access with zero calls back here.
+      // The claim set stays closed: adding one is a deliberate, versioned act.
+      external_sub: input.externalId,
       entitlement: input.entitlement,
       entitlement_asof: input.entitlementAsof,
     })

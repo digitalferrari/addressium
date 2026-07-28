@@ -14,6 +14,15 @@ export const listAccess = z.enum(["free", "paid"]);
 export const cadence = z.enum(["one_off", "daily", "weekly", "biweekly", "monthly"]);
 export const templateMode = z.enum(["visual", "mjml", "raw_html"]);
 
+/**
+ * Reusable address validator. RFC 5321 bounds an address at 254 octets, and it
+ * matters here: `Subscriber.email` becomes the Cognito `Username` when an
+ * account is provisioned, so anything wider fails at the directory instead of
+ * at our boundary. Shared so adapters validate identically to ingest rather
+ * than hand-rolling a regex (see redos.test.ts for why we don't).
+ */
+export const emailSchema = z.string().email().max(254);
+
 export const consentSchema = z.object({
   timestamp: z.string().datetime(),
   ip: z.string(),
@@ -204,22 +213,53 @@ export const identitySyncSchema = z
 export type IdentitySyncInput = z.infer<typeof identitySyncSchema>;
 
 /** Add-organization / provision-silo payload (§4.11). */
-export const createOrgSchema = z.object({
-  name: z.string().min(1),
-  primaryDomain: z.string().min(1),
-  siteDomain: z.string().min(1),
-  region: z.string().default("us-east-1"),
-  /** IANA time zone for recurring send scheduling + reporting (§4.16, §4.21). */
-  defaultTimezone: z.string().default("UTC"),
-  subscriberPool: z.union([
-    z.object({ mode: z.literal("create") }),
-    z.object({ mode: z.literal("link"), poolId: z.string().min(1) }),
-  ]),
-  dedicatedIp: z.boolean().default(false),
-  suppressionScope: z.enum(["global", "org", "hybrid"]).default("hybrid"),
-  /** `dev` marks a test silo (same workflows, labeled + excluded from cost rollups). */
-  environment: z.enum(["prod", "dev"]).default("prod"),
-  /** Dev-org send allowlist: exact emails or `@domain` suffixes. Fail-closed for dev orgs. */
-  devAllowlist: z.array(z.string()).optional(),
-});
+export const createOrgSchema = z
+  .object({
+    name: z.string().min(1),
+    primaryDomain: z.string().min(1),
+    siteDomain: z.string().min(1),
+    region: z.string().default("us-east-1"),
+    /** IANA time zone for recurring send scheduling + reporting (§4.16, §4.21). */
+    defaultTimezone: z.string().default("UTC"),
+    /**
+     * LINK an existing Cognito user pool. There is no "create" mode: a pool
+     * carries far more configuration than addressium can sensibly own, and it
+     * is the operator's own directory (§4.10). Only meaningful with
+     * `magicLinks` on — see the refinement below.
+     */
+    subscriberPool: z.object({ poolId: z.string().min(1) }).optional(),
+    /**
+     * Per-recipient magic-link tokens: a per-org KMS signing key, a published
+     * JWKS, and a signed token in every editorial link. Off by default — an org
+     * that only wants email sent needs no pool, no key and no entitlement
+     * plumbing (§4.9).
+     */
+    magicLinks: z.boolean().default(false),
+    dedicatedIp: z.boolean().default(false),
+    suppressionScope: z.enum(["global", "org", "hybrid"]).default("hybrid"),
+    /** `dev` marks a test silo (same workflows, labeled + excluded from cost rollups). */
+    environment: z.enum(["prod", "dev"]).default("prod"),
+    /** Dev-org send allowlist: exact emails or `@domain` suffixes. Fail-closed for dev orgs. */
+    devAllowlist: z.array(z.string()).optional(),
+  })
+  // Pool present if and only if magic links are on. Enforced here, at the API
+  // boundary, because neither half is any use without the other: a token has to
+  // carry the pool's `sub` to be resolvable client-side, and a linked pool with
+  // no tokens is a write to the operator's directory nobody asked for.
+  .superRefine((v, ctx) => {
+    if (v.magicLinks && !v.subscriberPool) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["subscriberPool"],
+        message: "magic links require a linked subscriber pool (the token carries the pool's sub)",
+      });
+    }
+    if (!v.magicLinks && v.subscriberPool) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["magicLinks"],
+        message: "a subscriber pool is only used for magic links — set magicLinks: true or drop subscriberPool",
+      });
+    }
+  });
 export type CreateOrgInput = z.infer<typeof createOrgSchema>;

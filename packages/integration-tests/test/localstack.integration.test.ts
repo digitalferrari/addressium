@@ -78,7 +78,7 @@ test("KMS adapter mints a magic-link token verifiable against the derived JWK", 
     new SystemClock(),
     kms,
   );
-  const token = await signer.mint({ orgId: "summit", sub: "s1", entitlement: "paid" });
+  const token = await signer.mint({ orgId: "summit", sub: "s1", externalId: "pool-s1", entitlement: "paid" });
 
   const pub = await kms.send(new GetPublicKeyCommand({ KeyId: keyId }));
   const jwk = spkiDerToJwk(pub.PublicKey!, "kms-1");

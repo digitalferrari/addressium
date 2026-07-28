@@ -2,11 +2,11 @@
  * Campaign send (docs/ARCHITECTURE.md §4.4).
  *
  * Resolves confirmed recipients, drops suppressed addresses, archives the
- * generic body + link-map once, then per recipient mints a magic-link token,
- * renders, and hands the message to the EmailSender (SES in prod). Records a
- * "sent" event per recipient.
+ * generic body + link-map once, then per recipient mints a magic-link token (if
+ * the org has the feature on), renders, and hands the message to the EmailSender
+ * (SES in prod). Records a "sent" event per recipient.
  */
-import type { EmailArchive, EngagementEvent, List, OrgEnvironment } from "@addressium/core";
+import type { EmailArchive, EngagementEvent, List, OrgEnvironment, Subscriber } from "@addressium/core";
 import type {
   Clock,
   EmailSender,
@@ -48,6 +48,13 @@ export interface SendResult {
   devBlocked?: number;
   /** Recipients already claimed by an earlier delivery of this campaign. */
   alreadySent?: number;
+  /**
+   * Recipients sent WITHOUT a magic-link token although the org has the feature
+   * on, because they have no `externalId` yet (see mintToken). Zero in the
+   * normal case; a non-zero count on a magic-links org is the visible symptom of
+   * subscribers that predate the toggle and still need the account backfill.
+   */
+  untokenized?: number;
   /** True if this campaign (or slice) had nothing new to dispatch. */
   skipped?: boolean;
   /** True if a deliverability halt stopped this send (§4.13). */
@@ -174,14 +181,42 @@ export interface SendOneResult {
 }
 
 /**
+ * Mint this recipient's magic-link token, or `undefined` when there is nothing
+ * to mint:
+ *  - no signer — the org has magic links off, so no token is ever minted; or
+ *  - no `externalId` — the subscriber has no account in the org's linked pool
+ *    yet, and a token without the pool `sub` is one the paywall cannot resolve.
+ *
+ * Neither case fails the send: the message still goes out, with plain editorial
+ * links that keep their link-ids (see renderForRecipient).
+ */
+async function mintToken(
+  magic: MagicLinkSigner | undefined,
+  subscriber: Subscriber,
+): Promise<string | undefined> {
+  if (!magic || !subscriber.externalId) return undefined;
+  return magic.mint({
+    orgId: subscriber.orgId,
+    sub: subscriber.sub,
+    externalId: subscriber.externalId,
+    entitlement: subscriber.entitlement,
+    entitlementAsof: subscriber.entitlementAsof,
+  });
+}
+
+/**
  * Send one message to one subscriber (drip step / transactional, §4.6). Applies
  * the same suppression gate, magic-link minting, render and sent-event append as
  * a campaign send, with per-(campaign,subscriber) idempotency.
+ *
+ * `magic` is `undefined` for an org with magic links off — the send is otherwise
+ * identical, so it stays `sent: true` and the caller's counters (and the win-back
+ * sequence, #181) are unaffected by the feature being off.
  */
 export async function sendToSubscriber(
   stores: Stores,
   sender: EmailSender,
-  magic: MagicLinkSigner,
+  magic: MagicLinkSigner | undefined,
   clock: Clock,
   input: SendOneInput,
 ): Promise<SendOneResult> {
@@ -213,12 +248,7 @@ export async function sendToSubscriber(
   }
   if (input.throttle) await input.throttle.acquire();
   try {
-    const token = await magic.mint({
-      orgId: subscriber.orgId,
-      sub: subscriber.sub,
-      entitlement: subscriber.entitlement,
-      entitlementAsof: subscriber.entitlementAsof,
-    });
+    const token = await mintToken(magic, subscriber);
     await sender.send({
       from: list.fromAddress,
       to: subscriber.email,
@@ -256,7 +286,7 @@ export function templateIsEmpty(t: EmailTemplate): boolean {
 export async function sendCampaign(
   stores: Stores,
   sender: EmailSender,
-  magic: MagicLinkSigner,
+  magic: MagicLinkSigner | undefined,
   clock: Clock,
   input: SendCampaignInput,
   opts: SendOptions = {},
@@ -300,6 +330,7 @@ export async function sendCampaign(
   let suppressed = 0;
   let devBlocked = 0;
   let alreadySent = 0;
+  let untokenized = 0;
 
   // Deliverability halt (§4.13, #165). checkDeliverability flips the campaign to
   // "halted" on a bounce/complaint breach, but NOTHING in the send path read it,
@@ -346,12 +377,8 @@ export async function sendCampaign(
     if (opts.throttle) await opts.throttle.acquire();
 
     try {
-      const token = await magic.mint({
-        orgId: subscriber.orgId,
-        sub: subscriber.sub,
-        entitlement: subscriber.entitlement,
-        entitlementAsof: subscriber.entitlementAsof,
-      });
+      const token = await mintToken(magic, subscriber);
+      if (magic && token === undefined) untokenized++;
       const html = renderForRecipient(input.template, subscriber.attributes, token);
 
       await sender.send({
@@ -387,6 +414,7 @@ export async function sendCampaign(
     suppressed,
     devBlocked,
     alreadySent,
+    untokenized,
     skipped: sent === 0 && alreadySent > 0,
     ...(halted ? { halted: true } : {}),
   };

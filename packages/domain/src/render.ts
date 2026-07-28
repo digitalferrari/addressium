@@ -2,7 +2,10 @@
  * Minimal renderer for the slice. Production uses MJML/GrapesJS output; this
  * models the security-relevant behaviors we must get right:
  *  - merge-tag values are HTML-escaped (no markup injection via attributes),
- *  - editorial links get the per-recipient magic-link token in the FRAGMENT,
+ *  - editorial links get the per-recipient magic-link token in the FRAGMENT
+ *    when the org has magic links on, and are otherwise rendered untouched —
+ *    link-ids and the link map are identical either way, so click tracking
+ *    does not depend on the feature,
  *  - ad slots are inserted verbatim and never tokenized/tracked,
  *  - a stable link-id is assigned per editorial link for the click map.
  */
@@ -50,7 +53,10 @@ export function buildLinkMap(t: EmailTemplate): EmailArchive["linkMap"] {
     position++;
     if (block.kind === "editorial") {
       map[`l${li}`] = {
-        urlTemplate: block.url,
+        // Fragment-less, exactly like buildHtmlLinkMap below. A click arrives
+        // fragment-redacted (events.ts), so storing an author-written fragment
+        // here meant a click on that link never resolved to its link-id.
+        urlTemplate: baseUrl(block.url),
         position,
         label: block.label,
         class: "editorial",
@@ -61,11 +67,19 @@ export function buildLinkMap(t: EmailTemplate): EmailArchive["linkMap"] {
   return map;
 }
 
-/** Render the body for one recipient, embedding their magic-link token. */
+/**
+ * Render the body for one recipient, embedding their magic-link token.
+ *
+ * `magicToken` is positional and explicitly `| undefined` (not optional) so
+ * every call site has to state which it means: an org with magic links off — or
+ * a recipient with no linked pool account — renders plain editorial links, and
+ * a forgotten argument must not silently produce them for an org that has the
+ * feature on.
+ */
 export function renderForRecipient(
   t: EmailTemplate,
   attrs: Record<string, string>,
-  magicToken: string,
+  magicToken: string | undefined,
 ): string {
   if (t.html != null) return renderHtmlForRecipient(t.html, attrs, magicToken);
   const parts: string[] = [];
@@ -75,7 +89,10 @@ export function renderForRecipient(
       parts.push(`<p>${applyMerge(block.html, attrs)}</p>`);
     } else if (block.kind === "editorial") {
       // Token rides in the fragment (client-side only) — docs/SECURITY.md §4.1.
-      const href = `${safeHref(block.url)}#tok=${magicToken}`;
+      // With no token the url is emitted as-is; the `data-linkid` below and the
+      // link map are unchanged, so the link is still tracked.
+      const href =
+        magicToken === undefined ? safeHref(block.url) : `${safeHref(block.url)}#tok=${magicToken}`;
       parts.push(
         `<a data-linkid="l${li}" href="${escapeHtml(href)}">${escapeHtml(block.label)}</a>`,
       );
@@ -203,11 +220,17 @@ export function buildHtmlLinkMap(html: string): EmailArchive["linkMap"] {
  * Render an HTML body for one recipient: escape-substitute merge tags, then
  * tokenize each `<a>` (per-recipient magic token in the fragment) and stamp a
  * stable `data-linkid` matching {@link buildHtmlLinkMap} for click tracking.
+ *
+ * With `magicToken` undefined (magic links off for the org, or no linked pool
+ * account for this recipient) the href keeps any author-written fragment and
+ * gains no token — but it is still rewritten through `safeHref` and still gets
+ * its `data-linkid`, so neither the #94 scheme guard nor click tracking depends
+ * on the feature being on.
  */
 export function renderHtmlForRecipient(
   html: string,
   attrs: Record<string, string>,
-  magicToken: string,
+  magicToken: string | undefined,
 ): string {
   const merged = applyMerge(html, attrs);
   let out = "";
@@ -223,7 +246,12 @@ export function renderHtmlForRecipient(
         return;
       }
       const linkId = `l${li++}`;
-      const target = `${safeHref(baseUrl(href))}#tok=${magicToken}`;
+      // Only strip an existing fragment when we're replacing it with the token;
+      // with no token the author's fragment is theirs to keep. Click tracking is
+      // unaffected either way — recordClick redacts everything from "#" on, and
+      // buildHtmlLinkMap stores the fragment-less url.
+      const target =
+        magicToken === undefined ? safeHref(href) : `${safeHref(baseUrl(href))}#tok=${magicToken}`;
       // Replacer FUNCTIONS, not replacement strings: a replacement string expands
       // `$&`, `` $` ``, `$'` and `$$`, and escapeHtml does not escape `$`. A merge
       // value or URL containing `$&` would re-inject raw quotes — corrupting every

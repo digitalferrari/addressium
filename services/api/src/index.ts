@@ -202,14 +202,21 @@ export async function confirmHandler(event: HttpEvent): Promise<HttpResult> {
     const token = event.queryStringParameters?.token ?? "";
     const subs = await confirmOptInAny(stores(), await confirmSigner(), clock, token);
 
-    // Opt-in (#62): after the double opt-in is verified, provision a subscriber
-    // Cognito account IF this org enabled it. Off by default — addressium
-    // normally never writes to your pool. Best-effort: a provisioning hiccup
-    // must not fail the confirmation the subscriber just completed.
+    // After the double opt-in is verified, ensure the subscriber has an account
+    // in the org's linked pool, so their magic-link tokens can carry the pool
+    // `sub` a paywall resolves against. Gated on the org having magic links on
+    // — with the feature off addressium never touches Cognito at all. This
+    // replaces the old `createAccountsOnConfirm` opt-in, which was incompatible
+    // with the token contract: an org whose subscribers mostly lacked an
+    // account would mint mostly unresolvable tokens.
+    //
+    // Best-effort: a provisioning hiccup must not fail the confirmation the
+    // subscriber just completed. A subscriber left without an externalId is
+    // sent to without a token and shows up in SendResult.untokenized.
     const first = subs[0];
     if (first) {
       const org = await stores().organizations.get(first.orgId);
-      if (org?.signupProtection?.createAccountsOnConfirm && org.subscriberPoolId) {
+      if (org?.magicLink && org.subscriberPoolId) {
         try {
           await provisionSubscriberAccount(
             stores(),

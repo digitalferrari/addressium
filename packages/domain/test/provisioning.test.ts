@@ -19,7 +19,8 @@ const input: schemas.CreateOrgInput = {
   siteDomain: "northwindtimes.example",
   region: "us-east-1",
   defaultTimezone: "America/Denver",
-  subscriberPool: { mode: "create" },
+  magicLinks: true,
+  subscriberPool: { poolId: "pool-123" },
   dedicatedIp: false,
   suppressionScope: "hybrid",
   environment: "prod",
@@ -27,7 +28,7 @@ const input: schemas.CreateOrgInput = {
 
 function fakeProviders(overrides: Partial<ProvisioningProviders> = {}): ProvisioningProviders {
   return {
-    ensureSubscriberPool: async () => ({ poolId: "pool-123" }),
+    linkSubscriberPool: async () => ({ poolId: "pool-123" }),
     createSigningKey: async () => ({ kmsKeyArn: "arn:aws:kms:...:key/abc", kid: "abc" }),
     ensureSesDomainIdentity: async () => ({
       configSet: "addressium-northwind-times",
@@ -50,8 +51,8 @@ test("provision assembles the org record and returns DKIM/SPF/DMARC DNS", async 
   assert.equal(result.alreadyExisted, false);
   assert.equal(result.org.orgId, "northwind-times");
   assert.equal(result.org.subscriberPoolId, "pool-123");
-  assert.equal(result.org.magicLink.kmsKeyArn, "arn:aws:kms:...:key/abc");
-  assert.equal(result.org.magicLink.audience, "northwindtimes.example");
+  assert.equal(result.org.magicLink?.kmsKeyArn, "arn:aws:kms:...:key/abc");
+  assert.equal(result.org.magicLink?.audience, "northwindtimes.example");
   assert.equal(result.org.defaultTimezone, "America/Denver");
   assert.equal(result.org.ipMode, "shared");
   assert.equal(result.org.environment, "prod");
@@ -91,7 +92,7 @@ test("a dev org is provisioned on the same workflows but flagged environment=dev
   });
   assert.equal(result.org.environment, "dev");
   // Same silo shape as prod — its own config set + magic-link audience.
-  assert.equal(result.org.magicLink.audience, "devsummitdaily.example");
+  assert.equal(result.org.magicLink?.audience, "devsummitdaily.example");
 });
 
 test("provision is idempotent — re-running returns the existing org", async () => {

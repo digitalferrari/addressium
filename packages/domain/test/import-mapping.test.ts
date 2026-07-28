@@ -18,7 +18,9 @@ import {
 } from "../src/import-mapping.js";
 import { parseCsv } from "../src/importer.js";
 
-const FIXTURE = fileURLToPath(new URL("./fixtures/pinpoint-export.csv", import.meta.url));
+// Resolved from the COMPILED location (dist/test/), because tsc does not
+// copy non-TS assets — so this walks back to the source tree.
+const FIXTURE = fileURLToPath(new URL("../../test/fixtures/pinpoint-export.csv", import.meta.url));
 const csv = (): string => readFileSync(FIXTURE, "utf8");
 
 const rowFor = (email: string): Record<string, string> => {

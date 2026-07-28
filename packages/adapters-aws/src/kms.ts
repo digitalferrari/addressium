@@ -33,6 +33,7 @@ export class KmsMagicLinkSigner implements MagicLinkSigner {
   async mint(input: {
     orgId: string;
     sub: string;
+    externalId: string;
     entitlement: "free" | "paid";
     entitlementAsof?: string;
   }): Promise<string> {
@@ -43,6 +44,10 @@ export class KmsMagicLinkSigner implements MagicLinkSigner {
         sub: input.sub,
         scope: "content:read",
         amr: ["magic_link"],
+        // Kept claim-for-claim identical to JoseMagicLinkSigner (tokens.ts) —
+        // that one is what the domain tests verify against, so a divergence
+        // here ships green tests and broken production tokens.
+        external_sub: input.externalId,
         entitlement: input.entitlement,
         entitlement_asof: input.entitlementAsof,
         iss: this.cfg.issuer,

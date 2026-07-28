@@ -1,7 +1,14 @@
 /**
- * AWS adapters that satisfy the domain ports (DynamoDB / SES / KMS), plus a
- * factory that builds them from environment variables. Services construct these
- * once per cold start and pass them to the pure domain functions.
+ * AWS adapters that satisfy the domain ports (DynamoDB / SES / KMS). Services
+ * construct the ones they need once per cold start and pass them to the pure
+ * domain functions.
+ *
+ * There is deliberately no build-everything-from-env factory. Magic-link
+ * signing is per-ORG config read from the Organization record at send time
+ * (§4.9) — a per-deployment `MAGIC_*` env model contradicts that, and an org
+ * with the feature off has no key for it to read, so such a factory could only
+ * fail at cold start with a message that named an env var instead of the
+ * toggle.
  */
 export { DynamoStores } from "./dynamo.js";
 export { SesEmailSender, SES_TAG, encodeTag, decodeTag } from "./ses.js";
@@ -25,46 +32,3 @@ export {
 export { GoogleRecaptchaVerifier } from "./recaptcha.js";
 export { sanitizeEmailHtml } from "./sanitize.js";
 export { CognitoSubscriberAccounts } from "./cognito-accounts.js";
-
-import { DynamoStores } from "./dynamo.js";
-import { SesEmailSender } from "./ses.js";
-import { KmsMagicLinkSigner } from "./kms.js";
-import { SqsSendQueue } from "./sqs.js";
-import { HmacConfirmationSigner, SystemClock, type Stores } from "@addressium/domain";
-
-function required(name: string): string {
-  const v = process.env[name];
-  if (!v) throw new Error(`missing required env var: ${name}`);
-  return v;
-}
-
-export interface Deps {
-  stores: Stores;
-  sender: SesEmailSender;
-  magic: KmsMagicLinkSigner;
-  confirmation: HmacConfirmationSigner;
-  queue: SqsSendQueue;
-  clock: SystemClock;
-}
-
-/** Build all adapters from env. Call once per Lambda cold start. */
-export function depsFromEnv(): Deps {
-  const clock = new SystemClock();
-  return {
-    stores: new DynamoStores(required("TABLE_NAME")),
-    sender: new SesEmailSender(process.env.SES_CONFIG_SET),
-    magic: new KmsMagicLinkSigner(
-      {
-        keyId: required("MAGIC_KMS_KEY_ID"),
-        kid: required("MAGIC_KID"),
-        issuer: required("MAGIC_ISSUER"),
-        audience: required("MAGIC_AUDIENCE"),
-        ttlSeconds: Number(process.env.MAGIC_TTL_SECONDS ?? 60 * 60 * 24 * 14),
-      },
-      clock,
-    ),
-    confirmation: new HmacConfirmationSigner(required("CONFIRM_SECRET")),
-    queue: new SqsSendQueue(required("SEND_QUEUE_URL")),
-    clock,
-  };
-}
