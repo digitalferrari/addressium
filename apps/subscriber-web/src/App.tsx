@@ -63,10 +63,9 @@ function AllNewsletters() {
   const [msg, setMsg] = useState("");
   const [err, setErr] = useState("");
   useEffect(() => {
-    api.lists()
-      .then((ls) => Promise.all(ls.map((l) => api.publicList(l.listId).catch(() => null))))
-      .then((rows) => setLists(rows.filter((r): r is PublicList => r !== null)))
-      .catch((e) => setErr(String(e)));
+    // One request. This used to fan out to /lists/{id}/public per list, which
+    // made the front page's cost scale with the number of newsletters.
+    api.directory().then(setLists).catch((e) => setErr(String(e)));
   }, []);
   const toggle = (id: string) =>
     setSelected((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
@@ -110,7 +109,7 @@ function Directory() {
   const [ids, setIds] = useState<string[]>([]);
   const [err, setErr] = useState("");
   useEffect(() => {
-    api.lists().then((ls) => setIds(ls.map((l) => l.listId))).catch((e) => setErr(String(e)));
+    api.directory().then((ls) => setIds(ls.map((l) => l.listId))).catch((e) => setErr(String(e)));
   }, []);
   if (err) return <p className="err">{err}</p>;
   if (!ORG) return <p className="muted">Set VITE_ORG_ID to view this org's newsletters.</p>;

@@ -54,6 +54,7 @@ import {
   type NewListDefaults,
   exportSubscriber,
   eraseSubscriber,
+  publicListDirectory,
   publicListView,
   recordAudit,
   setBranding,
@@ -1295,6 +1296,23 @@ export async function publicListHandler(event: HttpEvent): Promise<HttpResult> {
   }
 }
 
+/**
+ * GET /orgs/{org}/directory — the public newsletter directory (#124).
+ *
+ * Unauthenticated, and named `directory` rather than `lists/public` so it can
+ * never become ambiguous with `/orgs/{org}/lists/{list}` for a list whose id
+ * happens to be "public".
+ */
+export async function publicDirectoryHandler(event: HttpEvent): Promise<HttpResult> {
+  try {
+    const orgId = event.pathParameters?.org ?? "";
+    if (!orgId) return json(400, { error: "org required" });
+    return json(200, await publicListDirectory(stores(), orgId));
+  } catch (e) {
+    return fail(e);
+  }
+}
+
 /** POST /webhooks/entitlement — signed webhook from the billing SoR (§4.3). */
 export async function entitlementSyncHandler(event: HttpEvent): Promise<HttpResult> {
   try {
@@ -1396,6 +1414,7 @@ const PUBLIC_ROUTES: Record<string, RouteHandler> = {
   "GET /confirm": confirmHandler,
   "POST /unsubscribe": unsubscribeHandler,
   "GET /orgs/{org}/lists/{list}/public": publicListHandler,
+  "GET /orgs/{org}/directory": publicDirectoryHandler,
   "GET /version": versionHandler,
   "POST /webhooks/entitlement": entitlementSyncHandler,
   "POST /webhooks/identity": identitySyncHandler,

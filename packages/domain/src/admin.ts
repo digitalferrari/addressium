@@ -232,6 +232,38 @@ export async function publicListView(
 }
 
 /**
+ * The public newsletter directory (#124).
+ *
+ * The subscriber site was calling the ADMIN `GET /orgs/{org}/lists`, which is
+ * behind the console's JWT authorizer — so the browse page, the front door of
+ * the whole public site, could only ever have returned 401.
+ *
+ * Reusing that handler by making it public would have been the wrong fix twice
+ * over. It returns every list including **closed** ones, which a directory must
+ * not advertise, and it returns `fromAddress`, `complianceFooter` and
+ * `physicalAddress` — operational fields that belong to the operator, not to
+ * anyone who loads a web page. This returns the same shape `publicListView`
+ * already established for a single list, for the lists a stranger may see.
+ */
+export async function publicListDirectory(
+  stores: Stores,
+  orgId: string,
+): Promise<NonNullable<Awaited<ReturnType<typeof publicListView>>>[]> {
+  const lists = await stores.lists.list(orgId);
+  const out: NonNullable<Awaited<ReturnType<typeof publicListView>>>[] = [];
+  for (const l of lists) {
+    // `closed` means "not accepting signups"; showing it in a directory invites
+    // people to a door that will not open.
+    if (l.visibility === "closed") continue;
+    const view = await publicListView(stores, orgId, l.listId);
+    if (view) out.push(view);
+  }
+  // Stable, name-ordered — a directory whose order shifts between loads reads
+  // as broken.
+  return out.sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/**
  * Manually suppress an address (admin action): add an org-scoped suppression
  * entry and, if the subscriber exists, flip it to `suppressed`. Returns whether
  * a subscriber record was flipped.

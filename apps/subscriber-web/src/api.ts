@@ -35,7 +35,13 @@ export interface PublicList {
 
 export const api = {
   branding: () => j<Branding | null>("GET", `/orgs/${ORG}/branding`),
-  lists: () => j<Array<{ listId: string }>>("GET", `/orgs/${ORG}/lists`),
+  /**
+   * The public directory (#124). Returns the FULL public view of every open
+   * list in one call, so a browse page needs no follow-up request per list —
+   * and `closed` lists never appear, because a directory that advertises a list
+   * nobody can join is worse than one that omits it.
+   */
+  directory: () => j<PublicList[]>("GET", `/orgs/${ORG}/directory`),
   publicList: (listId: string) => j<PublicList>("GET", `/orgs/${ORG}/lists/${listId}/public`),
   signup: (email: string, listId: string) => j<{ status: string }>("POST", `/signup`, { orgId: ORG, email, listId }),
   signupMany: (email: string, listIds: string[]) =>

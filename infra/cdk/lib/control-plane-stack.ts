@@ -973,6 +973,16 @@ export class ControlPlaneStack extends Stack {
       methods: [HttpMethod.GET],
       integration: new HttpLambdaIntegration("PublicBrandingInt", publicBrandingFn),
     });
+    // The browse page of the public subscriber site (#124). It was calling the
+    // ADMIN /orgs/{org}/lists, which sits behind the console authorizer, so the
+    // front door of the whole public site could only ever have returned 401.
+    const publicDirectoryFn = fn("PublicDirectoryFn", apiEntry, "publicDirectoryHandler", apiEnv);
+    table.grantReadData(publicDirectoryFn);
+    api.addRoutes({
+      path: "/orgs/{org}/directory",
+      methods: [HttpMethod.GET],
+      integration: new HttpLambdaIntegration("PublicDirectoryInt", publicDirectoryFn),
+    });
     const publicListFn = fn("PublicListFn", apiEntry, "publicListHandler", apiEnv);
     table.grantReadData(publicListFn);
     api.addRoutes({

@@ -110,3 +110,50 @@ test("the subscriber-account provisioner is reachable from NO route (#23)", () =
   // ...and CDK must not register a route for it either.
   assert.doesNotMatch(readFileSync(STACK, "utf8"), /adminRoute\([^)]*subscriberAccountHandler/);
 });
+
+/**
+ * No public SPA may call an authenticated route (#124).
+ *
+ * The subscriber site's browse page called the ADMIN `GET /orgs/{org}/lists`,
+ * which sits behind the console's JWT authorizer — so the front door of the
+ * entire public site could only ever have returned 401. Nothing caught it,
+ * because both halves were individually correct: the route existed, the client
+ * called a real path, and only the AUTH POSTURE between them was wrong.
+ *
+ * This asserts the posture. It reads the CDK stack for which paths carry an
+ * authorizer, and the unauthenticated SPAs for which paths they call.
+ */
+function publicPaths(): Set<string> {
+  const src = readFileSync(STACK, "utf8");
+  const open = new Set<string>();
+  for (const m of src.matchAll(/api\.addRoutes\(\{(.*?)\}\);/gs)) {
+    const body = m[1]!;
+    if (/authorizer/.test(body)) continue;
+    const p = /path:\s*"([^"]+)"/.exec(body);
+    if (p) open.add(p[1]!);
+  }
+  return open;
+}
+
+/** `/orgs/summit/directory` -> `/orgs/{org}/directory`, so it matches a template. */
+const templatize = (path: string): string =>
+  path.replace(/\$\{[^}]+\}/g, "{p}").replace(/\{[^}]+\}/g, "{p}");
+
+test("every route the unauthenticated SPAs call is registered WITHOUT an authorizer", () => {
+  const open = new Set([...publicPaths()].map(templatize));
+  assert.ok(open.size > 0, "regex must actually match the public route registrations");
+
+  for (const rel of ["apps/subscriber-web/src/api.ts", "apps/public-web/src/App.tsx"]) {
+    const src = readFileSync(resolve(REPO_ROOT, rel), "utf8");
+    // Template literals of the form `/orgs/${ORG}/thing` or `/signup`.
+    for (const m of src.matchAll(/`(\/[a-zA-Z0-9/${}_.-]*)`/g)) {
+      const raw = m[1]!.split("?")[0]!;
+      if (!raw.startsWith("/")) continue;
+      const path = templatize(raw);
+      assert.ok(
+        open.has(path),
+        `${rel} calls ${raw} (${path}), which is NOT a public route — it will 401`,
+      );
+    }
+  }
+});
