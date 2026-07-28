@@ -271,7 +271,24 @@ export interface NewListDefaults {
   physicalAddress: string;
 }
 
+export interface TeamMemberRow {
+  username: string;
+  email: string;
+  role: "developer_admin" | "editor" | "analyst" | "support";
+  orgs: string[];
+  enabled: boolean;
+  status?: string;
+  capabilities: string[];
+}
+
 export const api = {
+  team: (org: string) => call<TeamMemberRow[]>("GET", `/orgs/${org}/team`),
+  inviteMember: (orgId: string, email: string, role: string, orgs: string[]) =>
+    call<TeamMemberRow>("POST", `/team`, { orgId, action: "invite", email, role, orgs }),
+  setMemberAccess: (orgId: string, username: string, role: string, orgs: string[]) =>
+    call<TeamMemberRow>("POST", `/team`, { orgId, action: "access", username, role, orgs }),
+  setMemberEnabled: (orgId: string, username: string, enabled: boolean) =>
+    call<{ ok: boolean }>("POST", `/team`, { orgId, action: enabled ? "enable" : "disable", username }),
   /**
    * Bulk export (#224). Fetched rather than linked: the route is authorized, and
    * a plain <a href> carries no Authorization header, so navigating to it would

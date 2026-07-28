@@ -685,8 +685,30 @@ export class ControlPlaneStack extends Stack {
     // authorizer attaches per route, so a `$default` would have erased the
     // public/authenticated boundary. This keeps the boundary and drops the
     // duplication.
-    const adminApiFn = fn("AdminApiFn", apiEntry, "adminRouter", apiEnv);
+    const adminApiFn = fn("AdminApiFn", apiEntry, "adminRouter", {
+      ...apiEnv,
+      // Team management (#226) acts on OUR admin pool, not the operator's
+      // subscriber directory.
+      ADMIN_POOL_ID: adminPool.userPoolId,
+    });
     table.grantReadWriteData(adminApiFn);
+    // Scoped to this pool only, and to the four actions team management needs —
+    // not cognito-idp:* on the account. The router is internet-facing, so a
+    // wildcard here would let one compromised route reach every pool in the
+    // account, including the operator's subscriber directories.
+    adminApiFn.addToRolePolicy(
+      new PolicyStatement({
+        effect: Effect.ALLOW,
+        actions: [
+          "cognito-idp:ListUsers",
+          "cognito-idp:AdminCreateUser",
+          "cognito-idp:AdminUpdateUserAttributes",
+          "cognito-idp:AdminEnableUser",
+          "cognito-idp:AdminDisableUser",
+        ],
+        resources: [adminPool.userPoolArn],
+      }),
+    );
     const adminApiInt = new HttpLambdaIntegration("AdminApiInt", adminApiFn);
     const adminRoute = (_id: string, _handler: string, method: HttpMethod, path: string) => {
       api.addRoutes({
@@ -791,6 +813,9 @@ export class ControlPlaneStack extends Stack {
     adminRoute("UnsuppressFn", "subscriberUnsuppressHandler", HttpMethod.POST, "/subscribers/unsuppress");
     // Subscriber migration (#100) + GDPR/CCPA data-subject requests (#101).
     adminRoute("ImportFn", "importHandler", HttpMethod.POST, "/orgs/{org}/import");
+    // Team management (#226) — deployment-wide members, gated on team:manage.
+    adminRoute("TeamGetFn", "teamHandler", HttpMethod.GET, "/orgs/{org}/team");
+    adminRoute("TeamPostFn", "teamHandler", HttpMethod.POST, "/team");
     // Bulk portability (#224) — the whole org, re-importable.
     adminRoute("ExportFn", "exportHandler", HttpMethod.GET, "/orgs/{org}/export");
     // Field mapper (#216): preview writes nothing; mapped runs the import.

@@ -30,6 +30,7 @@ export * from "./feed.js";
 export * from "./ssrf.js";
 export * from "./provisioning.js";
 export * from "./admin.js";
+export * from "./team.js";
 export * from "./drip.js";
 export * from "./resend.js";
 export * from "./reengagement.js";

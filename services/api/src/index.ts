@@ -6,6 +6,7 @@
  * lives here. See docs/ARCHITECTURE.md §4.2–4.3, §4.12.
  */
 import {
+  CognitoAdminDirectory,
   CognitoSubscriberAccounts,
   DynamoStores,
   EventBridgeScheduler,
@@ -33,9 +34,14 @@ import {
   provisionSubscriberAccount,
   manualSuppress,
   liftSuppression,
+  capabilitiesOf,
   exportCsv,
   exportJsonl,
   importCsvSubscribers,
+  inviteMember,
+  listTeam,
+  setMemberAccess,
+  setMemberEnabled,
   importWithMapping,
   previewCsv,
   suggestMapping,
@@ -658,6 +664,66 @@ export async function subscriberUnsuppressHandler(event: HttpEvent): Promise<Htt
  * caller sets status; suppressed addresses are skipped by the domain importer.
  */
 /**
+ * Admin team management (#226) — GET/POST /team.
+ *
+ * Gated on `team:manage`, which only `developer_admin` holds. Scoped to the
+ * caller's own org for the authorization check, but the underlying pool is
+ * deployment-wide: an admin manages the deployment's members, not one org's.
+ */
+function directory(): CognitoAdminDirectory {
+  return new CognitoAdminDirectory(env("ADMIN_POOL_ID"));
+}
+
+export async function teamHandler(event: HttpEvent): Promise<HttpResult> {
+  try {
+    const method = event.requestContext?.http?.method ?? (event.body ? "POST" : "GET");
+    if (method === "GET") {
+      const orgId = event.pathParameters?.org ?? event.queryStringParameters?.orgId ?? "";
+      requireGrant(event, "team:manage", orgId);
+      const members = await listTeam(directory());
+      return json(200, members.map((m) => ({ ...m, capabilities: capabilitiesOf(m.role) })));
+    }
+
+    const body = JSON.parse(event.body ?? "{}") as {
+      orgId?: string;
+      action?: "invite" | "access" | "enable" | "disable";
+      email?: string;
+      username?: string;
+      role?: string;
+      orgs?: string[];
+    };
+    if (!body.orgId) return json(400, { error: "orgId required" });
+    requireGrant(event, "team:manage", body.orgId);
+
+    switch (body.action) {
+      case "invite":
+        return json(200, await inviteMember(directory(), {
+          email: body.email ?? "",
+          role: body.role ?? "",
+          orgs: body.orgs ?? [],
+        }));
+      case "access":
+        if (!body.username) return json(400, { error: "username required" });
+        return json(200, await setMemberAccess(directory(), body.username, {
+          role: body.role ?? "",
+          orgs: body.orgs ?? [],
+        }));
+      case "enable":
+      case "disable":
+        if (!body.username) return json(400, { error: "username required" });
+        await setMemberEnabled(directory(), body.username, body.action === "enable");
+        return json(200, { ok: true });
+      default:
+        return json(400, { error: "unknown action" });
+    }
+  } catch (e) {
+    // TeamError carries the operator-facing reason — "this is the last enabled
+    // developer admin" needs to reach the console, not become a generic 400.
+    return fail(e);
+  }
+}
+
+/**
  * GET /orgs/{org}/export?format=csv|jsonl — bulk portability (#224).
  *
  * Distinct from `POST /privacy` (one subject, GDPR DSAR). This is the whole
@@ -1038,6 +1104,8 @@ const ADMIN_ROUTES: Record<string, RouteHandler> = {
   "POST /subscribers/unsubscribe": subscriberUnsubscribeHandler,
   "POST /subscribers/unsuppress": subscriberUnsuppressHandler,
   "POST /orgs/{org}/import": importHandler,
+  "GET /orgs/{org}/team": teamHandler,
+  "POST /team": teamHandler,
   "GET /orgs/{org}/export": exportHandler,
   "POST /orgs/{org}/import/preview": importPreviewHandler,
   "POST /orgs/{org}/import/mapped": importMappedHandler,

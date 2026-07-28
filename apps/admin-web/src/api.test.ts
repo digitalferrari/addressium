@@ -169,3 +169,25 @@ test("exportData() surfaces a failed export instead of downloading an error page
   fetchMock.mockResolvedValueOnce({ ok: false, status: 403, text: async () => "forbidden" });
   await expect(api.exportData("acme", "jsonl", false)).rejects.toThrow(/403/);
 });
+
+test("team() GETs the deployment's members", async () => {
+  await api.team("acme");
+  const { url, init } = lastCall();
+  expect(url).toMatch(/\/orgs\/acme\/team$/);
+  expect(init.method).toBe("GET");
+});
+
+test("inviteMember() POSTs the grant", async () => {
+  await api.inviteMember("acme", "new@x.com", "editor", ["acme"]);
+  const body = JSON.parse(String(lastCall().init.body));
+  expect(body.action).toBe("invite");
+  expect(body.role).toBe("editor");
+  expect(body.orgs).toEqual(["acme"]);
+});
+
+test("setMemberEnabled() maps the boolean to an explicit action", async () => {
+  await api.setMemberEnabled("acme", "u1", false);
+  expect(JSON.parse(String(lastCall().init.body)).action).toBe("disable");
+  await api.setMemberEnabled("acme", "u1", true);
+  expect(JSON.parse(String(lastCall().init.body)).action).toBe("enable");
+});

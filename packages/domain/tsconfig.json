@@ -4,9 +4,19 @@
     "outDir": "dist",
     "rootDir": "."
   },
-  "include": ["src/**/*.ts", "test/**/*.ts"],
+  "include": [
+    "src/**/*.ts",
+    "test/**/*.ts"
+  ],
   "references": [
-    { "path": "../core" },
-    { "path": "../magiclink-verify" }
+    {
+      "path": "../core"
+    },
+    {
+      "path": "../magiclink-verify"
+    },
+    {
+      "path": "../rbac"
+    }
   ]
 }

@@ -4,6 +4,21 @@
     "outDir": "dist",
     "rootDir": "src"
   },
-  "include": ["src/**/*.ts"],
-  "references": [{ "path": "../core" }, { "path": "../domain" }, { "path": "../segment" }]
+  "include": [
+    "src/**/*.ts"
+  ],
+  "references": [
+    {
+      "path": "../core"
+    },
+    {
+      "path": "../domain"
+    },
+    {
+      "path": "../segment"
+    },
+    {
+      "path": "../rbac"
+    }
+  ]
 }
