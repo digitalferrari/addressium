@@ -61,7 +61,6 @@ import { LambdaInvoke } from "aws-cdk-lib/aws-stepfunctions-tasks";
 import { CfnWebACLAssociation } from "aws-cdk-lib/aws-wafv2";
 import { Stream, StreamMode } from "aws-cdk-lib/aws-kinesis";
 import { StaticSite } from "./static-site.js";
-import { makeCloudFrontWebAcl, makeRegionalWebAcl } from "./waf.js";
 import { wireAnalytics } from "./analytics.js";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../../..");
@@ -87,6 +86,16 @@ export interface ControlPlaneStackProps extends StackProps {
   opsAlertTopicArn?: string;
   /** Create a topic and subscribe this address. Ignored when the ARN is set. */
   opsAlertEmail?: string;
+  /**
+   * A REGIONAL WebACL the operator owns, associated with the HTTP API stage
+   * (#225). Absent means no association — the stack never creates one.
+   */
+  apiWebAclArn?: string;
+  /**
+   * A CLOUDFRONT-scope WebACL (must live in us-east-1), attached to both SPA
+   * distributions. Absent means no association.
+   */
+  cloudfrontWebAclArn?: string;
 }
 
 export class ControlPlaneStack extends Stack {
@@ -968,22 +977,33 @@ export class ControlPlaneStack extends Stack {
       }),
     );
 
-    // ---- WAF (managed rule sets + per-IP rate limit + signup CAPTCHA, §5, #20) ----
-    // REGIONAL ACL on the HTTP API stage; CLOUDFRONT ACL on the SPA distributions.
-    const apiWebAcl = makeRegionalWebAcl(this, "ApiWebAcl");
-    const stage = api.defaultStage;
-    if (stage) {
+    // ---- WAF: OPERATOR-SUPPLIED (#225, compendium #30/#31/#66) ----
+    //
+    // The stack used to create both ACLs. Three problems, all real:
+    //
+    //  1. A resource carries only ONE WebACL. An operator attaching their own
+    //     displaced ours, and the next `cdk deploy` silently put ours back —
+    //     their protection disappearing on a routine deploy, with no error.
+    //  2. ~$17/month against a ~$4 idle bill: the largest standing cost in a
+    //     stack whose whole pitch is that it costs almost nothing at rest.
+    //  3. A CLOUDFRONT-scope ACL is only creatable in us-east-1, so any
+    //     deployment configured for another region failed at deploy time.
+    //
+    // We now associate what the operator gives us and emit the ARNs they need
+    // to attach one themselves. Alert routing and edge protection are
+    // account-wide concerns addressium does not take over.
+    const apiStage = api.defaultStage;
+    if (props.apiWebAclArn && apiStage) {
       const assoc = new CfnWebACLAssociation(this, "ApiWebAclAssoc", {
         resourceArn: Stack.of(this).formatArn({
           service: "apigateway",
-          resource: `/apis/${api.apiId}/stages/${stage.stageName}`,
+          resource: `/apis/${api.apiId}/stages/${apiStage.stageName}`,
           account: "",
         }),
-        webAclArn: apiWebAcl.attrArn,
+        webAclArn: props.apiWebAclArn,
       });
-      assoc.node.addDependency(stage);
+      assoc.node.addDependency(apiStage);
     }
-    const cfWebAcl = makeCloudFrontWebAcl(this, "CfWebAcl");
 
     // ---- OpenSearch segmentation mirror (opt-in, §5, #28) ----
     if (enableOpenSearchMirror) {
@@ -1051,8 +1071,8 @@ export class ControlPlaneStack extends Stack {
     // ---- frontends (static SPAs on S3 + CloudFront, §4.1–4.2) ----
     const prod = props.stage === "prod";
     // Assign the hoisted bindings the Cognito callback URLs and CORS resolve from.
-    adminSite = new StaticSite(this, "AdminSite", { prod, webAclId: cfWebAcl.attrArn }); // apps/admin-web
-    publicSite = new StaticSite(this, "PublicSite", { prod, webAclId: cfWebAcl.attrArn }); // apps/subscriber-web + public-web
+    adminSite = new StaticSite(this, "AdminSite", { prod, ...(props.cloudfrontWebAclArn ? { webAclId: props.cloudfrontWebAclArn } : {}) }); // apps/admin-web
+    publicSite = new StaticSite(this, "PublicSite", { prod, ...(props.cloudfrontWebAclArn ? { webAclId: props.cloudfrontWebAclArn } : {}) }); // apps/subscriber-web + public-web
 
     // ---- outputs ----
     new CfnOutput(this, "AdminPoolId", { value: adminPool.userPoolId });
@@ -1071,6 +1091,29 @@ export class ControlPlaneStack extends Stack {
     new CfnOutput(this, "PublicSiteUrl", { value: publicSite.distribution.domainName });
     new CfnOutput(this, "PublicSiteBucket", { value: publicSite.bucket.bucketName });
     new CfnOutput(this, "AuditBucketName", { value: auditBucket.bucketName });
+
+    // The ARNs an operator needs to attach their own WebACL (#225, compendium
+    // #30/#31). Without these the documented runbook was unfollowable: there
+    // was no way to associate an ACL short of hand-deriving ARNs from the
+    // console.
+    if (apiStage) {
+      new CfnOutput(this, "ApiStageArn", {
+        value: Stack.of(this).formatArn({
+          service: "apigateway",
+          resource: `/apis/${api.apiId}/stages/${apiStage.stageName}`,
+          account: "",
+        }),
+        description: "Associate your REGIONAL WebACL with this",
+      });
+    }
+    new CfnOutput(this, "AdminDistributionId", {
+      value: adminSite.distribution.distributionId,
+      description: "Associate your CLOUDFRONT-scope WebACL with this",
+    });
+    new CfnOutput(this, "PublicDistributionId", {
+      value: publicSite.distribution.distributionId,
+      description: "Associate your CLOUDFRONT-scope WebACL with this",
+    });
 
     // ---- reporting read-model (§4.23) ----
     if (enableAnalytics && analyticsStream) {

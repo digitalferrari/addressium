@@ -73,6 +73,20 @@ if [[ -f "$CFG" ]]; then
     warn "dead-letter queue, or a failing bounce handler will page nobody."
     warn "Set one of them in ${CFG}."
   fi
+
+  # Edge protection is the operator's (#225). The stack no longer creates a
+  # WebACL, so an unconfigured deploy is genuinely unprotected rather than
+  # protected by something we made.
+  WAF_API="$(python3 -c "import json;print(json.load(open('$CFG')).get('apiWebAclArn','').strip())" 2>/dev/null || echo "")"
+  WAF_CF="$(python3 -c "import json;print(json.load(open('$CFG')).get('cloudfrontWebAclArn','').strip())" 2>/dev/null || echo "")"
+  if [[ -n "$WAF_API" && -n "$WAF_CF" ]]; then
+    ok "WAF associations configured for the API and both distributions"
+  else
+    [[ -z "$WAF_API" ]] && warn "no apiWebAclArn — the public API has no WAF in front of it"
+    [[ -z "$WAF_CF" ]] && warn "no cloudfrontWebAclArn — the SPA distributions have no WAF"
+    warn "addressium does not create WebACLs. Attach your own to the ApiStageArn"
+    warn "and *DistributionId stack outputs, then set the ARNs in ${CFG}."
+  fi
 else
   warn "no ${CFG} — cannot check alert routing"
 fi

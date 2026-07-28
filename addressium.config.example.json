@@ -9,5 +9,9 @@
 
   "$comment_alerts": "Where infrastructure alarms go (DLQ depth, queue age, Lambda errors/throttles, DynamoDB throttles). Set opsAlertTopicArn to an SNS topic you already own — alert routing is your infrastructure, not ours. If you have no topic yet, set opsAlertEmail instead and addressium will create one and subscribe that address. Set NEITHER and every alarm fires into a void: `npm run deploy:check` will warn you.",
   "opsAlertTopicArn": "",
-  "opsAlertEmail": ""
+  "opsAlertEmail": "",
+
+  "$comment_waf": "addressium does NOT create WAF WebACLs — a resource carries only one, so ours would displace yours and silently reattach on every deploy. Create your own (REGIONAL for the API, CLOUDFRONT-scope in us-east-1 for the SPAs), attach them to the ApiStageArn / AdminDistributionId / PublicDistributionId stack outputs, and record the ARNs here. `npm run deploy:check` warns when these are unset.",
+  "apiWebAclArn": "",
+  "cloudfrontWebAclArn": ""
 }

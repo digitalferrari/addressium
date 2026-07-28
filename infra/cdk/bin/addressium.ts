@@ -32,6 +32,10 @@ interface BootstrapConfig {
    * address. Ignored when `opsAlertTopicArn` is set.
    */
   opsAlertEmail?: string;
+  /** A REGIONAL WebACL you own, associated with the API stage (#225). */
+  apiWebAclArn?: string;
+  /** A CLOUDFRONT-scope WebACL (us-east-1) for both SPA distributions. */
+  cloudfrontWebAclArn?: string;
 }
 
 function loadConfig(): BootstrapConfig {
@@ -48,6 +52,8 @@ function loadConfig(): BootstrapConfig {
       adminHostedUiDomainPrefix: cfg.adminHostedUiDomainPrefix ?? "addressium-admin",
       opsAlertTopicArn: cfg.opsAlertTopicArn,
       opsAlertEmail: cfg.opsAlertEmail,
+      apiWebAclArn: cfg.apiWebAclArn,
+      cloudfrontWebAclArn: cfg.cloudfrontWebAclArn,
     };
   } catch (err) {
     throw new Error(
@@ -65,6 +71,8 @@ new ControlPlaneStack(app, `addressium-${config.stage}`, {
   adminHostedUiDomainPrefix: config.adminHostedUiDomainPrefix,
   opsAlertTopicArn: config.opsAlertTopicArn,
   opsAlertEmail: config.opsAlertEmail,
+  apiWebAclArn: config.apiWebAclArn,
+  cloudfrontWebAclArn: config.cloudfrontWebAclArn,
   env: {
     account: process.env.CDK_DEFAULT_ACCOUNT,
     region: config.region,

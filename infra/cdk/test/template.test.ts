@@ -131,6 +131,28 @@ test("log retention is 90 days in prod and 7 otherwise", () => {
   }
 });
 
+test("the stack creates NO WebACL of its own (#225)", () => {
+  const t = template();
+  // A resource carries only one WebACL, so creating our own displaced the
+  // operator's — and put ours back on the next deploy, silently.
+  assert.deepEqual(Object.keys(t.findResources("AWS::WAFv2::WebACL")), []);
+  assert.deepEqual(Object.keys(t.findResources("AWS::WAFv2::WebACLAssociation")), []);
+});
+
+test("the ARNs needed to attach your own WebACL are exported (#225)", () => {
+  const outs = template().toJSON().Outputs ?? {};
+  // Without these the documented runbook is unfollowable.
+  assert.ok("ApiStageArn" in outs);
+  assert.ok("AdminDistributionId" in outs);
+  assert.ok("PublicDistributionId" in outs);
+});
+
+test("supplying a WebACL ARN produces an association and still creates no ACL", () => {
+  const t = template({ apiWebAclArn: "arn:aws:wafv2:us-east-1:111122223333:regional/webacl/mine/abc" });
+  assert.equal(Object.keys(t.findResources("AWS::WAFv2::WebACLAssociation")).length, 1);
+  assert.deepEqual(Object.keys(t.findResources("AWS::WAFv2::WebACL")), []);
+});
+
 test("the analytics tier is absent unless explicitly enabled", () => {
   const t = template();
   for (const type of [
