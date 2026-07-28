@@ -184,12 +184,16 @@ vector.
   cannot be weaponized to spam third parties.
 - **Per-org sending quotas + anomaly alerts** (complaint/bounce spikes → SNS,
   auto-halt thresholds).
-- **Honeypot + opt-in reCAPTCHA** on `/signup` and `/signup/batch` (#40), run
-  before any work is done. Two limits worth stating rather than glossing:
-  reCAPTCHA runs **only** when the org has set `recaptchaSecretArn`, so it is
-  off unless configured; and no first-party client renders the trap field yet,
-  so the honeypot currently catches only bots that invent it. The server-side
-  half is built and tested; end-to-end honeypot coverage is not.
+- **Honeypot + opt-in reCAPTCHA** on `/signup` and `/signup/batch` (#40, #230),
+  run before any work is done. The honeypot is end-to-end: both the hosted
+  signup page and the embed widget render an off-screen, `aria-hidden`,
+  `tabindex="-1"` trap and post it, and a filled one yields a silent `202
+  pending` — no subscriber written, no mail sent, and no signal to the caller
+  that it was caught. The field name is a single exported constant so the check
+  and the clients cannot drift; a drift would fail **open** and, because a
+  caught bot looks exactly like a successful signup, would go unreported. The
+  limit worth stating: reCAPTCHA runs **only** when the org has set
+  `recaptchaSecretArn`, so it is off unless configured.
 - **AWS Budgets** alarms are the spend cap that ships. WAF **rate-based rules**
   and a WAF **CAPTCHA** rule are the operator's to add (#30, #31)
   **[Decided r2 — not yet built]** — so until an operator WebACL is associated,

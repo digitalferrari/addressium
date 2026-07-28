@@ -314,15 +314,25 @@ and the stack still associates them, unconditionally, in every stage; and the
 stack emits **no** API stage ARN or distribution ARN for an operator to attach
 their own to.
 
-**Signup bot protection is half-shipped.** The server-side honeypot check is
-built and tested (a tripped trap returns a silent `202 pending`, so a scraper
-cannot tell it was caught), and reCAPTCHA verification runs when — and only
-when — the org configures `signupProtection.recaptchaSecretArn`, so it is
-**off by default**. But no first-party client renders the trap field: the hosted
-signup page and the embed widget post `{orgId, email, listId}` and nothing else.
-A honeypot whose trap field never appears in the shipped form catches only bots
-that invent it. Emitting the field from the public site is
-**[Decided r2 — not yet built]**.
+**Signup bot protection** (#40, #170, #230). The server-side honeypot check runs
+before any work is done, and a tripped trap returns a silent `202 pending` so a
+scraper cannot tell it was caught. **Both** first-party clients render the trap:
+the embed widget always did, and the hosted signup page — the one addressium
+itself serves and links from the subscriber directory — was the gap #230 closed.
+That asymmetry is what made it easy to miss, since anyone testing the embed saw
+the protection work.
+
+The field is off-screen rather than `display:none` (a bot that skips obviously
+hidden inputs still fills it) with `aria-hidden` and `tabindex="-1"` keeping
+humans out instead. Its name comes from `HONEYPOT_FIELD` in `@addressium/core`,
+consumed by the check and by both React clients; `embed.js` is served as a plain
+static script with no build step and cannot import it, so a test asserts the two
+still agree. A drifted name fails **open** — the trap stops matching, every bot
+passes, and the silent `202` means nothing reports it.
+
+reCAPTCHA verification runs when — and only when — the org configures
+`signupProtection.recaptchaSecretArn`, so it is **off by default** and does not
+compensate for a missing trap.
 
 ### 4.4 Sender (`services/sender`)
 

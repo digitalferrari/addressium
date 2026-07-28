@@ -5,6 +5,7 @@
  * widget against the operator's org + list.
  */
 import { useMemo, useState } from "react";
+import { HONEYPOT_ATTRS, HONEYPOT_FIELD } from "@addressium/core";
 
 const BASE = import.meta.env.VITE_API_BASE ?? "";
 const ORG = import.meta.env.VITE_ORG_ID ?? "your-org";
@@ -30,13 +31,21 @@ export function SignupForm({ defaultList }: { defaultList?: string }) {
   const [listId, setListId] = useState(defaultList ?? "");
   const [msg, setMsg] = useState("");
   const [err, setErr] = useState("");
+  // Honeypot (#230). The server-side check and the embed widget both had this;
+  // the page addressium itself hosts and links from the subscriber directory did
+  // not — so the trap could never trip on the one public page an operator is most
+  // likely to deploy and least likely to probe as an attacker. reCAPTCHA does not
+  // cover it: that runs only when an org configures a secret, which is off by
+  // default. Held in React state rather than read from the DOM so the value
+  // cannot be lost to a re-render between fill and submit.
+  const [trap, setTrap] = useState("");
   const submit = async () => {
     setMsg(""); setErr("");
     try {
       const res = await fetch(`${BASE}/signup`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ orgId: ORG, email, listId }),
+        body: JSON.stringify({ orgId: ORG, email, listId, [HONEYPOT_FIELD]: trap }),
       });
       if (!res.ok) throw new Error(await res.text());
       const j = (await res.json()) as { status: string };
@@ -52,6 +61,21 @@ export function SignupForm({ defaultList }: { defaultList?: string }) {
       <div className="row">
         <input placeholder="you@example.com" value={email} onChange={(e) => setEmail(e.target.value)} />
       </div>
+      {/*
+        Off-screen rather than `display:none` or `hidden`: a bot that skips
+        obviously-hidden inputs still fills this one, and screen readers are kept
+        out by aria-hidden + tabIndex rather than by visibility. Same attributes
+        as embed.js, from the same constant.
+      */}
+      <input
+        name={HONEYPOT_FIELD}
+        value={trap}
+        onChange={(e) => setTrap(e.target.value)}
+        tabIndex={HONEYPOT_ATTRS.tabIndex}
+        autoComplete={HONEYPOT_ATTRS.autoComplete}
+        aria-hidden={HONEYPOT_ATTRS["aria-hidden"]}
+        style={HONEYPOT_ATTRS.style}
+      />
       {!defaultList && (
         <>
           <label>List id</label>

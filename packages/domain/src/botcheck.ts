@@ -9,9 +9,21 @@
  *   The verifier is a port so it's injectable/optional (skipped when the org
  *   hasn't configured a secret) and unit-testable without calling Google.
  */
+import { HONEYPOT_FIELD } from "@addressium/core";
 
-/** True when the honeypot field is filled — i.e. a bot. Humans never see the field. */
-export function isHoneypotTripped(fields: Record<string, unknown>, fieldName = "website"): boolean {
+
+/**
+ * True when the honeypot field is filled — i.e. a bot. Humans never see the field.
+ *
+ * The default name comes from `@addressium/core` rather than a literal here
+ * (#230): the check and every client that renders the trap must agree, and a
+ * mismatch fails OPEN — the trap quietly stops catching anything, and because a
+ * caught bot is answered with a silent 202, nothing reports the difference.
+ */
+export function isHoneypotTripped(
+  fields: Record<string, unknown>,
+  fieldName: string = HONEYPOT_FIELD,
+): boolean {
   const v = fields[fieldName];
   return typeof v === "string" && v.trim() !== "";
 }
