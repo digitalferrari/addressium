@@ -116,6 +116,23 @@ export function statusFor(
   return requested ?? "pending";
 }
 
+/**
+ * Columns that cannot support a `confirmed` import (#223).
+ *
+ * `statusFor` fails closed, so an implicit basis could never *produce* a
+ * confirmed subscription — but silently downgrading leaves an operator who asked
+ * to import a confirmed list believing it is mailable. This names the columns
+ * that block the request so the caller can be refused with a reason.
+ *
+ * Lives here rather than in the API handler because it is the same consent rule
+ * `statusFor` encodes; two copies in two layers is how the two drift.
+ */
+export function columnsBlockingConfirmed(plan: MappingPlan): string[] {
+  return Object.entries(plan.columns)
+    .filter(([, m]) => m.kind === "audience" && m.consentBasis !== "explicit")
+    .map(([header]) => header);
+}
+
 /** Deterministic id so re-running an import does not create a second copy of the same list. */
 const listIdFor = (name: string): string =>
   `imp_${name.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 48)}`;

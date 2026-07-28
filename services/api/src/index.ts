@@ -44,6 +44,7 @@ import {
   listTeam,
   setMemberAccess,
   setMemberEnabled,
+  columnsBlockingConfirmed,
   importWithMapping,
   previewCsv,
   suggestMapping,
@@ -925,6 +926,23 @@ export async function importMappedHandler(event: HttpEvent): Promise<HttpResult>
     };
     if (typeof body.csv !== "string" || !body.plan?.columns) {
       return json(400, { error: "csv and plan required" });
+    }
+    // Asking for `confirmed` against anything but an explicit basis is refused
+    // here rather than quietly downgraded (#223). `statusFor` would fail closed
+    // either way, but an operator who asked to import a confirmed list and got a
+    // 200 would believe it was mailable. The refusal is the whole point: the
+    // file does not carry the evidence the request assumes.
+    if (body.status === "confirmed") {
+      const weak = columnsBlockingConfirmed(body.plan);
+      if (weak.length > 0) {
+        return json(400, {
+          error:
+            `cannot import as confirmed: ${weak.length} audience column(s) declare an implicit ` +
+            `or absent consent basis, which proves an existing relationship rather than opt-in — ` +
+            `import as pending, or re-declare the basis as explicit if the file carries the evidence`,
+          columns: weak,
+        });
+      }
     }
     // A batch id is always stamped, so a bad file's rows stay findable even when
     // the caller did not think to supply one (#223).

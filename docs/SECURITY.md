@@ -264,15 +264,22 @@ narrower than it sounds is worse than one that is absent:
   which retain a pseudonymous subscriber id pointing at the now-anonymized
   profile. The accurate promise is "the profile is anonymized and the address is
   tombstoned", not "every trace of the person is gone".
-- **Export is per-subject only.** The DSAR path returns one subject's profile,
-  subscriptions, and entitlement as JSON. Bulk CSV/JSONL portability is
-  **Done** (#58, #224) — so the project's "you can export your
-  data at any time" promise is not yet true at the list level.
-- **Consent provenance is recorded on public double opt-in** (timestamp and
-  source URL, when the signup supplies one). The CSV importer records **no**
-  consent basis per row, so an imported subscriber has no provenance with which
-  to answer a later dispute; the import wizard that captures it is
-  **[Decided r2 — not yet built]** (#60).
+- **Export covers both the subject and the list.** The DSAR path returns one
+  subject's profile, subscriptions and entitlement as JSON; bulk CSV/JSONL
+  portability of a whole org, including a re-import plan, is done (#58, #224).
+- **Consent provenance is recorded on both paths** (#220, #223). A public double
+  opt-in writes the request timestamp, source URL and the confirming request's IP
+  and user-agent when the signup supplies them — absent stays absent, since a
+  fabricated `0.0.0.0` is worse than a missing field. An import writes the *same*
+  `SubscriptionConsent` shape: the declared basis, the batch id and the source
+  file, per row rather than per file, so a dispute is answered for the subscriber
+  who raised it. A row with no recorded basis reads as **unknown**, never as
+  explicit, and can only ever be `pending`. The API refuses a `confirmed` import
+  against an implicit or absent basis outright, naming the columns that blocked
+  it — downgrading in silence would leave the operator believing the list is
+  mailable. What an import still cannot prove is *when* the person opted in: a
+  Pinpoint `EffectiveDate` is an endpoint-update stamp, not consent evidence, and
+  is never presented as one.
 
 ### 4.8 Event-plane integrity & durability
 

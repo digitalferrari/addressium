@@ -10,7 +10,12 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { previewCsv, suggestMapping, type MappingPlan } from "../src/import-mapping.js";
-import { importWithMapping, statusFor, type NewListDefaults } from "../src/import-run.js";
+import {
+  columnsBlockingConfirmed,
+  importWithMapping,
+  statusFor,
+  type NewListDefaults,
+} from "../src/import-run.js";
 import { memStores } from "../src/memory.js";
 import type { Clock } from "../src/ports.js";
 
@@ -484,4 +489,25 @@ test("a mixed-basis file records no single basis rather than guessing one", asyn
   });
   const batch = await stores.importBatches.get(ORG, "batch-mixed");
   assert.equal(batch?.consentBasis, undefined, "two bases means no single answer");
+});
+
+test("columnsBlockingConfirmed names why a confirmed import must be refused", () => {
+  // statusFor already fails closed, so an implicit basis can never PRODUCE a
+  // confirmed row. But a 200 in response to "import this as confirmed" leaves an
+  // operator believing the list is mailable, so the API refuses with the columns
+  // that blocked it rather than downgrading in silence.
+  const implicit = suggestMapping(previewCsv(csv()), { consentBasis: "implicit" });
+  const blocked = columnsBlockingConfirmed(implicit);
+  assert.ok(blocked.length > 0);
+
+  const explicit = suggestMapping(previewCsv(csv()), { consentBasis: "explicit" });
+  assert.deepEqual(columnsBlockingConfirmed(explicit), []);
+
+  // One weak column is enough: the request covers the whole file.
+  const [first] = blocked;
+  const mixed = suggestMapping(previewCsv(csv()), { consentBasis: "explicit" });
+  const m = mixed.columns[first as string];
+  assert.ok(m && m.kind === "audience");
+  mixed.columns[first as string] = { ...m, consentBasis: "implicit" };
+  assert.deepEqual(columnsBlockingConfirmed(mixed), [first]);
 });
