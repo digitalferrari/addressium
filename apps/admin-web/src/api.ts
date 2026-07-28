@@ -297,7 +297,26 @@ export interface HealthReport {
   checkedAt: string;
 }
 
+export interface CreateOrgInput {
+  name: string;
+  primaryDomain: string;
+  siteDomain: string;
+  defaultTimezone?: string;
+  magicLinks: boolean;
+  subscriberPool?: { poolId: string };
+  environment: "prod" | "dev";
+  devAllowlist?: string[];
+  alertTopicArn?: string;
+}
+export interface CreateOrgResult {
+  orgId: string;
+  setupComplete: boolean;
+  alreadyExisted: boolean;
+  dns: { type: string; name: string; value: string }[];
+}
+
 export const api = {
+  createOrg: (input: CreateOrgInput) => call<CreateOrgResult>("POST", `/orgs`, input),
   health: (org: string) => call<HealthReport>("GET", `/orgs/${org}/health`),
   team: (org: string) => call<TeamMemberRow[]>("GET", `/orgs/${org}/team`),
   inviteMember: (orgId: string, email: string, role: string, orgs: string[]) =>

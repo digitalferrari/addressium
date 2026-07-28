@@ -18,9 +18,9 @@ import {
   type SendCostInput,
   type CostLine,
 } from "@addressium/domain/cost";
-import { api, type AlertRule, type Branding, type TeamMemberRow, type ColumnMapping, type ImportPreview, type MappedImportReport, type MappingPlan, type NewListDefaults, type CampaignReport, type DripStepDef, type EmailBlock, type ListPresentation, type ScheduleWhen, type SendScheduleState, type SetupState, type Template, type TemplateMode, type UsageRecord } from "./api.js";
+import { api, type AlertRule, type Branding, type CreateOrgInput, type CreateOrgResult, type TeamMemberRow, type ColumnMapping, type ImportPreview, type MappedImportReport, type MappingPlan, type NewListDefaults, type CampaignReport, type DripStepDef, type EmailBlock, type ListPresentation, type ScheduleWhen, type SendScheduleState, type SetupState, type Template, type TemplateMode, type UsageRecord } from "./api.js";
 
-type View = "dashboard" | "setup" | "templates" | "compose" | "report" | "usage" | "schedules" | "branding" | "presentation" | "subscribers" | "segments" | "import" | "privacy" | "drips" | "settings" | "costs" | "deliverability" | "importmap" | "team";
+type View = "dashboard" | "setup" | "templates" | "compose" | "report" | "usage" | "schedules" | "branding" | "presentation" | "subscribers" | "segments" | "import" | "privacy" | "drips" | "settings" | "costs" | "deliverability" | "importmap" | "team" | "addorg";
 
 export function App() {
   const [ready, setReady] = useState(false);
@@ -138,6 +138,7 @@ function Console() {
           <NavItem id="branding" label="Branding" cap="branding:manage" />
           <NavItem id="presentation" label="Presentation" cap="branding:manage" />
           <NavItem id="team" label="Team & access" cap="team:manage" />
+          <NavItem id="addorg" label="Add organization" cap="identity:manage" />
           <NavItem id="deliverability" label="Deliverability" cap="alerts:manage" />
           <NavItem id="settings" label="AI settings" cap="identity:manage" />
         </nav>
@@ -167,6 +168,7 @@ function Console() {
         {view === "branding" && <BrandingEditor org={org} />}
         {view === "presentation" && <PresentationEditor org={org} />}
         {view === "team" && <Team org={org} />}
+        {view === "addorg" && <AddOrganization />}
         {view === "deliverability" && <Deliverability org={org} />}
         {view === "settings" && <AiSettings org={org} />}
         </div>
@@ -1693,6 +1695,125 @@ function PresentationEditor({ org }: { org: string }) {
 
 
 
+
+
+/**
+ * Add organization (#226) — the last piece of "invite the rest of the team
+ * through the console" that had no surface.
+ *
+ * Provisioning is not reversible in one click: it creates a KMS key, an SES
+ * identity and a configuration set. So this screen states what will be created
+ * before it creates it, and surfaces the DNS records afterwards — a new org that
+ * cannot send because nobody saw the DKIM records is the common failure.
+ */
+function AddOrganization() {
+  const [form, setForm] = useState<CreateOrgInput>({
+    name: "",
+    primaryDomain: "",
+    siteDomain: "",
+    defaultTimezone: "UTC",
+    magicLinks: false,
+    environment: "prod",
+  });
+  const [poolId, setPoolId] = useState("");
+  const [result, setResult] = useState<CreateOrgResult | null>(null);
+  const [msg, setMsg] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const set = (patch: Partial<CreateOrgInput>) => setForm((f) => ({ ...f, ...patch }));
+
+  const submit = async () => {
+    setBusy(true); setMsg(""); setResult(null);
+    try {
+      const body: CreateOrgInput = {
+        ...form,
+        ...(form.magicLinks && poolId.trim() ? { subscriberPool: { poolId: poolId.trim() } } : {}),
+      };
+      setResult(await api.createOrg(body));
+    } catch (e) { setMsg((e as Error).message); } finally { setBusy(false); }
+  };
+
+  return (
+    <div>
+      <h2>Add organization</h2>
+      <p className="muted">
+        Creates a silo: its own SES identity and configuration set, and — with magic links on — a
+        per-org KMS signing key. Provisioning is idempotent on the derived org id.
+      </p>
+
+      <div className="card">
+        <label>Name<input value={form.name} onChange={(e) => set({ name: e.target.value })} /></label>
+        <label>
+          Sending domain
+          <input value={form.primaryDomain} onChange={(e) => set({ primaryDomain: e.target.value })} placeholder="mail.example.com" />
+          <div className="muted">SES verifies this; you publish the DKIM records shown after.</div>
+        </label>
+        <label>
+          Site domain
+          <input value={form.siteDomain} onChange={(e) => set({ siteDomain: e.target.value })} placeholder="www.example.com" />
+        </label>
+        <label>
+          Time zone
+          <input value={form.defaultTimezone ?? ""} onChange={(e) => set({ defaultTimezone: e.target.value })} />
+          <div className="muted">Interprets recurring wall-clock send schedules, DST-aware.</div>
+        </label>
+        <label>
+          Environment
+          <select value={form.environment} onChange={(e) => set({ environment: e.target.value as "prod" | "dev" })}>
+            <option value="prod">prod</option>
+            <option value="dev">dev — fail-closed to an allowlist</option>
+          </select>
+        </label>
+      </div>
+
+      <div className="card">
+        <label>
+          <input type="checkbox" checked={form.magicLinks} onChange={(e) => set({ magicLinks: e.target.checked })} />{" "}
+          Magic-link tokens
+        </label>
+        <div className="muted">
+          Off means addressium just sends email — no user pool, no signing key, no entitlement
+          plumbing. On requires an existing Cognito pool: the token carries that pool&rsquo;s
+          <code>sub</code> so a paywall can resolve the reader client-side.
+        </div>
+        {form.magicLinks && (
+          <label>
+            Existing subscriber pool id
+            <input value={poolId} onChange={(e) => setPoolId(e.target.value)} placeholder="us-east-1_abc123" />
+            <div className="muted">
+              addressium links to your pool and never creates one — a pool carries far more
+              configuration than this application should own.
+            </div>
+          </label>
+        )}
+      </div>
+
+      <button className="btn" disabled={busy || !form.name || !form.primaryDomain} onClick={submit}>
+        {busy ? "Provisioning…" : "Create organization"}
+      </button>
+      {msg && <div className="error" style={{ marginTop: 8 }}>{msg}</div>}
+
+      {result && (
+        <div className="card" style={{ marginTop: 12 }}>
+          <strong>{result.alreadyExisted ? "Already existed" : "Created"}: {result.orgId}</strong>
+          <div className="muted">
+            {result.setupComplete
+              ? "SES identity verified."
+              : "Publish these DNS records — the org cannot send until SES verifies the domain."}
+          </div>
+          <table className="table">
+            <thead><tr><th>Type</th><th>Name</th><th>Value</th></tr></thead>
+            <tbody>
+              {result.dns.map((r, i) => (
+                <tr key={i}><td>{r.type}</td><td><code>{r.name}</code></td><td><code>{r.value}</code></td></tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
 
 /**
  * System health (#229, compendium #29) — ONE derived verdict.

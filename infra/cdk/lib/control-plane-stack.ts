@@ -772,7 +772,9 @@ export class ControlPlaneStack extends Stack {
           "ses:CreateEmailIdentity",
           "ses:GetEmailIdentity",
           "ses:TagResource",
-          "cognito-idp:CreateUserPool",
+          // CreateUserPool is deliberately absent: pools are link-only (#18,
+          // #226). Provisioning validates the operator's existing pool with
+          // DescribeUserPool and never creates one.
           "cognito-idp:DescribeUserPool",
         ],
         resources: ["*"],

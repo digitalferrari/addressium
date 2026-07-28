@@ -199,3 +199,34 @@ test("health() GETs a single derived verdict, not alarm state", async () => {
   expect(init.method).toBe("GET");
   // The SPA holds no CloudWatch permission; composition happens server-side.
 });
+
+test("createOrg() POSTs the provisioning payload", async () => {
+  await api.createOrg({
+    name: "Northwind Times",
+    primaryDomain: "mail.northwind.example",
+    siteDomain: "www.northwind.example",
+    magicLinks: true,
+    subscriberPool: { poolId: "us-east-1_abc" },
+    environment: "prod",
+  });
+  const { url, init } = lastCall();
+  expect(url).toMatch(/\/orgs$/);
+  expect(init.method).toBe("POST");
+  const body = JSON.parse(String(init.body));
+  // Magic links on requires a linked pool — the server refuses the pair
+  // otherwise, so the form must send them together.
+  expect(body.magicLinks).toBe(true);
+  expect(body.subscriberPool.poolId).toBe("us-east-1_abc");
+});
+
+test("createOrg() omits subscriberPool when magic links are off", async () => {
+  await api.createOrg({
+    name: "Plain Sender",
+    primaryDomain: "mail.plain.example",
+    siteDomain: "www.plain.example",
+    magicLinks: false,
+    environment: "prod",
+  });
+  const body = JSON.parse(String(lastCall().init.body));
+  expect(body.subscriberPool).toBeUndefined();
+});
