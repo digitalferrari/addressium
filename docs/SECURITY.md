@@ -145,7 +145,23 @@ require handing every integrator a key that also *mints* tokens.
 Because integrators write the client-side half, addressium ships a **hardened
 reference verifier** so nobody rolls their own: see
 [`packages/magiclink-verify`](../packages/magiclink-verify/src/index.ts). Use it
-verbatim in Node (custom-auth Lambda) and the browser. Note what `sub` is: it is
+verbatim in Node (custom-auth Lambda) and the browser.
+
+For the browser there is a **drop-in** on top of it
+([`browser.ts`](../packages/magiclink-verify/src/browser.ts), #215) shipped as a
+self-contained bundle with a published SRI hash. Three properties are security
+-relevant and are the reason it exists rather than being left to each site: it
+**never throws**, so a paywall's failure path is "show the wall" rather than an
+unhandled rejection; it **removes the token from the URL** with
+`history.replaceState` *before* verification resolves, so a slow or failing
+check cannot leave a live credential in the address bar, in a screenshot, or in
+a copy-pasted link; and with an embedded JWKS it makes **no network call**, so
+access decisions do not depend on addressium's availability and addressium does
+not learn which reader opened which article. Its cached session lives in
+`sessionStorage`, expires exactly when the token does, and is a copy of a
+verified result rather than evidence — editing it fools only that browser.
+
+Note what `sub` is: it is
 **addressium's own durable subscriber id**, not a Cognito subject. The token
 authenticates a *subscriber*; linking that subscriber to an account in the
 operator's own user pool is optional, and is the operator's business

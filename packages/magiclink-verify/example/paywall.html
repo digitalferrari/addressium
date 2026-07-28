@@ -1,0 +1,119 @@
+<!--
+  A working paywall in one file (#215).
+
+  No npm, no bundler, no build step, and — with the JWKS embedded below — no
+  network request of any kind. Open it from disk with a token in the fragment
+  and it decides access.
+
+  This is the whole client half of the integration contract
+  (docs/ARCHITECTURE.md §12). Everything security-relevant happens inside the
+  bundle; what is left here is the part that is genuinely yours: what "paid"
+  means on your site.
+-->
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Summit Daily — paywall example</title>
+    <style>
+      body { font: 16px/1.6 system-ui, sans-serif; max-width: 42rem; margin: 3rem auto; padding: 0 1rem; }
+      .wall { border: 1px solid #d0d0d0; border-radius: 8px; padding: 1.5rem; background: #fafafa; }
+      .status { font-family: ui-monospace, monospace; font-size: 14px; color: #555; }
+      #article[hidden] { display: none; }
+    </style>
+  </head>
+  <body>
+    <h1>The one chart that explains the season</h1>
+
+    <div id="wall" class="wall">
+      <p><strong>This story is for subscribers.</strong></p>
+      <p class="status" id="why">Checking your link…</p>
+    </div>
+
+    <article id="article" hidden>
+      <p>Snowpack peaked three weeks early this year, and the ski corporations…</p>
+    </article>
+
+    <!--
+      Serve this file yourself. `integrity` pins the exact bytes: a third-party
+      script tag without one is a standing supply-chain hole, because whoever can
+      change the file can read every subscriber id on the page. The hash is
+      printed by `npm run build` in this package and written to
+      dist/addressium-magiclink.iife.js.sri — replace the placeholder with it.
+    -->
+    <script
+      src="../dist/addressium-magiclink.iife.js"
+      integrity="sha384-REPLACE-WITH-THE-HASH-FROM-YOUR-BUILD"
+      crossorigin="anonymous"
+    ></script>
+
+    <script>
+      // Your org's PUBLIC signing key, copied from
+      // https://<your-api>/<org>/jwks.json at integration time.
+      //
+      // Embedded rather than fetched, deliberately. A fetch would make the
+      // paywall fail whenever addressium is slow or unreachable, and it would
+      // tell addressium which of your readers opened which article — a
+      // cross-site read of your audience that the whole design exists to avoid.
+      // The cost is that a key rotation needs a redeploy of this page, which is
+      // the trade the token model is built around.
+      const JWKS = {
+        keys: [
+          {
+            kty: "EC",
+            crv: "P-256",
+            x: "REPLACE",
+            y: "REPLACE",
+            kid: "REPLACE",
+            alg: "ES256",
+            use: "sig",
+          },
+        ],
+      };
+
+      addressiumMagicLink
+        .consume({
+          issuer: "https://addressium.example/summit",
+          audience: "https://summitdaily.example",
+          jwks: JWKS,
+        })
+        .then((session) => {
+          // `consume` never throws and never leaves the token in the address
+          // bar, so there is no failure path to write here beyond deciding what
+          // to say.
+          document.getElementById("why").textContent = describe(session);
+          if (session.authenticated && session.entitlement === "paid") {
+            document.getElementById("wall").hidden = true;
+            document.getElementById("article").hidden = false;
+          }
+          // session.poolSub is the reader's `sub` in YOUR Cognito pool — join it
+          // to your own directory. session.subscriberId is addressium's id for
+          // them; don't confuse the two.
+        });
+
+      // `reason` is an enumerated string, so this switch stays correct when the
+      // library rewords its error messages.
+      function describe(s) {
+        switch (s.reason) {
+          case "verified":
+          case "restored":
+            return s.entitlement === "paid"
+              ? `Welcome back (${s.poolSub}) — access until ${s.expiresAt}`
+              : "Your subscription doesn't include this story.";
+          case "no_token":
+            return "Open the link from your newsletter to read this.";
+          case "expired":
+            return "That link has expired — we can send you a fresh one.";
+          case "bad_signature":
+          case "malformed":
+            return "That link isn't valid.";
+          case "wrong_audience":
+          case "wrong_issuer":
+            return "That link was issued for a different site.";
+          default:
+            return "We couldn't verify that link.";
+        }
+      }
+    </script>
+  </body>
+</html>

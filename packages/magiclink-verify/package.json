@@ -7,12 +7,18 @@
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": {
-    ".": "./dist/index.js"
+    ".": "./dist/index.js",
+    "./browser": "./dist/browser.js"
   },
   "scripts": {
-    "build": "tsc --build"
+    "build": "tsc --build",
+    "bundle": "node build-bundles.mjs"
   },
   "dependencies": {
     "jose": "^5.6.0"
-  }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ]
 }

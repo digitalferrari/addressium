@@ -14,10 +14,10 @@
     "node": ">=20"
   },
   "scripts": {
-    "build": "tsc --build",
+    "build": "tsc --build && npm --workspace @addressium/magiclink-verify run bundle",
     "typecheck": "tsc --build --dry",
     "clean": "tsc --build --clean",
-    "test": "tsc --build && node --test packages/domain/dist/test/*.test.js packages/integration-tests/dist/test/*.test.js infra/cdk/dist/test/*.test.js",
+    "test": "npm run build && node --test packages/domain/dist/test/*.test.js packages/integration-tests/dist/test/*.test.js infra/cdk/dist/test/*.test.js",
     "test:web": "vitest run",
     "deploy": "npm --workspace @addressium/infra-cdk run deploy",
     "bootstrap:aws": "./scripts/aws-bootstrap.sh",

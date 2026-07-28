@@ -278,7 +278,10 @@ Java/Docker).
 
 Built to OWASP ASVS (L2) & API Top 10, NIST SP 800-63B, RFC 8725 (JWT), and CIS
 AWS Foundations. The most security-sensitive integration point — the magic-link
-verifier — ships as a hardened, copy-paste module: `packages/magiclink-verify`.
+verifier — ships as a hardened module, `packages/magiclink-verify`, plus a
+browser drop-in that reads the token, verifies it, cleans the URL and hands back
+a session object: a `<script>` tag and a public key, no build step, no network
+call.
 
 [Security design & threat model](docs/SECURITY.md) ·
 [Reporting a vulnerability](SECURITY.md)

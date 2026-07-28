@@ -22,6 +22,9 @@
     },
     {
       "path": "../segment"
+    },
+    {
+      "path": "../magiclink-verify"
     }
   ]
 }

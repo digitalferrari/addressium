@@ -1457,8 +1457,20 @@ Cognito would make the product work only for Cognito shops.
   are no additional profile claims (§4.9).
 - A hardened reference verifier, `packages/magiclink-verify`, so a plugin author
   does not have to get JWT verification right from first principles.
+- **A browser drop-in** (#215): `@addressium/magiclink-verify/browser`, shipped
+  as ESM and IIFE bundles with `jose` included and an SRI hash published for
+  each. `consume({issuer, audience, jwks})` does steps 1–3 below and returns a
+  plain session object. The verifier alone was not the integration — it returns
+  raw claims and throws, so every site still had to find the token, decide what
+  a throw meant, remove the credential from the address bar, and re-derive all
+  of it on the next page. That half is where the mistakes are, and it is not
+  cryptographic: an unhandled rejection blanks the article, a token left in
+  `location.hash` gets copy-pasted around, and a cached session that outlives
+  its token keeps a revoked reader reading.
 
-**The main website implements (out of scope here):**
+**The main website implements** — all three steps are what the drop-in does, so
+"out of scope" now means "you may use ours or write your own", not "you are on
+your own":
 1. Read the token from the inbound URL **fragment** client-side (the page itself
    is CloudFront-cached; the token must be **excluded from the cache key**).
 2. **Verify** the signature and `exp`/`aud`/`iss` against the JWKS, with the

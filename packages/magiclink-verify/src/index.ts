@@ -62,10 +62,60 @@ export interface VerifyOptions {
   jwks?: JSONWebKeySet;
 }
 
+/**
+ * Why a token was refused (#215).
+ *
+ * An enumerated code rather than the message, because a paywall has to BRANCH on
+ * this — "expired, offer a fresh link" and "forged, show nothing" are different
+ * product decisions — and branching on `err.message.includes(...)` breaks the
+ * first time a dependency rewords its error. The message stays human-readable
+ * for logs; this is what code reads.
+ */
+export type MagicLinkFailure =
+  | "expired"
+  | "bad_signature"
+  | "wrong_issuer"
+  | "wrong_audience"
+  | "not_yet_valid"
+  | "malformed"
+  | "wrong_scope"
+  | "missing_claim"
+  | "no_key_source";
+
 export class MagicLinkError extends Error {
-  constructor(message: string) {
+  constructor(
+    message: string,
+    /** Defaults to `malformed`: an unclassified failure is still a refusal. */
+    public readonly code: MagicLinkFailure = "malformed",
+  ) {
     super(message);
     this.name = "MagicLinkError";
+  }
+}
+
+/**
+ * Map a `jose` error to one of ours. Reads `err.code`, the documented stable
+ * identifier, rather than the message text — the message is prose and changes.
+ */
+function classify(err: unknown): MagicLinkFailure {
+  const code = (err as { code?: string }).code ?? "";
+  const claim = (err as { claim?: string }).claim ?? "";
+  switch (code) {
+    case "ERR_JWT_EXPIRED":
+      return "expired";
+    case "ERR_JWS_SIGNATURE_VERIFICATION_FAILED":
+    case "ERR_JWKS_NO_MATCHING_KEY":
+    case "ERR_JWKS_MULTIPLE_MATCHING_KEYS":
+      return "bad_signature";
+    case "ERR_JWT_CLAIM_VALIDATION_FAILED":
+      if (claim === "iss") return "wrong_issuer";
+      if (claim === "aud") return "wrong_audience";
+      if (claim === "nbf") return "not_yet_valid";
+      return "missing_claim";
+    default:
+      // Includes `alg:none` and algorithm-confusion attempts, which jose rejects
+      // as a header/format failure before any signature check runs.
+      return "malformed";
   }
 }
 
@@ -76,7 +126,7 @@ const localCache = new Map<string, KeyResolver>();
 
 function resolveKeySet(opts: VerifyOptions): KeyResolver {
   if (opts.jwksUri && opts.jwks) {
-    throw new MagicLinkError("provide either jwksUri or jwks, not both");
+    throw new MagicLinkError("provide either jwksUri or jwks, not both", "no_key_source");
   }
   if (opts.jwksUri) {
     let set = remoteCache.get(opts.jwksUri);
@@ -95,7 +145,7 @@ function resolveKeySet(opts: VerifyOptions): KeyResolver {
     }
     return set;
   }
-  throw new MagicLinkError("no key source: set jwksUri or jwks");
+  throw new MagicLinkError("no key source: set jwksUri or jwks", "no_key_source");
 }
 
 /**
@@ -118,34 +168,41 @@ export async function verifyMagicLinkToken(
       clockTolerance: opts.clockToleranceSec ?? 30,
     }));
   } catch (err) {
-    throw new MagicLinkError(`token verification failed: ${(err as Error).message}`);
+    if (err instanceof MagicLinkError) throw err; // key-source misconfiguration
+    throw new MagicLinkError(
+      `token verification failed: ${(err as Error).message}`,
+      classify(err),
+    );
   }
 
   // Required claims (checked explicitly for cross-version robustness).
   if (typeof payload.exp !== "number") {
-    throw new MagicLinkError("missing exp");
+    throw new MagicLinkError("missing exp", "missing_claim");
   }
   const claims = payload as MagicLinkClaims;
 
   // Defense in depth: a magic-link session is LITE and must never be elevated.
   // The caller still has to gate profile/account behind step-up auth.
   if (claims.scope !== "content:read") {
-    throw new MagicLinkError("unexpected scope: magic-link tokens are content:read only");
+    throw new MagicLinkError(
+      "unexpected scope: magic-link tokens are content:read only",
+      "wrong_scope",
+    );
   }
   if (!Array.isArray(claims.amr) || !claims.amr.includes("magic_link")) {
-    throw new MagicLinkError("missing amr: magic_link");
+    throw new MagicLinkError("missing amr: magic_link", "missing_claim");
   }
   if (claims.entitlement !== "free" && claims.entitlement !== "paid") {
-    throw new MagicLinkError("missing/invalid entitlement");
+    throw new MagicLinkError("missing/invalid entitlement", "missing_claim");
   }
   if (typeof claims.sub !== "string" || claims.sub.length === 0) {
-    throw new MagicLinkError("missing sub");
+    throw new MagicLinkError("missing sub", "missing_claim");
   }
   // Fail CLOSED, like every other claim above: a token with no pool subject
   // cannot identify the reader in the operator's directory, and silently
   // returning one would push that decision into every integrator's code.
   if (typeof claims.external_sub !== "string" || claims.external_sub.length === 0) {
-    throw new MagicLinkError("missing external_sub");
+    throw new MagicLinkError("missing external_sub", "missing_claim");
   }
   return claims;
 }
