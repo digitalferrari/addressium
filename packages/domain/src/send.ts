@@ -175,6 +175,28 @@ export interface SendOneInput {
   unsubscribeLink?: UnsubscribeLinkBuilder;
 }
 
+/**
+ * May we mail this person at all? (#193)
+ *
+ * TWO checks, because they fail in different directions and each covers the
+ * other's gap. `isSuppressed` is keyed by EMAIL: it is the authoritative,
+ * cross-org tombstone, but it goes blind the moment an address changes — rename
+ * a complainer and the lookup answers "no entry". `subscriber.status` is keyed
+ * by the durable `sub` and survives every rename, but it is org-local and does
+ * not know about a global complaint against an address this org has never seen.
+ *
+ * Nothing consulted `status` before, so a suppressed subscriber whose email
+ * changed was mailable while their own record said `suppressed`.
+ */
+async function mayMail(
+  stores: Stores,
+  orgId: string,
+  subscriber: Subscriber,
+): Promise<boolean> {
+  if (subscriber.status === "suppressed") return false;
+  return !(await stores.suppression.isSuppressed(orgId, subscriber.email));
+}
+
 export interface SendOneResult {
   sent: boolean;
   reason?: "unknown-subscriber" | "suppressed" | "already-sent" | "dev-allowlist";
@@ -236,7 +258,7 @@ export async function sendToSubscriber(
     await release();
     return { sent: false, reason: "unknown-subscriber" };
   }
-  if (await stores.suppression.isSuppressed(input.orgId, subscriber.email)) {
+  if (!(await mayMail(stores, input.orgId, subscriber))) {
     await release();
     return { sent: false, reason: "suppressed" };
   }
@@ -354,8 +376,9 @@ export async function sendCampaign(
     const subscriber = await stores.subscribers.get(input.orgId, sub.subscriberId);
     if (!subscriber) continue;
 
-    // Suppression enforced before every send (§4.4, §4.13).
-    if (await stores.suppression.isSuppressed(input.orgId, subscriber.email)) {
+    // Suppression enforced before every send (§4.4, §4.13), by address AND by
+    // subscriber status — see mayMail.
+    if (!(await mayMail(stores, input.orgId, subscriber))) {
       suppressed++;
       continue;
     }

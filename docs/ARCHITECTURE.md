@@ -338,7 +338,18 @@ compensate for a missing trap.
 
 - Campaign launch resolves the target segment to a recipient stream.
 - Each recipient is checked against the **suppression list** (account + list
-  level) before enqueue.
+  level) before enqueue — **and** against their own `Subscriber.status` (#193).
+  Two checks because they fail in opposite directions. The suppression list is
+  keyed by EMAIL: authoritative and cross-org, but blind the moment an address
+  changes, so renaming a complainer used to make them mailable again while their
+  own record still read `suppressed`. `status` is keyed by the durable `sub` and
+  survives every rename, but is org-local and knows nothing of a global
+  complaint against an address this org has not seen. Each covers the other's
+  gap. On an identity-sync email change the tombstone is **copied** to the new
+  address, keeping its original `source` and `addedAt` — "suppressed since the
+  complaint" is what a deliverability dispute turns on — and the old entry is
+  deliberately left in place, because deleting it would make a complainer
+  mailable if the rename itself turns out to be the mistake.
 - Recipients are batched onto **SQS**; sender Lambdas consume batches, render
   the MJML template with per-recipient merge variables, and call SES
   `SendBulkEmail` (up to 50 destinations/call).

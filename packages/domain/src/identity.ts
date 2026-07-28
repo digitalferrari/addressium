@@ -56,6 +56,15 @@ export async function applyIdentitySync(
     action = subscriber ? "linked" : "created";
   }
 
+  // An address that was suppressed must stay suppressed when the person changes
+  // it (#193). Suppression is keyed by EMAIL while the subscriber is keyed by
+  // `sub`, so without this the webhook silently makes a complainer mailable:
+  // rename alice@old.com to alice@new.com and `isSuppressed` answers false for
+  // an address whose owner filed a spam complaint.
+  if (subscriber && subscriber.email !== email) {
+    await carrySuppressionForward(stores, input.orgId, subscriber.email, email, clock);
+  }
+
   const next: Subscriber = subscriber
     ? {
         ...subscriber,
@@ -75,6 +84,41 @@ export async function applyIdentitySync(
 
   await stores.subscribers.put(next);
   return { action, subscriberId: next.sub, email };
+}
+
+/**
+ * Copy an address's suppression entries onto its replacement (#193).
+ *
+ * The OLD entry is deliberately left in place. Removing it is the obvious
+ * symmetric move and it is wrong in the direction that matters: if the rename is
+ * itself the mistake — a bad identity feed, a mis-keyed webhook, an address
+ * reused by a different person — deleting the tombstone makes a complainer
+ * mailable again, which is the exact failure this function exists to prevent.
+ * A stale suppression row costs one item and never sends an email; a deleted one
+ * can.
+ *
+ * `addedAt` and `source` are preserved rather than restamped: "suppressed since
+ * the complaint" is the fact a deliverability dispute turns on, and re-dating it
+ * to the rename would erase the only evidence of when it happened.
+ */
+async function carrySuppressionForward(
+  stores: Stores,
+  orgId: string,
+  oldEmail: string,
+  newEmail: string,
+  clock: Clock,
+): Promise<void> {
+  const entries = await stores.suppression.entriesFor(orgId, oldEmail);
+  for (const entry of entries) {
+    await stores.suppression.add({
+      ...entry,
+      email: newEmail,
+      // The org the tombstone belongs to, not the org doing the rename — a
+      // global entry must stay global, or the complaint stops covering the
+      // other orgs that also hold this address.
+      addedAt: entry.addedAt ?? clock.now().toISOString(),
+    });
+  }
 }
 
 /**
