@@ -303,6 +303,32 @@ export const saveDripSequenceSchema = z.object({
 });
 export type SaveDripSequenceInput = z.infer<typeof saveDripSequenceSchema>;
 
+/** Replace a subscriber's merge-tag attributes from the console (#205). */
+export const setSubscriberAttributesSchema = z.object({
+  orgId: idSchema,
+  sub: z.string().min(1).max(64),
+  attributes: attributesSchema,
+});
+export type SetSubscriberAttributesInput = z.infer<typeof setSubscriberAttributesSchema>;
+
+/**
+ * Set one subscription's status from the console (#205).
+ *
+ * `acknowledgeManualConfirmation` is required for `confirmed` and is enforced
+ * again in the domain — a flag that only the client checks is not a safeguard.
+ * `bounced` and `complained` are deliberately absent: those are facts SES
+ * reports about a delivery, not states an operator asserts, and letting a human
+ * type one in would corrupt the deliverability signal the halt logic reads.
+ */
+export const setSubscriptionStatusSchema = z.object({
+  orgId: idSchema,
+  sub: z.string().min(1).max(64),
+  listId: idSchema,
+  status: z.enum(["pending", "confirmed", "unsubscribed"]),
+  acknowledgeManualConfirmation: z.boolean().optional(),
+});
+export type SetSubscriptionStatusInput = z.infer<typeof setSubscriptionStatusSchema>;
+
 /** Manual suppression payload (admin). */
 export const manualSuppressSchema = z.object({
   orgId: idSchema,

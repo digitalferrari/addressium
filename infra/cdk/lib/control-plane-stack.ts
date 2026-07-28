@@ -1043,6 +1043,9 @@ export class ControlPlaneStack extends Stack {
     // Operator-side subscriber management (#102): list/search, suppression list,
     // and lift-suppression.
     adminRoute("SubscribersListFn", "subscribersListHandler", HttpMethod.GET, "/orgs/{org}/subscribers");
+    adminRoute("SubscriberDetailFn", "subscriberDetailHandler", HttpMethod.GET, "/orgs/{org}/subscribers/{sub}");
+    adminRoute("SubscriberAttrsFn", "subscriberAttributesHandler", HttpMethod.POST, "/subscribers/attributes");
+    adminRoute("SubscriptionStatusFn", "subscriptionStatusHandler", HttpMethod.POST, "/subscribers/subscription");
     adminRoute("SuppressionsListFn", "suppressionsListHandler", HttpMethod.GET, "/orgs/{org}/suppressions");
     adminRoute("UnsuppressFn", "subscriberUnsuppressHandler", HttpMethod.POST, "/subscribers/unsuppress");
     // Subscriber migration (#100) + GDPR/CCPA data-subject requests (#101).

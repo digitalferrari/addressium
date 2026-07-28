@@ -250,6 +250,30 @@ operator's own user pool is optional, and is the operator's business
   the log exists to record. The Lambda's grant is Put and Read, never Delete —
   Object Lock is the second line of defence, not the first.
 - Only Developer Admin can change roles — no privilege-escalation path.
+- **Manual subscription confirmation is a named, audited act (#205).** An admin
+  can set one subscription to `confirmed` from the console, which bypasses double
+  opt-in. Three things make that safe rather than merely convenient:
+  - It is refused unless the request carries `acknowledgeManualConfirmation`,
+    enforced in the domain and not only in the console — a flag the client alone
+    checks is a speed bump, not a safeguard.
+  - The consent it writes records what actually happened:
+    `basis: "manual_admin"` with the acting member's `sub` taken from the
+    verified JWT, never from the request body, and **no fabricated `sourceUrl`**.
+    Recording it as `explicit` would make an administrative act
+    indistinguishable from a real signup in precisely the record a consent
+    dispute turns on.
+  - Existing consent is never overwritten. The original provenance is the proof
+    of the original opt-in; an admin re-confirming is not a better version of it.
+
+  It is audited under its own action (`subscription.manual_confirm`), so "who
+  hand-confirmed this address?" is answerable from the WORM log rather than
+  inferred. `bounced` and `complained` are deliberately not settable by hand:
+  those are facts SES reports about a delivery, and a human typing one in would
+  corrupt the deliverability signal the halt logic reads.
+- **Suppression outranks every opt-in an admin can set.** Nothing on the
+  subscriber screen can un-suppress an address — that is `liftSuppression`, with
+  its own `suppression:manage` capability. The detail panel says so in place, so
+  an operator does not read the resulting silent send as a broken feature.
 
 ### 4.4 Send-path abuse & denial-of-wallet
 

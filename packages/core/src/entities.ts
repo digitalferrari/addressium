@@ -84,10 +84,19 @@ export interface SubscriptionConsent {
   sourceUrl?: string;
   /**
    * How we claim the right to mail them: `explicit` is double opt-in evidence,
-   * `implicit` an existing relationship (an import, #223). Absent on records
-   * written before this field existed — read as unknown, never as explicit.
+   * `implicit` an existing relationship (an import, #223), `manual_admin` an
+   * operator who confirmed the subscription by hand from the console (#205).
+   * Absent on records written before this field existed — read as unknown, never
+   * as explicit.
+   *
+   * `manual_admin` is a distinct value on purpose. A hand-confirmed subscription
+   * bypassed double opt-in, and recording it as `explicit` would make an
+   * administrative act indistinguishable from a real signup in precisely the
+   * record a consent dispute turns on.
    */
-  basis?: "explicit" | "implicit";
+  basis?: "explicit" | "implicit" | "manual_admin";
+  /** The admin who acted, when the basis is `manual_admin` (#205). */
+  actor?: string;
   /** Import batch that created this row, when it came from a file (#223). */
   importBatchId?: string;
 }

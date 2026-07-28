@@ -250,6 +250,39 @@ export interface SubscriberRow {
   lastEngagedAt?: string;
 }
 
+export type SubscriptionStatus = "pending" | "confirmed" | "unsubscribed" | "bounced" | "complained";
+
+/** One list, with this subscriber's standing on it (#205). */
+export interface SubscriberListState {
+  listId: string;
+  name: string;
+  status?: SubscriptionStatus;
+  updatedAt?: string;
+  consent?: {
+    requestedAt?: string;
+    confirmedAt?: string;
+    sourceUrl?: string;
+    basis?: "explicit" | "implicit" | "manual_admin";
+    actor?: string;
+    importBatchId?: string;
+  };
+}
+
+/** The full subscriber record behind one row of the Subscribers screen (#205). */
+export interface SubscriberDetail {
+  orgId: string;
+  sub: string;
+  email: string;
+  status: "active" | "suppressed";
+  entitlement: "free" | "paid";
+  lastEngagedAt?: string;
+  externalId?: string;
+  attributes: Record<string, string>;
+  lists: SubscriberListState[];
+  segments: { segmentId: string; name: string }[];
+  suppressed: boolean;
+}
+
 export interface SuppressionEntry {
   orgId: string;
   email: string;
@@ -486,6 +519,27 @@ export const api = {
     call<SegmentMember[]>("POST", `/segments/members`, { orgId, segmentId, action, email }),
   subscribers: (org: string, q?: string) =>
     call<SubscriberRow[]>("GET", `/orgs/${org}/subscribers${q ? `?q=${encodeURIComponent(q)}` : ""}`),
+  /** The full subscriber record: attributes, per-list status, segments (#205). */
+  subscriber: (org: string, sub: string) =>
+    call<SubscriberDetail>("GET", `/orgs/${org}/subscribers/${encodeURIComponent(sub)}`),
+  setSubscriberAttributes: (orgId: string, sub: string, attributes: Record<string, string>) =>
+    call<SubscriberDetail>("POST", `/subscribers/attributes`, { orgId, sub, attributes }),
+  /**
+   * Set one list's opt-in status (#205). `acknowledgeManualConfirmation` is
+   * required for `confirmed` — it asserts a double opt-in that never happened,
+   * and the server refuses without it rather than trusting the client to ask.
+   */
+  setSubscriptionStatus: (
+    orgId: string,
+    sub: string,
+    listId: string,
+    status: "pending" | "confirmed" | "unsubscribed",
+    acknowledgeManualConfirmation?: boolean,
+  ) =>
+    call<SubscriberDetail>("POST", `/subscribers/subscription`, {
+      orgId, sub, listId, status,
+      ...(acknowledgeManualConfirmation ? { acknowledgeManualConfirmation: true } : {}),
+    }),
   suppressions: (org: string) => call<SuppressionEntry[]>("GET", `/orgs/${org}/suppressions`),
   unsuppress: (orgId: string, email: string) => call<unknown>("POST", `/subscribers/unsuppress`, { orgId, email }),
   adminUnsubscribe: (orgId: string, subscriberId: string, email?: string, listId?: string) =>

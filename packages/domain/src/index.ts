@@ -16,6 +16,7 @@ export * from "./unsubscribe.js";
 export * from "./suppress.js";
 export * from "./scheduling.js";
 export * from "./schedule-state.js";
+export * from "./subscriber-admin.js";
 export * from "./transactional.js";
 export * from "./privacy.js";
 export * from "./export.js";

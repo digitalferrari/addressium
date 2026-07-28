@@ -19,7 +19,7 @@ import {
   type SendCostInput,
   type CostLine,
 } from "@addressium/domain/cost";
-import { api, EMPTY_EXPLICIT, isExplicitPredicate, type SegmentMember, type AlertRule, type Branding, type CreateOrgInput, type CreateOrgResult, type TeamMemberRow, type ColumnMapping, type ImportPreview, type MappedImportReport, type MappingPlan, type NewListDefaults, type CampaignReport, type DripStepDef, type EmailBlock, type ListPresentation, type ScheduleWhen, type SendScheduleState, type SetupState, type Template, type TemplateMode, type UsageRecord } from "./api.js";
+import { api, EMPTY_EXPLICIT, isExplicitPredicate, type SegmentMember, type SubscriberDetail, type AlertRule, type Branding, type CreateOrgInput, type CreateOrgResult, type TeamMemberRow, type ColumnMapping, type ImportPreview, type MappedImportReport, type MappingPlan, type NewListDefaults, type CampaignReport, type DripStepDef, type EmailBlock, type ListPresentation, type ScheduleWhen, type SendScheduleState, type SetupState, type Template, type TemplateMode, type UsageRecord } from "./api.js";
 
 type View = "dashboard" | "setup" | "templates" | "compose" | "report" | "usage" | "schedules" | "branding" | "presentation" | "subscribers" | "segments" | "import" | "privacy" | "drips" | "costs" | "deliverability" | "importmap" | "team" | "audit" | "newsletters" | "addorg";
 
@@ -833,6 +833,8 @@ function Subscribers({ org }: { org: string }) {
   const supps = useAsync(() => api.suppressions(org), [org, rev]);
   const [email, setEmail] = useState("");
   const [msg, setMsg] = useState("");
+  /** The subscriber whose detail panel is open (#205). */
+  const [openSub, setOpenSub] = useState<string | null>(null);
   const reload = () => setRev((n) => n + 1);
 
   const suppress = async () => {
@@ -876,13 +878,20 @@ function Subscribers({ org }: { org: string }) {
                   <td>{s.status}</td>
                   <td>{s.entitlement}</td>
                   <td className="muted">{s.lastEngagedAt ? new Date(s.lastEngagedAt).toLocaleString() : "—"}</td>
-                  <td><button className="btn ghost" onClick={() => void unsubscribeAll(s.sub, s.email)}>Unsubscribe all</button></td>
+                  <td style={{ whiteSpace: "nowrap" }}>
+                    <button className="btn ghost" onClick={() => setOpenSub(openSub === s.sub ? null : s.sub)}>
+                      {openSub === s.sub ? "Close" : "Open"}
+                    </button>{" "}
+                    <button className="btn ghost" onClick={() => void unsubscribeAll(s.sub, s.email)}>Unsubscribe all</button>
+                  </td>
                 </tr>
               ))}
             </tbody>
           </table>
         )}
       </div>
+
+      {openSub && <SubscriberPanel org={org} sub={openSub} onChanged={reload} />}
 
       <div className="card">
         <label>Manually suppress an address (does not delete)</label>
@@ -921,6 +930,189 @@ function Subscribers({ org }: { org: string }) {
     </div>
   );
 }
+
+/**
+ * Subscriber detail: attributes, per-list opt-ins, segments (#205).
+ *
+ * The list view carries five fields. This is everything else — most importantly
+ * the ATTRIBUTES, which are the merge-tag values every personalised send renders
+ * from, and the PER-LIST status, which previously could only be changed
+ * all-lists-at-once by "Unsubscribe all".
+ */
+function SubscriberPanel({ org, sub, onChanged }: { org: string; sub: string; onChanged: () => void }) {
+  const [detail, setDetail] = useState<SubscriberDetail | null>(null);
+  const [rows, setRows] = useState<Array<{ k: string; v: string }>>([]);
+  const [msg, setMsg] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const load = (d: SubscriberDetail) => {
+    setDetail(d);
+    setRows(Object.entries(d.attributes).map(([k, v]) => ({ k, v })));
+  };
+
+  useEffect(() => {
+    let live = true;
+    setDetail(null); setMsg("");
+    api.subscriber(org, sub).then((d) => live && load(d)).catch((e) => live && setMsg(String(e)));
+    return () => { live = false; };
+  }, [org, sub]);
+
+  const saveAttributes = async () => {
+    setBusy(true); setMsg("");
+    // Blank keys are dropped rather than rejected: an operator adds a row, then
+    // decides against it, and a validation error for a row they never filled in
+    // is noise. A duplicate key would silently win — flag it instead.
+    const kept = rows.filter((r) => r.k.trim());
+    const keys = kept.map((r) => r.k.trim());
+    if (new Set(keys).size !== keys.length) {
+      setMsg("Two attributes share a name — one would silently overwrite the other.");
+      setBusy(false);
+      return;
+    }
+    try {
+      load(await api.setSubscriberAttributes(org, sub, Object.fromEntries(kept.map((r) => [r.k.trim(), r.v]))));
+      setMsg("Attributes saved.");
+      onChanged();
+    } catch (e) { setMsg(String(e)); }
+    finally { setBusy(false); }
+  };
+
+  const setStatus = async (listId: string, status: "pending" | "confirmed" | "unsubscribed") => {
+    // Manual confirmation bypasses double opt-in, so it is confirmed out loud
+    // here AND demanded again by the server — a client-only check is not a
+    // safeguard, it is a speed bump.
+    if (status === "confirmed") {
+      const ok = window.confirm(
+        `Manually confirming ${detail?.email} on "${listId}" bypasses double opt-in.\n\n` +
+          "The subscription will be recorded with basis \"manual_admin\" naming you, not as a real opt-in, " +
+          "and the action is written to the audit log.\n\nContinue?",
+      );
+      if (!ok) return;
+    }
+    setBusy(true); setMsg("");
+    try {
+      load(await api.setSubscriptionStatus(org, sub, listId, status, status === "confirmed"));
+      setMsg(`"${listId}" set to ${status}.`);
+      onChanged();
+    } catch (e) { setMsg(String(e)); }
+    finally { setBusy(false); }
+  };
+
+  if (!detail) {
+    return <div className="card muted">{msg ? <span className="err">{msg}</span> : "Loading subscriber…"}</div>;
+  }
+
+  return (
+    <div className="card">
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+        <strong>{detail.email}</strong>
+        <span className="muted">
+          {detail.entitlement}
+          {detail.lastEngagedAt ? ` · last engaged ${new Date(detail.lastEngagedAt).toLocaleDateString()}` : ""}
+        </span>
+      </div>
+      {detail.suppressed && (
+        // The single most useful line on this panel: every opt-in below is moot
+        // while this is true, and an operator who cannot see it reads the next
+        // send as broken.
+        <p className="err" style={{ margin: "6px 0 0" }}>
+          Suppressed — no send will reach this address, whatever the opt-ins below say.
+          Lift it from the suppression list to change that.
+        </p>
+      )}
+      {msg && <p className={msg.includes("saved") || msg.includes("set to") ? "muted" : "err"} style={{ margin: "6px 0 0" }}>{msg}</p>}
+
+      <div style={{ marginTop: 12 }}>
+        <strong>Attributes</strong>{" "}
+        <span className="muted">merge-tag values, e.g. {"{{first_name}}"}</span>
+        <table style={{ marginTop: 6 }}>
+          <tbody>
+            {rows.map((r, i) => (
+              <tr key={i}>
+                <td style={{ width: "35%" }}>
+                  <input value={r.k} placeholder="first_name" disabled={busy} style={{ width: "100%" }}
+                    onChange={(e) => setRows(rows.map((x, j) => (j === i ? { ...x, k: e.target.value } : x)))} />
+                </td>
+                <td>
+                  <input value={r.v} placeholder="Ada" disabled={busy} style={{ width: "100%" }}
+                    onChange={(e) => setRows(rows.map((x, j) => (j === i ? { ...x, v: e.target.value } : x)))} />
+                </td>
+                <td style={{ width: 1 }}>
+                  <button className="btn ghost" disabled={busy}
+                    onClick={() => setRows(rows.filter((_, j) => j !== i))}>Remove</button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+          <button className="btn ghost" disabled={busy} onClick={() => setRows([...rows, { k: "", v: "" }])}>
+            Add attribute
+          </button>
+          <button className="btn" disabled={busy} onClick={() => void saveAttributes()}>
+            {busy ? "Saving…" : "Save attributes"}
+          </button>
+        </div>
+      </div>
+
+      <div style={{ marginTop: 16 }}>
+        <strong>Lists</strong>
+        <table style={{ marginTop: 6 }}>
+          <thead><tr><th>Newsletter</th><th>Status</th><th>Consent</th><th></th></tr></thead>
+          <tbody>
+            {detail.lists.map((l) => (
+              <tr key={l.listId}>
+                <td>{l.name} <span className="muted">({l.listId})</span></td>
+                <td className={l.status === "confirmed" ? "t-strong" : "muted"}>{l.status ?? "not subscribed"}</td>
+                <td className="muted">
+                  {/* Absent provenance is shown as unknown, never as consent. */}
+                  {l.consent?.basis === "manual_admin"
+                    ? `by ${l.consent.actor ?? "an admin"}`
+                    : (l.consent?.basis ?? (l.status ? "unknown" : "—"))}
+                </td>
+                <td style={{ whiteSpace: "nowrap" }}>
+                  {l.status !== "confirmed" && (
+                    <button className="btn ghost" disabled={busy} onClick={() => void setStatus(l.listId, "confirmed")}>
+                      Confirm
+                    </button>
+                  )}{" "}
+                  {l.status !== "unsubscribed" && l.status !== undefined && (
+                    <button className="btn ghost" disabled={busy} onClick={() => void setStatus(l.listId, "unsubscribed")}>
+                      Unsubscribe
+                    </button>
+                  )}{" "}
+                  {l.status === undefined && (
+                    <button className="btn ghost" disabled={busy} onClick={() => void setStatus(l.listId, "pending")}>
+                      Invite (pending)
+                    </button>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <div style={{ marginTop: 16 }}>
+        <strong>Segments</strong>{" "}
+        <span className="muted">
+          {/* Explicit cohorts only — see subscriberDetail: evaluating every rule
+              in the org per detail view would be slow and would show an answer
+              that changes without anyone editing anything. */}
+          explicit cohorts (#203); rule-based segments are evaluated at send time
+        </span>
+        {detail.segments.length === 0 ? (
+          <p className="muted" style={{ margin: "6px 0 0" }}>Not in any explicit cohort.</p>
+        ) : (
+          <p style={{ margin: "6px 0 0" }}>
+            {detail.segments.map((s) => `${s.name} (${s.segmentId})`).join(", ")}
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
 
 function Segments({ org }: { org: string }) {
   const [rev, setRev] = useState(0);

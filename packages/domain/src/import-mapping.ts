@@ -32,7 +32,13 @@ import { parseCsv } from "./importer.js";
  * declared separately, so an imported subscription and a double-opt-in one
  * carry provenance in the same field and a single lookup answers both.
  */
-export type ConsentBasis = NonNullable<SubscriptionConsent["basis"]>;
+/**
+ * The bases an IMPORT can assert. Deliberately narrower than
+ * `SubscriptionConsent["basis"]`, which also carries `manual_admin` (#205) — a
+ * file cannot claim that an operator confirmed a subscription by hand, and
+ * deriving this type from the wider union would let it.
+ */
+export type ConsentBasis = "explicit" | "implicit";
 
 /** What a source column becomes. `discard` is explicit so a dropped column is counted, never silent. */
 export type ColumnMapping =

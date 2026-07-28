@@ -65,6 +65,9 @@ import {
   saveList,
   saveSegment,
   listSegmentMembers,
+  subscriberDetail,
+  setSubscriberAttributes,
+  setSubscriptionStatus,
   updateSegmentMembership,
   saveDripSequence,
   saveTemplate,
@@ -753,6 +756,70 @@ export async function subscribersListHandler(event: HttpEvent): Promise<HttpResu
   }
 }
 
+/**
+ * GET /orgs/{org}/subscribers/{sub} — the full record (#205).
+ *
+ * The row in the list view carries five fields; this carries the attributes that
+ * drive every personalised send, the per-list subscription status, and the
+ * explicit segments naming this person. Without it, test setup and support both
+ * needed direct DynamoDB access.
+ */
+export async function subscriberDetailHandler(event: HttpEvent): Promise<HttpResult> {
+  try {
+    const orgId = event.pathParameters?.org ?? "";
+    requireGrant(event, "subscribers:manage", orgId);
+    return json(200, await subscriberDetail(stores(), orgId, event.pathParameters?.sub ?? ""));
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+/** POST /subscribers/attributes — replace the merge-tag values (#205). */
+export async function subscriberAttributesHandler(event: HttpEvent): Promise<HttpResult> {
+  try {
+    const input = schemas.setSubscriberAttributesSchema.parse(JSON.parse(event.body ?? "{}"));
+    requireGrant(event, "subscribers:manage", input.orgId);
+    const detail = await setSubscriberAttributes(stores(), input);
+    // Audited (#191): attributes are what a recipient sees in their own copy of
+    // the email, so changing them changes what was said to whom.
+    await audit(event, input.orgId, "subscriber.attributes.set", input.sub);
+    return json(200, detail);
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+/**
+ * POST /subscribers/subscription — set one list's opt-in status (#205).
+ *
+ * Manually setting `confirmed` bypasses double opt-in, so it demands an explicit
+ * acknowledgement (checked again in the domain — a flag only the client enforces
+ * is not a safeguard) and is audited under its own action name, so "who
+ * hand-confirmed this address?" is answerable from the WORM log rather than
+ * inferred from a generic subscription-changed entry.
+ */
+export async function subscriptionStatusHandler(event: HttpEvent): Promise<HttpResult> {
+  try {
+    const input = schemas.setSubscriptionStatusSchema.parse(JSON.parse(event.body ?? "{}"));
+    requireGrant(event, "subscribers:manage", input.orgId);
+    const detail = await setSubscriptionStatus(stores(), clock, {
+      ...input,
+      // From the verified JWT, never the body — the consent record names who did
+      // this, and a self-reported actor is not evidence of anything.
+      actor: actor(event),
+    });
+    await audit(
+      event,
+      input.orgId,
+      input.status === "confirmed" ? "subscription.manual_confirm" : `subscription.${input.status}`,
+      `${input.sub}:${input.listId}`,
+    );
+    return json(200, detail);
+  } catch (e) {
+    return fail(e);
+  }
+}
+
 /** GET /orgs/{org}/suppressions — org-scoped suppression list for review (#102). */
 export async function suppressionsListHandler(event: HttpEvent): Promise<HttpResult> {
   try {
@@ -1435,6 +1502,9 @@ const ADMIN_ROUTES: Record<string, RouteHandler> = {
   "GET /orgs/{org}/drip-sequences": dripSequencesHandler,
   "POST /drip-sequences": dripSequencesHandler,
   "GET /orgs/{org}/subscribers": subscribersListHandler,
+  "GET /orgs/{org}/subscribers/{sub}": subscriberDetailHandler,
+  "POST /subscribers/attributes": subscriberAttributesHandler,
+  "POST /subscribers/subscription": subscriptionStatusHandler,
   "GET /orgs/{org}/suppressions": suppressionsListHandler,
   "POST /subscribers/suppress": subscriberSuppressHandler,
   "POST /subscribers/unsubscribe": subscriberUnsubscribeHandler,
