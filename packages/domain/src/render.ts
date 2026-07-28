@@ -272,3 +272,87 @@ export function renderHtmlForRecipient(
   );
   return out;
 }
+
+/**
+ * A plain-text alternative for a rendered HTML body (#204, #200).
+ *
+ * `SentMessage.text` has existed since the port was written and NOTHING ever set
+ * it on a campaign send, so every newsletter went out as HTML-only. That costs
+ * real deliverability — a missing text part is a spam-score signal at every major
+ * provider — and it is simply broken for the people who read mail as text.
+ *
+ * Derived from the rendered HTML rather than authored twice: two bodies drift,
+ * and the one nobody looks at is the one that drifts. Links become
+ * `label <url>` so a text reader can still reach them, which matters most for
+ * the unsubscribe link.
+ *
+ * This is a converter for OUR OWN rendered output, not a general HTML-to-text
+ * engine — it does not lay out tables or wrap columns. A template whose meaning
+ * depends on a table layout has a poor text part, which is a property of the
+ * template rather than a bug here.
+ */
+export function plainTextFrom(html: string): string {
+  let out = "";
+  let i = 0;
+  while (i < html.length) {
+    const lt = html.indexOf("<", i);
+    if (lt === -1) {
+      out += html.slice(i);
+      break;
+    }
+    out += html.slice(i, lt);
+    const gt = html.indexOf(">", lt);
+    if (gt === -1) {
+      // Unterminated tag: the remainder is markup we cannot read, so drop it
+      // rather than emitting a half-tag as if it were prose.
+      break;
+    }
+    const tag = html.slice(lt, gt + 1);
+    const name = /^<\s*\/?\s*([a-z0-9]+)/i.exec(tag)?.[1]?.toLowerCase() ?? "";
+
+    if (name === "script" || name === "style") {
+      // Skip the element's CONTENT too — CSS and JS are not text alternatives.
+      const close = html.toLowerCase().indexOf(`</${name}`, gt);
+      i = close === -1 ? html.length : (html.indexOf(">", close) + 1 || html.length);
+      continue;
+    }
+    if (name === "a" && !tag.startsWith("</")) {
+      const href = extractHref(tag);
+      const close = html.toLowerCase().indexOf("</a", gt);
+      const label = stripTags(html.slice(gt + 1, close === -1 ? html.length : close)).trim();
+      // A url identical to its label reads as a stutter — "https://x <https://x>".
+      out += href && href !== label && href !== "#" ? `${label} <${href}>` : label;
+      i = close === -1 ? html.length : (html.indexOf(">", close) + 1 || html.length);
+      continue;
+    }
+    if (["p", "div", "br", "tr", "li", "h1", "h2", "h3", "h4", "table"].includes(name)) {
+      out += "\n";
+    }
+    i = gt + 1;
+  }
+  return (
+    decodeEntities(out)
+      // Collapse the runs of blank lines that block-level tags leave behind,
+      // without collapsing a deliberate paragraph break to nothing.
+      .replace(/[ \t]+\n/g, "\n")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim()
+  );
+}
+
+/**
+ * Reverse `escapeHtml` for the text part.
+ *
+ * `&amp;` LAST, and that ordering is the whole point: decoding it first would
+ * turn `&amp;lt;` — the correct escaping of the literal text `&lt;` — into `<`,
+ * re-introducing markup into the part that is supposed to have none.
+ */
+function decodeEntities(s: string): string {
+  return s
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&");
+}

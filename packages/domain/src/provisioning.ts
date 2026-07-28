@@ -13,6 +13,12 @@ import type { Organization, schemas } from "@addressium/core";
 import { schemas as s } from "@addressium/core";
 import type { Stores } from "./ports.js";
 import { defaultAlertConfig } from "./alerts.js";
+import {
+  PRIMARY_TEST_MERGE_TAGS,
+  PRIMARY_TEST_TEMPLATE_ID,
+  PRIMARY_TEST_TEMPLATE_NAME,
+  primaryTestSource,
+} from "./seed-template.js";
 
 type CreateOrgInput = schemas.CreateOrgInput;
 
@@ -157,6 +163,26 @@ export async function provisionOrganization(
   // accidentally start with none.
   if (!(await stores.alerts.get(orgId))) {
     await stores.alerts.put(defaultAlertConfig(orgId, input.alertTopicArn));
+  }
+
+  // The canonical smoke-test template, in all three modes (#204). Seeded rather
+  // than documented as a copy-paste, because the point of a known-good body is
+  // that every deployment has THE SAME one — a fixture an operator has to paste
+  // is a fixture that drifts, and the first thing anyone does with a new org is
+  // send a test.
+  for (const mode of ["raw_html", "mjml", "visual"] as const) {
+    const templateId = mode === "raw_html" ? PRIMARY_TEST_TEMPLATE_ID : `${PRIMARY_TEST_TEMPLATE_ID}-${mode}`;
+    if (await stores.templates.get(orgId, templateId)) continue;
+    await stores.templates.put({
+      orgId,
+      templateId,
+      name: `${PRIMARY_TEST_TEMPLATE_NAME} — ${mode}`,
+      mode,
+      source: primaryTestSource(mode),
+      version: 1,
+      mergeTags: [...PRIMARY_TEST_MERGE_TAGS],
+      adSlots: [],
+    });
   }
 
   return { org, dns: dnsRecords(input.primaryDomain, ses.dkimTokens), alreadyExisted: false };

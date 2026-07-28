@@ -1194,6 +1194,43 @@ segment-targeted campaign to every confirmed subscriber is unrecallable.
 
 ---
 
+### The primary test template (#204)
+
+Every org is provisioned with one canonical smoke-test body,
+`addressium-smoke-test`, in all three modes (`raw_html`, `mjml`, `visual`) from a
+single source of truth in `packages/domain/src/seed-template.ts`. Seeded rather
+than documented as a copy-paste: the point of a known-good body is that every
+deployment has *the same* one, and the first thing anyone does with a new org is
+send a test. Re-provisioning never overwrites an edited copy.
+
+It deliberately contains one of each thing that fails silently — a merge tag (so
+escaping is exercised), a tracked editorial link (so the click map is), the
+compliance footer and physical address, and a visible unsubscribe link. The
+editorial link points at `example.com` so a first smoke test does not send click
+traffic to a domain the operator does not control. `seedTemplateSmokeCheck()`
+asserts the properties a preview cannot show you: no unresolved merge tag, an
+unsubscribe link with a real destination, and a non-empty text part.
+
+**Reserved merge values.** Merge values are `subscriber.attributes` plus four the
+send path supplies: `unsubscribe_url`, `list_name`, `compliance_footer`,
+`physical_address`. The reserved names win over an attribute of the same name —
+an imported CSV column called `unsubscribe_url` must not be able to replace the
+real one with a working-looking link that opts nobody out. Before this,
+`<a href="{{unsubscribe_url}}">` — the obvious way to write the one link a
+recipient is entitled to — rendered `href=""`, and looked correct in every
+preview because the link was still there and still blue.
+
+**Plain-text parts.** Every campaign and drip send now carries one, derived from
+the rendered HTML by `plainTextFrom()` rather than authored twice (two bodies
+drift, and the one nobody looks at is the one that drifts). Links become
+`label <url>` so a text reader can still reach them — which matters most for the
+unsubscribe link. `SentMessage.text` had existed since the port was written with
+nothing ever setting it, so every newsletter went out HTML-only. This is one item
+of #200; the rest of that issue (MAIL FROM, account suppression, DMARC
+enforcement, `EmailClass`) is still open.
+
+---
+
 ## 6. Email sending & deliverability
 
 Meeting bulk-sender requirements (Gmail/Yahoo 2024+) is mandatory, so these are

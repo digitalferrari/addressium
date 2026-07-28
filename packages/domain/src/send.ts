@@ -18,7 +18,7 @@ import type {
   SendThrottle,
   Stores,
 } from "./ports.js";
-import { buildLinkMap, renderForRecipient, type EmailTemplate } from "./render.js";
+import { buildLinkMap, plainTextFrom, renderForRecipient, type EmailTemplate } from "./render.js";
 import { deferSend, scheduleActive } from "./schedule-state.js";
 
 /** Alias kept for readability; a campaign send takes a SendDescriptor. */
@@ -251,6 +251,37 @@ export function recipientAllowedForDev(
  * resolve, and carried bare `?sub=&list=` params that `unsubscribeHandler`
  * rejects anyway — so every one-click attempt failed (#178).
  */
+/**
+ * The merge values one recipient's body renders from (#204).
+ *
+ * Subscriber attributes PLUS the values only the send path knows: the
+ * unsubscribe URL and the list's display name. Without this,
+ * `<a href="{{unsubscribe_url}}">Unsubscribe</a>` — the obvious way to write the
+ * one link a recipient is legally entitled to — rendered `href=""`, because
+ * merge values came only from `subscriber.attributes` and no subscriber has an
+ * `unsubscribe_url` attribute. The link was still there and still blue, so it
+ * looked right in every preview.
+ *
+ * Reserved names win over a subscriber attribute of the same name. An imported
+ * CSV column called `unsubscribe_url` must not be able to replace the real one.
+ */
+async function mergeValues(
+  list: List,
+  subscriber: Subscriber,
+  builder: UnsubscribeLinkBuilder | undefined,
+): Promise<Record<string, string>> {
+  const unsubscribeUrl = builder
+    ? await builder.build({ orgId: list.orgId, subscriberId: subscriber.sub, listId: list.listId })
+    : `mailto:${list.fromAddress}?subject=unsubscribe`;
+  return {
+    ...subscriber.attributes,
+    unsubscribe_url: unsubscribeUrl,
+    list_name: list.name,
+    compliance_footer: list.complianceFooter,
+    physical_address: list.physicalAddress,
+  };
+}
+
 async function listUnsubscribeHeader(
   list: List,
   sub: string,
@@ -376,11 +407,18 @@ export async function sendToSubscriber(
   if (input.throttle) await input.throttle.acquire();
   try {
     const token = await mintToken(magic, subscriber);
+    const html = renderForRecipient(
+      input.template,
+      await mergeValues(list, subscriber, input.unsubscribeLink),
+      token,
+    );
     await sender.send({
       from: list.fromAddress,
       to: subscriber.email,
       subject: input.subject,
-      html: renderForRecipient(input.template, subscriber.attributes, token),
+      html,
+      // Same reasoning as the campaign path — a drip step is a newsletter too.
+      text: plainTextFrom(html),
       listUnsubscribe: await listUnsubscribeHeader(list, subscriber.sub, input.unsubscribeLink),
       tags: { orgId: input.orgId, campaignId: input.campaignId, subscriberId: subscriber.sub },
     });
@@ -532,13 +570,24 @@ export async function sendCampaign(
     try {
       const token = await mintToken(magic, subscriber);
       if (magic && token === undefined) untokenized++;
-      const html = renderForRecipient(input.template, subscriber.attributes, token);
+      const html = renderForRecipient(
+        input.template,
+        await mergeValues(list, subscriber, opts.unsubscribeLink),
+        token,
+      );
 
       await sender.send({
         from: list.fromAddress,
         to: subscriber.email,
         subject: input.subject,
         html,
+        // `SentMessage.text` has existed since the port was written and nothing
+        // ever set it on a campaign send, so every newsletter went out HTML-only
+        // (#204, #200). A missing text part is a spam-score signal at every major
+        // provider, and it is simply broken for people who read mail as text.
+        // Derived from the rendered HTML rather than authored twice, because two
+        // bodies drift and the one nobody looks at is the one that drifts.
+        text: plainTextFrom(html),
         listUnsubscribe: await listUnsubscribeHeader(list, subscriber.sub, opts.unsubscribeLink),
         tags: { orgId: input.orgId, campaignId: input.campaignId, subscriberId: subscriber.sub },
       });
