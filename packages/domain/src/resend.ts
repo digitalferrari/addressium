@@ -7,9 +7,9 @@
  * same append-only engagement log the click map uses (#13) — subscribers with a
  * `sent`/`delivered` event but no `open` and no `click`. The resend goes out
  * under a distinct `{campaign}#resend` sub-campaign id so its opens/clicks
- * aggregate separately (same convention as the A/B sub-campaigns, #25), reuses
- * `sendToSubscriber` for the suppression gate + magic-link + per-recipient
- * idempotency, so triggering the resend twice is a no-op.
+ * aggregate separately from the original send, reuses `sendToSubscriber` for the
+ * suppression gate + magic-link + per-recipient idempotency, so triggering the
+ * resend twice is a no-op.
  */
 import type { EngagementEvent } from "@addressium/core";
 import type { Clock, EmailSender, MagicLinkSigner, SendThrottle, Stores } from "./ports.js";

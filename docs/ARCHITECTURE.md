@@ -5,9 +5,16 @@
 > domain, and run email lists, signup forms, broadcasts, and drip automations —
 > all serverless, at near-zero idle cost.
 
-- **Status:** Design (pre-implementation)
+- **Status:** Built, never deployed. Most of §4 and all of §6 ships in the repo
+  and is tested; **no AWS account has ever run it**. See §13 for the honest list
+  of what is not yet proven.
 - **Audience:** Contributors and operators evaluating or building addressium
-- **Scope of this document:** the canonical system design. Code follows this spec.
+- **Scope of this document:** the canonical system design, aligned to
+  [`DESIGN-COMPENDIUM.md`](./DESIGN-COMPENDIUM.md) (revision 2), which is the
+  authoritative decision record. This document describes the **target state**.
+  Where a decision is not yet in the code, it is tagged inline
+  **[Decided r2 — not yet built]** — so no reader mistakes a decision for a
+  deployed fact.
 
 ---
 
@@ -40,8 +47,10 @@ every org in a deployment is operated by the same owner.
 4. **Channel-agnostic core, email-first build** — the domain model and pipeline
    are designed so SMS/push can be added later without a rewrite, but only the
    email path is built and tested for v1.
-5. **One-command deploy** — `cdk deploy` plus a guided setup wizard. An operator
-   should get to "verified domain, first list, first send" quickly.
+5. **A deploy an operator can trust** — a one-time bootstrap stack and a
+   permissions boundary, then a single gated `npm run deploy` (§9). An operator
+   should get to "verified domain, first list, first send" quickly, without ever
+   handing admin credentials to a pipeline.
 6. **Multi-org by design** — one deployment runs many isolated publications: a
    shared control plane (admin, API, console) over per-org data, identity and
    sending silos, with role-based access scoped to each org.
@@ -75,38 +84,45 @@ every org in a deployment is operated by the same owner.
   newsletters, per-campaign for one-offs) inserted verbatim and never tracked
 - **Campaign types & series reporting** (§4.16): one-off vs ongoing (daily /
   weekly / biweekly), with aggregate reporting across a recurring series' editions
-- **Sandbox / test mode** (§4.17), **deliverability alerts to SNS** (§4.18),
-  **GDPR/CCPA export & erasure + audit log** (§4.19), and **A/B subject
-  testing** (§4.20)
+- **Sandbox / test mode** (§4.17), **deliverability alerts to SNS** (§4.18), and
+  **GDPR/CCPA export & erasure + audit log** (§4.19)
 - **Engagement analytics & reporting dashboards**: sends, deliveries, opens,
   clicks, bounces, complaints, unsubscribes — real-time counters, queryable
   event history, per-campaign funnels, and link performance
 - **Email archive + click overlay**: a copy of every generic (per-campaign)
   rendered email is stored, so reporting can overlay per-link click data on the
   actual email — a click map
-- **Subscriber identity via Cognito**: every subscriber has an account in a
-  Cognito user pool — **shared with the operator's main website** as the single
-  base identity everything hangs off. The Cognito `sub` keys the DynamoDB
-  subscriber profile, subscription preferences, and entitlement (see §4.10)
+- **Subscriber identity owned by addressium**: the **subscriber record is the
+  primary identity**. `Subscriber.sub` is a durable id addressium mints at
+  signup and keys the profile, subscriptions and entitlement off. A per-org
+  Cognito pool is **optional and read-only** — an org that already runs one for
+  its own website can link it, joined on `Subscriber.externalId`; addressium
+  never owns or writes to it (see §4.10)
 - **Magic-link SSO tokens**: editorial newsletter links carry a per-recipient
   signed token that logs the reader into a *lite, content-only* session on the
   main website and removes the reg/paywall overlay (soft paywall — see §8.1),
-  carrying an `entitlement` (free/paid) plus whitelisted claims. addressium mints
-  and signs the token; the main site verifies and applies it (client-side, on a
-  CloudFront-cached page — that sign-in logic is out of scope, see §12)
+  carrying an `entitlement` (free/paid). addressium mints and signs the token
+  with a per-org **KMS ES256** key and publishes the **public half as JWKS**; the
+  main site verifies and applies it (client-side, on a CloudFront-cached page —
+  that sign-in logic is out of scope, see §12). No shared secret is ever
+  distributed
 - **Editorial vs advertising link handling**: the sender adds tokens + click
   tracking to **editorial** links only; **LiveIntent advertising** links are left
   untouched (no token, no tracking)
-- **Migration importer**: Pinpoint export and CSV ingest (endpoints, segments,
-  suppression lists)
+- **Migration importer**: CSV ingest today; reading a real Pinpoint export
+  (gzipped JSON Lines, with `OptOut`/`EndpointStatus` honored) is §4.7 and
+  **[Decided r2 — not yet built]**
 - **Admin console** (React SPA) protected by Cognito
-- **Infrastructure as code** via AWS CDK (TypeScript), one-command deploy
+- **Infrastructure as code** via AWS CDK (TypeScript), behind a one-time
+  bootstrap stack and a permissions boundary (§9)
 
 ### Out of scope (v1, designed for later)
 
 - SMS, push, voice, in-app channels (seams exist; not built)
-- Ad-hoc arbitrary segmentation at scale (OpenSearch mirror is a documented
-  drop-in when needed)
+- Ad-hoc arbitrary segmentation at scale (the OpenSearch mirror is a documented
+  drop-in, **opt-in and off by default** — §5)
+- Deep ad-hoc analytics (the Kinesis/Firehose/Glue/Athena read-model is
+  **opt-in and off by default** — §4.23)
 - Full visual journey builder (v1 ships code/config-defined drip automations)
 - **Public multi-tenant SaaS** (renting addressium to unrelated third parties);
   multi-**org silos** for a single owner *are* supported (§4.11)
@@ -123,9 +139,10 @@ every org in a deployment is operated by the same owner.
 | Open/click tracking | SES built-in (config sets) | Reliable, minimal code |
 | Opt-in | Double opt-in default (per-list configurable) | Deliverability + consent provenance |
 | Templating | MJML now, block editor later | Robust responsive email; store shaped for a visual editor |
-| Migration | First-class Pinpoint + CSV importer | Adoption hook for the "Pinpoint is ending" moment |
+| Migration | CSV importer now, Pinpoint export next (§4.7) | Adoption hook for the "Pinpoint is ending" moment |
 | Email archive | Generic copy per campaign | Powers the click overlay; tiny storage; no recipient PII or tokens at rest |
-| Subscriber identity | Shared Cognito user pool | One base account for prefs + main-site login; `sub` ties everything together |
+| Subscriber identity | addressium's own subscriber record | Works with Cognito, Auth0, custom JWT or no accounts at all; a pool is an optional link, never a dependency |
+| Cognito linkage | Optional, read-only, joined on `externalId` | Coupling to a pool would make the product only work for Cognito shops; the pool is the org's, not ours |
 | Magic-link token | Asymmetric JWT + JWKS | Verified **client-side** on a cached page — a shared secret would leak and be forgeable; asymmetric ships only the public key |
 | Token placement | URL fragment (`#tok=`) | Never sent to CDN/origin, no logs/Referer leak, never in the cache key; fall back to query param only if it can't survive the SES redirect |
 | Paywall model | Soft / cosmetic (client overlay) | Content stays in the page for SEO/Google indexing; token removes the overlay; graceful fallback to the wall on any token failure |
@@ -134,7 +151,9 @@ every org in a deployment is operated by the same owner.
 | Token redemption | Reusable within TTL, stateless | No callback to addressium; keeps the two systems decoupled |
 | Entitlement freshness | Synced from system of record | addressium's entitlement copy stays current; token also stamps `entitlement_asof` |
 | Tenancy | Multi-org, one AWS account, logical silos | Run many publications from one deployment; not account-per-org |
-| Org isolation | Per-org subscriber pool + KMS key + SES identity; pooled DynamoDB by `orgId` | Isolate identity/signing/sending; keep data infra cheap and shared |
+| Org isolation | Per-org KMS key + SES identity (+ optional linked subscriber pool); pooled DynamoDB by `orgId` | Isolate signing/sending/identity; keep data infra cheap and shared |
+| Account-wide services | Consume, don't create (WAF, ops alerting) | A production account already runs these; a second competing copy duplicates cost and bypasses the operator's own posture |
+| Analytics posture | DynamoDB always on; columnar lake opt-in, off by default | No standing analytics bill for a system whose core job is sending email |
 | Sending reputation | Per-org configuration sets; dedicated IP pool optional | Metrics isolated always; reputation isolation opt-in (added cost) |
 | Access control | RBAC, 4 roles, org-scoped, server-enforced | Sales read-only, Editor no delete/close, destructive = admin-only |
 | Suppression scope | Hybrid default (bounces/complaints global, unsubscribes per-org) | Protect shared reputation; keep unsubscribes brand-specific |
@@ -175,25 +194,37 @@ every org in a deployment is operated by the same owner.
         └──────── Events Lambda ◀── SQS ◀── SNS ◀── (delivery/bounce/complaint/
                           │                            open/click/reject)
                           ▼
-             Hot counters (DynamoDB)  +  Firehose ─▶ S3 ─▶ Athena/Glue (analytics)
+             Hot counters + append-only Events log (DynamoDB)
 ```
+
+That is the whole always-on system. The columnar analytics lake (Kinesis →
+Firehose → S3 → Athena/Glue) and the OpenSearch segmentation mirror are
+deliberately **not** in this diagram: both are opt-in, off by default, and no
+core path depends on either (§4.23, §5, §7).
+
+Two gaps between the diagram and the deployed stack, each marked
+**[Decided r2 — not yet built]** where it is described: the **SQS hop between SNS
+and the events Lambda** (§4.5 — today the Lambda is subscribed directly to the
+topic) and the **hot counters** (§7 — today every figure is derived by folding
+the event log on read).
 
 ### Request/data planes
 
-- **Public plane** (unauthenticated, WAF-protected, rate-limited + CAPTCHA):
-  signup, double-opt-in confirmation, one-click unsubscribe. Tokenized/signed so
-  a request can only affect the acting subscriber.
-- **Subscriber plane** (Cognito-authenticated, **per-org shared pool**): the
-  subscriber logs in with their own account to manage list preferences and
-  attributes (§4.10).
+- **Public plane** (unauthenticated, behind an **operator-supplied WAF** (§4.3),
+  rate-limited, honeypot + optional CAPTCHA on signup): signup, double-opt-in
+  confirmation, one-click unsubscribe. Tokenized/signed so a request can only
+  affect the acting subscriber.
+- **Subscriber plane** (unauthenticated, **token-based**): signed preference,
+  confirm and unsubscribe links let a subscriber manage their own record with no
+  account and no login (§4.10).
 - **Admin plane** (Cognito-authenticated via a **separate admin pool**, staff):
   list/subscriber/segment/campaign/template/automation management, analytics, and
   settings. Every request carries a **role + organization scope**, enforced
   server-side (§4.12); all data access is partitioned by `orgId` (§4.11).
 - **Sending plane** (async): campaign launch → segment resolution → suppression
   filter → SQS fan-out → throttled SES send.
-- **Event plane** (async): SES events → SNS → SQS → processor → counters +
-  suppression + link aggregation + Firehose (magic-link tokens redacted).
+- **Event plane** (async): SES events → SNS → SQS → processor → event log +
+  counters + suppression + link aggregation (magic-link tokens redacted).
 - **Archive/reporting plane**: sender writes a generic rendered copy + link-map
   to S3/DynamoDB; the admin SPA paints the click overlay and dashboards from it.
 - **Token plane**: the token service mints KMS-signed magic-link JWTs and serves
@@ -211,7 +242,10 @@ scopes everything to the active silo. Controls are shown/hidden by the member's
 role (convenience only — enforcement is server-side, §4.12). Surfaces:
 
 - **Overview** — dashboard (KPIs, deliverability health) and analytics with the
-  click-map overlay and A/B results
+  click-map overlay, plus a single derived **system health: OK / degraded**
+  badge (§9.2). Raw CloudWatch alarms deliberately do not surface here — a
+  marketer does not care about Lambda throttles (§9.2)
+  **[Decided r2 — not yet built]**
 - **Audience** — newsletters (create, open/close signups), subscribers (detail +
   manual unsubscribe/suppress), segments, and suppression (§4.13)
 - **Messaging** — campaigns (compose → audience → review; one-off vs series),
@@ -239,10 +273,15 @@ Static pages + minimal JS on S3/CloudFront:
 
 API Gateway HTTP API → Lambda. Two authorizer scopes:
 
-- **Admin routes**: Cognito JWT authorizer.
-- **Public routes**: no auth, but WAF + per-IP rate limiting + CAPTCHA on
-  signup, and tokenized/signed links for confirm/preference/unsubscribe so a
-  request can only affect the subscriber the token encodes.
+- **Admin routes**: Cognito JWT authorizer. 33 routes carry it; 27 of those are
+  the admin-console routes, which all dispatch through **one** router function
+  (§9.4).
+- **Public routes**: 10 routes with no auth — signup, batch signup, confirm,
+  unsubscribe, version, public list, public branding, the JWKS endpoint, and the
+  two HMAC-signed webhooks. They are defended by an operator-supplied WAF, a
+  server-side honeypot and optional reCAPTCHA on signup, and tokenized/signed
+  links for confirm/preference/unsubscribe so a request can only affect the
+  subscriber the token encodes.
 
 Handlers are thin: validate (zod schemas from `packages/core`), authorize,
 mutate DynamoDB, enqueue async work. No business logic in the frontend.
@@ -254,6 +293,29 @@ mutate DynamoDB, enqueue async work. No business logic in the frontend.
   tokens near-real-time. Authenticated with a scoped machine credential (API
   key / signed webhook), separate from the Cognito operator auth. Idempotent by
   `(subscriber, source, version)`.
+
+**WAF is operator-supplied, not created here** (compendium #30/#31/#66). A
+production AWS account very likely already runs a WebACL with tuned rules;
+shipping our own would be a second, competing ACL that duplicates cost, fights
+the operator's existing rules, and at ~$17/month was 77% of idle cost. The
+operator attaches a **REGIONAL** ACL to the HTTP API stage and a
+**CLOUDFRONT**-scope ACL (which must live in `us-east-1`) to the two
+distributions, with the AWS managed common + known-bad-inputs rule sets, a per-IP
+rate limit, and optionally a CAPTCHA rule on `/signup`.
+**[Decided r2 — not yet built]** — `infra/cdk/lib/waf.ts` still builds both ACLs
+and the stack still associates them, unconditionally, in every stage; and the
+stack emits **no** API stage ARN or distribution ARN for an operator to attach
+their own to.
+
+**Signup bot protection is half-shipped.** The server-side honeypot check is
+built and tested (a tripped trap returns a silent `202 pending`, so a scraper
+cannot tell it was caught), and reCAPTCHA verification runs when — and only
+when — the org configures `signupProtection.recaptchaSecretArn`, so it is
+**off by default**. But no first-party client renders the trap field: the hosted
+signup page and the embed widget post `{orgId, email, listId}` and nothing else.
+A honeypot whose trap field never appears in the shipped form catches only bots
+that invent it. Emitting the field from the public site is
+**[Decided r2 — not yet built]**.
 
 ### 4.4 Sender (`services/sender`)
 
@@ -289,20 +351,53 @@ mutate DynamoDB, enqueue async work. No business logic in the frontend.
 SES configuration set publishes delivery/bounce/complaint/open/click/reject
 events → SNS → SQS → Lambda. The processor:
 
-- Appends to the **Events** table (append-only engagement log).
-- Updates **hot counters** on the campaign and subscriber records.
+- Appends to the **Events** table (append-only engagement log). Redelivery is
+  harmless: the sort key carries a **deterministic `eventId`**, so a repeated
+  event overwrites its own row rather than double-counting.
+- Updates **hot counters** on the campaign record.
+  **[Decided r2 — not yet built]** — nothing increments them today.
+  `Campaign.counters` is zero-initialized and never advanced, so the campaigns
+  list reports `sent: 0` and usage rollups sum zeros; every real figure is
+  derived by folding the full event log on read (§7). Compendium #57 closes this
+  by writing the event and incrementing the counter in **one
+  `TransactWriteItems`**, made exactly-once by the deterministic `eventId` above
+  — which is the half that already exists.
 - **Aggregates clicks by link-id** (resolving the clicked URL back to the
   link-id assigned at archive time) so the click overlay has per-link totals and
   unique counts.
 - **Redacts magic-link tokens before persistence.** SES click tracking reports
   the full destination URL of an editorial link, which carries the bearer token
   (in the URL fragment, or a query param on the fallback path). The processor
-  **strips the token** before writing to the Events table or Firehose, so
-  magic-link credentials never land at rest in the analytics pipeline.
-- Streams events to **Firehose → S3** for Athena querying.
+  **strips the token** before anything is written, so magic-link credentials
+  never land at rest — not in the Events table, and not in the opt-in analytics
+  tier if an operator enables it.
 - On **hard bounce / complaint**, adds the address to the **suppression list**
   and flips the subscription status; monitors complaint rate and **auto-throttles**
   if it approaches SES thresholds.
+
+**Why SQS sits between SNS and the Lambda** (compendium #20/#44). Subscribing a
+Lambda straight to an SNS topic is an **asynchronous** invocation: AWS retries
+twice and then **discards the event permanently**, with no dead-letter queue. A
+dropped bounce is an address you keep mailing — reputation damage that compounds
+silently and is invisible until deliverability is already gone. Throughput was
+never the concern here; at the paced SES send rate, events arrive well inside
+Lambda's capacity. **Durability is.** An SQS queue in the middle gives durable
+buffering when the handler is broken or throttled, a real **DLQ** for events that
+fail repeatedly, batching with **partial-batch-failure reporting** — the same
+mechanism the sender already uses, so one poison event no longer fails its batch
+peers — and burst absorption without leaning on Lambda concurrency. Cost at this
+volume is effectively zero. This is strictly better than both the SNS→Lambda
+wiring and a Kinesis pipeline, which is the real answer to "do we need Kinesis to
+accept bounces?" (no).
+
+**[Decided r2 — not yet built]** — the deployed stack still does
+`sesEvents.addSubscription(new LambdaSubscription(eventsFn))`. There is no events
+queue and no events DLQ; the only queues in the template are the send queue and
+its DLQ, and the only event-source mapping is SendQueue → SenderFn.
+
+**Analytics streaming is opt-in.** With the `enableAnalytics` context flag set,
+the table also streams to Kinesis → Firehose → S3 for Athena (§4.23). It is
+**off by default**, and nothing in the event plane depends on it.
 
 ### 4.6 Automations (`services/automations`)
 
@@ -342,14 +437,39 @@ transitions it; the console's **Schedules** screen exposes the three actions.
 
 ### 4.7 Importer (`services/importer`)
 
-Ingests **Amazon Pinpoint exports** and **CSV** files:
+**Today it reads CSV, and only CSV.** The parser splits on newlines and commas;
+recognised columns map to the subscriber, everything else lands in the generic
+attribute bag. It runs behind the admin API with a **dry-run preview**, dedupe by
+normalized email, and an import report (created/updated/skipped/errored). Every
+imported subscription defaults to **`pending`** (#192), so an import can never
+silently start mailing a list.
 
-- Endpoints → subscribers (with attribute mapping)
-- Segments → addressium segments (best-effort predicate translation)
-- Suppression/opt-out lists → suppression entries
+**Reading a real Pinpoint export is not built** (compendium #59) —
+**[Decided r2 — not yet built]**. Pinpoint exports **gzipped JSON Lines** of
+endpoint records; there is no gzip reader, no JSON Lines parser, and no
+endpoint-field handling anywhere in the codebase. That work carries one hard
+requirement: **`OptOut` / `EndpointStatus` must never become mailable.** No form
+of that guarantee exists yet — hand-converted Pinpoint columns fall into the
+attribute bag where nothing consults them, and the import API accepts
+`status: "confirmed"`, which would take an opted-out endpoint straight to
+mailable. Segment translation and suppression-list ingest are likewise unbuilt.
+Do not read "Pinpoint importer" as "your suppression state survives the
+migration"; it does not.
 
-Runs as an async job (S3 upload → Lambda/Step Functions) with a dry-run
-preview, dedupe, and an import report (created/updated/skipped/errored).
+**Import wizard** (compendium #60) — **[Decided r2 — not yet built]**. Before any
+row is written, the admin must declare:
+
+- **(a) consent basis** — *explicit* (double opt-in evidence) or *implicit*
+  (existing relationship), recorded on **every** imported subscription so a
+  later dispute is answered per row rather than per file;
+- **(b) tags** identifying this import batch;
+- **(c) target audiences** via multi-select, with create-new inline.
+
+Implicit consent defaults the subscription to `pending`. Today the options are
+`{orgId, listId, csv, status?, dryRun?}` — one list, no consent basis, no batch
+tags — so imported subscribers carry **no consent provenance at all**, which is
+the one place §4.19's provenance guarantee does not hold. The pending default is
+real, but it is unconditional rather than derived from a declared basis.
 
 ### 4.8 Reporting & email archive (`services/reporting` + `apps/admin-web`)
 
@@ -365,9 +485,9 @@ Powers the full reporting dashboards and the click-map overlay.
   Mailchimp-style click map.
 - **Dashboards**: campaign funnels (sent → delivered → open → click →
   unsub/complaint), link performance tables, list-growth trends, deliverability
-  (bounce/complaint) trends, and per-subscriber activity timelines. Real-time
-  numbers come from the hot counters; deeper cuts come from Athena over the S3
-  event lake (§7).
+  (bounce/complaint) trends, and per-subscriber activity timelines. Numbers come
+  from the DynamoDB event log (§7); deeper ad-hoc cuts come from the **opt-in**
+  Athena tier if an operator turns it on (§4.23).
 - **Retention**: archive objects follow an operator-configurable S3 lifecycle
   policy. Because archived bodies are generic (no baked-in recipient PII or
   tokens), they are safe to retain for the life of the reporting window.
@@ -380,28 +500,44 @@ operator's main website *verifies* them and *establishes the session*. The
 sign-in / Cognito session-exchange logic on the main site is **out of scope**
 (see §12 for the contract).
 
-- **Signing**: an **asymmetric key in KMS** (ES256/RS256). addressium exposes a
-  **JWKS endpoint** (via API Gateway/CloudFront) so the main website verifies
-  offline, with no shared secret and no callback. Asymmetric is **mandatory**
-  here because verification happens **client-side on a cached page** (§8.1) — a
-  shared secret would be shipped to the browser and become forgeable.
-- **`sub` is the shared Cognito subject** — the same base identity used for
-  main-site login and preference management (§4.10). The main site resolves an
-  **existing** Cognito user; no JIT provisioning.
+- **Signing**: a **per-org asymmetric key in KMS** — `ECC_NIST_P256`,
+  `SIGN_VERIFY`, signed with `ECDSA_SHA_256`, i.e. **ES256**, with the JWS `alg`
+  header hard-coded rather than caller-supplied. The private half never leaves
+  KMS. addressium publishes the public half at an unauthenticated **JWKS
+  endpoint**, `GET /orgs/{org}/.well-known/jwks.json`, so the main website
+  verifies offline with no shared secret and no callback. Asymmetric is
+  **mandatory** here because verification happens **client-side on a cached
+  page** (§8.1) — a shared secret would be shipped to the browser and become
+  forgeable. Per-org keys mean one org's compromised key cannot forge another
+  org's tokens.
+- **`sub` is addressium's own subscriber id** — `Subscriber.sub`, the durable
+  UUID minted at signup (§4.10), not a Cognito subject. The subscriber record is
+  the primary identity. An org that runs a Cognito pool joins to it through the
+  separate, optional `Subscriber.externalId`, which the token never carries.
+  This is deliberate: it is what lets a site on Auth0, a custom JWT scheme, or no
+  accounts at all consume magic links unchanged.
 - **Token shape** (JWT claims):
-  - `sub` — the subscriber's Cognito user-pool subject
+  - `sub` — addressium's durable subscriber id
   - `scope: "content:read"` — **lite** access only
   - `amr: ["magic_link"]` — marks the session's origin so the main site can
     treat it as lite and force a step-up before anything sensitive
-  - `entitlement` — `free` / `paid` (coarse tier / feature flags) from the profile
+  - `entitlement` — `free` / `paid` (coarse tier) from the profile
   - `entitlement_asof` — freshness stamp for the entitlement value
-  - `aud` (main site), `iss` (this deployment), `exp` (long-lived, per §11)
-  - additional profile claims from an **operator-configurable whitelist**
+  - `aud` (main site), `iss` (this deployment), `iat`, `exp` (long-lived, per §11)
+- **The claim set is closed.** `mint()` takes `(orgId, sub, entitlement,
+  entitlementAsof)` and both signers emit exactly the claims above — there is no
+  extension point, so claim minimisation is enforced by construction rather than
+  by policy. An **operator-configurable whitelist** of extra profile claims is
+  **[Decided r2 — not yet built]**, and is worth weighing against the fact that
+  the closed set is the stronger privacy posture.
 - **Delivery**: minted per recipient, embedded in the **URL fragment** of
   editorial links (§4.4), so it is client-side only and never hits the CDN,
   origin, or logs.
-- **Claim minimisation**: only whitelisted, coarse values ride in the token —
-  never private account detail — because the token travels in a URL.
+- **Signing cost at volume** (compendium #14/#45): `mint()` is called **per
+  recipient**, so a 500,000-recipient campaign makes 500,000 KMS `Sign` calls —
+  roughly **$1.50** and measurable added latency on the send path. Not urgent at
+  newsletter scale, and the fix is not a format change: cache a short-lived data
+  key, or sign locally with a KMS-wrapped key.
 - **Statelessness**: tokens are reusable within their TTL; addressium keeps no
   redemption state, keeping the two systems decoupled. Safety comes from the
   lite scope + bounded TTL + graceful fallback to the wall, not from single-use
@@ -411,23 +547,50 @@ sign-in / Cognito session-exchange logic on the main site is **out of scope**
 See §8.1 for the security model (why lite + forwardable + soft-paywall is safe)
 and §12 for the main-site integration contract.
 
-### 4.10 Subscriber identity & preference center (`apps/subscriber-web` + Cognito)
+### 4.10 Subscriber identity & preference center (`apps/subscriber-web`)
 
-Every subscriber is a **Cognito user** in the pool **shared with the main
-website** — the single base identity everything associates to.
+**The addressium subscriber record is the primary identity.** `Subscriber.sub` is
+a UUID addressium mints at signup and never changes; it keys the profile, the
+subscriptions, the entitlement, and the `sub` claim in every magic-link token
+(§4.9). No user pool has to exist anywhere for addressium to run a list.
 
-- **Signup** creates the Cognito user, records the DynamoDB subscriber profile
-  (keyed by Cognito `sub`), and runs **double opt-in** confirmation.
-- **Preference center**: authenticated with the subscriber's own Cognito login,
-  to manage list subscriptions, attributes, and unsubscribe. (Tokenized no-login
-  links remain for one-click unsubscribe and email-driven confirmation.)
-- **Two session tiers for one account**: a **full** session (real Cognito login →
-  profile + preference management) versus a **lite** session (magic-link origin →
-  content read + reg/paywall bypass, no profile). The same person can upgrade
-  from lite to full by logging in normally.
-- Because the pool is shared, `entitlement` on the profile and the `sub` in the
-  magic-link token line up with the main site's own view of the user with no
-  mapping layer.
+- **Signup is unauthenticated and pool-independent.** It records the subscriber
+  profile keyed by `Subscriber.sub` and runs **double opt-in** confirmation. No
+  account is created, and none is required.
+- **The preference center is token-based, not login-based.** Signed, tokenized
+  links — confirm, one-click unsubscribe, preference — let a subscriber act on
+  their own record with no password. `apps/subscriber-web` ships no auth module
+  and sends no `Authorization` header on any call.
+- **Cognito linkage is optional and read-only.** An org that already runs a
+  Cognito pool for its own website can **link** it, so addressium's subscribers
+  line up with the site's users. addressium *references* that pool; it does not
+  own it, create it, or write to it. The join key is `Subscriber.externalId`.
+  **[Decided r2 — not yet built]** — as shipped this is not read-only and not
+  optional: `Organization.subscriberPoolId` is a **required** field, provisioning
+  accepts `subscriberPool: {mode: "create"}` and issues a real `CreateUserPool`,
+  and the public confirm handler can call `AdminCreateUser` when an org sets
+  `signupProtection.createAccountsOnConfirm` (optional, off unless configured).
+  Both paths carry an explicit IAM `Deny` on the admin pool, so neither can
+  escalate into the control plane — but neither is read-only. `mode: "link"`,
+  which only validates an existing pool with `DescribeUserPool`, is the path that
+  matches the target.
+- **Identity sync works, in one direction.** The HMAC-verified
+  `POST /webhooks/identity` route accepts upsert/delete from the operator's
+  system of record, matches on `externalId`, reconciles an email-only subscriber
+  created by public signup, re-points the email index when an address changes,
+  and routes delete through the GDPR erase path (§4.19). The **other** direction
+  — resolving a magic-link token back to the org's existing Cognito user — does
+  not exist; nothing downstream reads `externalId` yet.
+  **[Decided r2 — not yet built]** (compendium #45: this "needs finishing rather
+  than replacing").
+- **Two session tiers, owned by different systems.** A **lite** session
+  (magic-link origin → content read + reg/paywall bypass, no profile) versus a
+  **full** session (a real login). The lite half is built and enforced end to
+  end: the token asserts `scope` and `amr`, and the reference verifier rejects
+  anything that does not carry them (§8.1). The full half belongs to the
+  operator's own site — a subscriber login inside `apps/subscriber-web` is
+  **[Decided r2 — not yet built]** and may never be built, because the pool is
+  the org's, not ours.
 
 ### 4.11 Multi-organization tenancy (silos)
 
@@ -436,10 +599,10 @@ Daily), each an isolated silo, all operated by the same owner.
 
 - **One AWS account, logical silos.** A shared control plane (one admin pool, one
   API, one console, one CDK deployment) over per-org data and identity resources.
-- **Per-org (siloed):** subscriber Cognito pool (shared with that org's site),
-  sending domain(s) + SES identity + **configuration set**, **KMS signing key +
-  JWKS**, entitlement/billing sync, and all subscriber/list/campaign/archive/event
-  data.
+- **Per-org (siloed):** sending domain(s) + SES identity + **configuration set**,
+  **KMS signing key + JWKS**, entitlement/billing sync, an **optional linked
+  subscriber Cognito pool** (§4.10), and all
+  subscriber/list/campaign/archive/event data.
 - **Shared (control plane):** the **admin** Cognito pool (staff), the console/API,
   Lambdas, and the DynamoDB table.
 - **Data isolation:** DynamoDB is **pooled with a hard `orgId` partition prefix**
@@ -459,22 +622,23 @@ Daily), each an isolated silo, all operated by the same owner.
   root-domain silo, structured identically to the prod `summitdaily.com` — runs
   on the **exact same workflows and Lambdas**; nothing new is deployed. The flag
   only (a) surfaces a **DEV badge** in the console so an operator never confuses a
-  test publication with a live one, and (b) lets cost/usage rollups and Athena
-  queries **filter test spend** out (the `environment` field rides along in the
-  nightly entities export, §4.23). Because a dev org is a full silo, it has its
+  test publication with a live one, and (b) lets cost/usage rollups **filter test
+  spend** out — the `environment` field also rides along into the opt-in
+  analytics tier for anyone who enables it (§4.23). Because a dev org is a full
+  silo, it has its
   own SES identity, config set and reputation — so a dev blast can never touch a
   prod list or prod deliverability. As a second belt, a dev org enforces a
   **send-time allowlist** (`devAllowlist`: exact emails or `@domain` suffixes) on
   every recipient in both campaign and drip/transactional sends; it is
   **fail-closed** — a dev org with no allowlist sends to no one. Legacy org
   records with no flag are read as `prod` and are never gated.
-- **Subscriber pool — link by default, create optionally.** The subscriber pool
-  is **shared with the org's main website**, so most operators already have one
-  (behind their site's paywall/login). The default is to **associate an existing
-  pool** by ID — this is what makes the magic-link `sub` match the site's
-  existing users. Creating a fresh pool is offered only for **greenfield** sites
-  with no auth yet (the operator then points their site at it). addressium
-  references a linked pool; it does not need to own it.
+- **Subscriber pool — optional, and linked when present.** An org may have no
+  user pool at all; addressium runs a list fine without one (§4.10). Where the
+  org's main website does run a pool, "Add organization" **associates the
+  existing pool by ID** and addressium treats it as read-only reference data,
+  joined on `Subscriber.externalId`. **[Decided r2 — not yet built]** — today
+  the field is required and a `mode: "create"` path issues a real
+  `CreateUserPool`.
 
 ### 4.12 Roles & access (RBAC)
 
@@ -596,24 +760,63 @@ the sender's complaint-rate protection, §6). Alerts publish to an
 operator-configured **Amazon SNS topic** — fan out to email/SMS/Slack/PagerDuty/
 Lambda — plus optional direct notify targets.
 
-### 4.19 Privacy (GDPR/CCPA) & audit log
+These are **application** alerts about mail — "your complaint rate is climbing" —
+and are aimed at the operator running the lists. They are a different concern from
+**ops** alerts about the infrastructure ("EventsFn is throwing"), which go to the
+external ops topic and the CloudWatch dashboard described in §9.2.
 
-- **Data-subject requests:** export a person's full record (profile + events) as
-  JSON, or **erase / forget** — removing profile + events and writing a hashed
-  suppression tombstone (§4.13) so they are never re-added. Available per
-  subscriber and by email in Settings.
-- **Consent provenance** (timestamp / IP / source URL) and configurable **event
-  retention** (e.g. 13 / 25 months) support compliance.
+### 4.19 Privacy (GDPR/CCPA), export & audit log
+
+- **Data-subject requests:** export one person's record (profile + subscriptions
+  + entitlement) as JSON, or **erase / forget** them.
+- **What erasure actually does, precisely:** unsubscribe every subscription,
+  write a hashed suppression tombstone (§4.13) so the address can never be
+  re-added, and anonymize the profile in place (email replaced with
+  `erased:<sub>`, attributes cleared, consent dropped, status `suppressed`). It
+  is **DynamoDB-only.** It does **not** reach the S3 archive or the analytics
+  bucket, and it does **not** delete the engagement-event rows, which keep the
+  pseudonymous `subscriberId`. That is defensible — the profile those ids resolve
+  to is anonymized — but the honest description is "the profile is anonymized and
+  the address is tombstoned", not "the person's data is gone". Erasure reaching
+  S3 is **[Decided r2 — not yet built]** (#164).
+- **Bulk export / portability** (compendium #58)
+  **[Decided r2 — not yet built]**: CSV **and** JSONL, including consent
+  provenance, round-trip importable through §4.7, because *users must be able to
+  leave*. Nothing of this
+  exists yet: there is no export route, no export writer, and no CSV or JSONL
+  emitter anywhere in the codebase. The only thing called "export" today is the
+  single-subject DSAR above, which returns JSON in an HTTP response. Until this
+  lands, the project's core promise — "your data never leaves your account, and
+  you can export it at any time" — is only half true.
+- **Consent provenance** (timestamp / IP / source URL) is captured on signup and
+  configurable **event retention** (e.g. 13 / 25 months) supports compliance.
+  Imported subscribers are the exception and carry none (§4.7).
 - **Audit log:** every privileged admin action (sends, closes, deletes, key
-  rotations, org provisioning, manual unsubscribes) is recorded **immutably** with
-  member + org + timestamp.
+  rotations, org provisioning, manual unsubscribes) is recorded **immutably**
+  with member + org + timestamp, into a dedicated S3 bucket under **Object
+  Lock**.
+- **The target Object Lock mode is GOVERNANCE, not COMPLIANCE** (compendium #9)
+  **[Decided r2 — not yet built]**. Both make a written object immutable for its
+  retention window; the difference is recoverability. Under GOVERNANCE a
+  sufficiently privileged principal can still remove an object with
+  `s3:BypassGovernanceRetention`, so a misconfiguration — wrong retention, wrong
+  bucket, an accidental flood — stays fixable. COMPLIANCE cannot be undone by
+  anyone, including AWS, for the full window. For a system that has never been
+  deployed, an unrecoverable mistake is the larger risk. **The deployed default
+  is COMPLIANCE** with a 2,555-day (7-year) default retention and a `Retain`
+  removal policy; changing it to GOVERNANCE is the r2 target.
 
-### 4.20 A/B subject testing
+### 4.20 A/B subject testing — future, not built
 
-A campaign may define **two subject variants** sent to a holdout split;
-addressium picks the **winner** by open or click rate after a configurable window
-and auto-sends it to the remainder. Variant rates and the winner surface in the
-campaign report.
+**Not in v1, and not in the codebase.** Compendium #63 cut it ("not required")
+and the implementation was removed. Nothing in the API, the console, the data
+model or the infrastructure creates, schedules or decides an A/B test. This
+section keeps its number because §4.21–§4.23 are cross-referenced from code.
+
+If it ever returns, the shape is two subject variants sent to a holdout split,
+with a winner picked by open or click rate after a decision window and auto-sent
+to the remainder. Note what that needs and never had: a scheduler to fire phase
+two, an authoring surface, and a validated request contract.
 
 ### 4.21 Time zones
 
@@ -668,37 +871,36 @@ opt-in, per-org **win-back → sunset** automation (`Organization.reengagement`)
   invoked by the automations service on a recurring EventBridge schedule, the same
   mechanism recurring editions and drip journeys use.
 
-### 4.23 Reporting read-model (analytics tier)
+### 4.23 Reporting read-model — opt-in, off by default
 
-The DynamoDB table is tuned for the **sending** path — key-based reads/writes,
-partitioned by org and campaign. Cross-campaign cohort questions ("how many
-subscribers engaged with ≥K of the last N editions", funnels, retention, per-user
-history) are the opposite access pattern: wide scans and aggregations that would
-be slow and expensive against DynamoDB and would put reporting load on the
-sending path. So reporting is a **separate read-model** (CQRS) — an opt-in
-(context `enableAnalytics`), append-mostly copy of the data in a columnar data
-lake that reporting owns and can be rebuilt from at any time.
+The DynamoDB table is tuned for the **sending** path. Cross-campaign cohort
+questions ("how many subscribers engaged with ≥K of the last N editions",
+funnels, retention) are the opposite access pattern — wide scans that would be
+slow against DynamoDB and would put reporting load on the sending path. So there
+is an optional CQRS read-model: an append-mostly columnar copy in S3 that
+reporting owns and can rebuild at any time.
 
-- **Fact tier (near-real-time).** The table streams every change to a **Kinesis**
-  stream; **Firehose** reads it and invokes a small transformation Lambda that
-  keeps only engagement-event inserts and flattens each to a columnar row, landing
-  newline-delimited JSON in **S3** under `events/org_id=…/event_date=…/`
-  (dynamically partitioned). A **Glue** table with **partition projection**
-  catalogues it — no crawler, partitions resolve at query time.
-- **Dimension tier (nightly).** A scheduled **point-in-time export** dumps the
-  whole table to `entities/` with **zero read-capacity cost** (it reads continuous
-  backups, not the table), giving subscriber/campaign/list snapshots to join
-  against.
-- **Query.** **Athena** SQL against the `events` table, in a per-deployment
-  workgroup. See `docs/reporting/queries.sql` for the canonical cohort/funnel
-  queries. Partition pruning on `org_id` + `event_date` keeps scans (and cost)
-  small; storage is cheap S3 at rest.
-- **Clicks over opens.** Reporting weights **clicks**; opens are MPP-inflated and
-  reported only for comparison (§4.22).
-- **Freshness is deliberately decoupled.** Facts are seconds-to-minutes behind
-  (Firehose buffering); dimensions up to a day. That lag is fine for reporting and
-  is the price of keeping the analytics plane off the sending path. GDPR erasure
-  (§4.19) must also reach the lake — rewrite/rebuild affected partitions.
+**It is not part of the core design.** Compendium #64 removed the streaming
+analytics stack from the *default* posture; the code keeps it behind two CDK
+context flags that are **off unless you set them**, and neither is set anywhere
+in the repo:
+
+| Context flag | What it adds |
+|---|---|
+| `enableAnalytics` | DynamoDB → Kinesis → Firehose → S3 (`events/org_id=…/event_date=…/`), a **Glue** table with partition projection (no crawler), an **Athena** workgroup, and two Lambdas — the Firehose transform and the on-demand table export |
+| `enableOpenSearchMirror` | DynamoDB Streams → an **OpenSearch Serverless** collection and its indexer Lambda, the segmentation escape hatch (§5) |
+
+A default synth contains **zero** Kinesis, Firehose, Glue, Athena and OpenSearch
+resources, and the table carries no stream. The always-on analytics path is §7.
+
+If you do turn it on: **Athena** SQL against the `events` table in a
+per-deployment workgroup (`docs/reporting/queries.sql` holds the canonical
+cohort/funnel queries), with partition pruning on `org_id` + `event_date` to
+bound scan cost. Facts run seconds-to-minutes behind (Firehose buffering) and
+dimension snapshots up to a day — that lag is the price of keeping the analytics
+plane off the sending path. Reporting weights **clicks** over MPP-inflated opens
+(§4.22). GDPR erasure (§4.19) must reach the lake too: rewrite or rebuild the
+affected partitions.
 
 ---
 
@@ -710,20 +912,20 @@ Entities:
 
 | Entity | Purpose | Key notes |
 |---|---|---|
-| **Organization** | A silo | name, domain(s), subscriber pool ID, `magicLink` {kmsKeyArn, kid, issuer, audience}, SES config set, IP mode (shared/dedicated), suppression scope, **defaultTimezone** (IANA), setup state |
+| **Organization** | A silo | name, domain(s), **optional** linked subscriber pool ID (§4.10), `magicLink` {kmsKeyArn, kid, issuer, audience}, SES config set, IP mode (shared/dedicated), suppression scope, **defaultTimezone** (IANA), setup state |
 | **AdminMember** | Staff ↔ role ↔ orgs | admin-pool `sub`, role, org-scope list, MFA state (in admin pool) |
 | **Role** | Capability set | named set of capabilities (built-in + custom) |
-| **Subscriber** | Durable person record | **keyed by (`orgId`, Cognito `sub`)**; email (normalized), attributes, locale, source, consent {timestamp, ip, url}, global status, `entitlement` (free/paid) + `entitlement_asof` |
+| **Subscriber** | Durable person record | **keyed by (`orgId`, addressium `sub`)** — a UUID minted at signup, never a Cognito subject; optional **`externalId`** links an org's own user pool (§4.10); email (normalized), attributes, locale, source, consent {timestamp, ip, url}, global status, `entitlement` (free/paid) + `entitlement_asof` |
 | **List (Newsletter)** | A named audience | opt-in policy, from-address, reply-to, compliance footer, physical address, **access** (free/paid), **visibility** (open/closed on the opt-in page) |
 | **Subscription** | Subscriber ↔ List join | per-list status: `pending`/`confirmed`/`unsubscribed`/`bounced`/`complained` |
 | **Segment** | Saved filter | predicate over attributes + engagement; resolved at send time |
 | **CampaignSeries** | Recurring newsletter | cadence, **owns template + ad-tag fills**, aggregate counters across editions |
-| **Campaign** | A send (edition or one-off) | type (one-off / series edition), series ref, audience, schedule, sending config, A/B config, hot counters |
+| **Campaign** | A send (edition or one-off) | type (one-off / series edition), series ref, audience, schedule, sending config, hot counters (§7 — not yet incremented) |
 | **Template** | Reusable content | authoring mode (visual/MJML/raw-HTML), MJML/HTML source, versioned, declared merge-tags + **ad slots** |
 | **MergeTag** | Replacement variable | source (profile/feed/system/token-claim), scope, example, fallback |
 | **AdSlotFill** | LiveIntent HTML in a slot | slot id, HTML, binding (series or campaign), edition/version |
 | **Feed** | Content source | RSS/Atom/JSON URL, field→merge-tag mapping, pull interval, target list |
-| **ABTest** | Subject test | variants, split, winner metric, decision window, result |
+| ~~**ABTest**~~ | Subject test | **Removed from the code; future only (§4.20).** No entity, no zod schema, no field on `Campaign` |
 | **Event** | Engagement log | append-only: sent/delivered/open/click/bounce/complaint/unsub, attributed by tags; magic-link tokens redacted |
 | **SuppressionEntry** | Do-not-send | source (bounce/complaint/manual/unsubscribe), **scope** (global/org), enforced pre-send |
 | **EmailArchive** | Generic rendered copy | S3 pointer + link-map (`link-id → url template, position, label`); one per campaign/step |
@@ -749,10 +951,15 @@ Entities:
 The segment engine lives behind an interface (`packages/segment`). The v1
 implementation uses **GSIs + materialized tags**, which covers the large
 majority of real list filters cheaply and with zero idle cost. When an operator
-needs full ad-hoc, arbitrary-attribute segmentation at scale, a documented
-**OpenSearch Serverless mirror** (fed by DynamoDB Streams) drops in behind the
-same interface — this is the single "adds an always-billed component" upgrade,
-and it is opt-in.
+needs full ad-hoc, arbitrary-attribute segmentation at scale, an **OpenSearch
+Serverless mirror** (fed by DynamoDB Streams) drops in behind the same
+interface — this is the single "adds an always-billed component" upgrade.
+
+It is **opt-in and off by default**, gated on the CDK context flag
+`enableOpenSearchMirror` (§4.23). With the flag unset — which is the shipped
+state — the table has no stream, there is no indexer Lambda, and a synthesized
+template contains no OpenSearch resources at all. The escape hatch stays
+documented precisely because it should stay shut until someone needs it.
 
 ---
 
@@ -780,16 +987,33 @@ built in and enforced, not optional:
 
 ## 7. Analytics
 
-Two tiers, matching how Pinpoint analytics were actually used:
+Two tiers, matching how Pinpoint analytics were actually used — and **only the
+first is on by default**.
 
-1. **Hot counters** in DynamoDB on campaign/subscriber records power the
-   real-time dashboard (sends, deliveries, opens, clicks, bounces, unsubs).
-2. **Full event firehose** lands in **S3** for **Athena** ad-hoc analysis:
-   per-campaign funnels, cohort/engagement analysis, list growth over time,
-   and export.
+1. **Always on — DynamoDB.** **Hot counters** on the campaign record power the
+   real-time dashboard (sends, deliveries, opens, clicks, bounces, unsubs), and
+   the append-only **Events** log is the queryable history behind per-campaign
+   funnels, link performance and per-subscriber timelines. Nothing streams
+   anywhere; there is no standing analytics infrastructure to pay for. For "keep
+   it for later", an **on-demand DynamoDB export** writes the table to the
+   analytics S3 bucket (compendium #10) — it reads continuous backups, so it
+   costs no table read capacity and never touches send-path throughput.
+2. **Opt-in — the columnar lake (§4.23).** Kinesis → Firehose → S3 → Glue →
+   Athena, behind the `enableAnalytics` context flag, **off by default**. Deep
+   ad-hoc analysis lives here if an operator wants it. No core feature depends on
+   it, and with the flag unset none of it is deployed.
 
-This keeps day-to-day dashboards instant and cheap while making deep analysis
-available without an always-on analytics cluster.
+This keeps day-to-day dashboards instant and cheap, and makes deep analysis
+available without an always-on analytics cluster that most deployments would
+never query.
+
+**Two honest gaps in tier 1**, both **[Decided r2 — not yet built]**. Nothing
+increments the hot counters (compendium #57, §4.5), so every figure is currently
+derived by folding the full event log on read — correct, but O(events) per
+request, and `Campaign.counters` reads as zero wherever it is surfaced raw. And
+the on-demand export exists in code but its Lambda is created only when
+`enableAnalytics` is set, so the analytics bucket ships empty by default; making
+the export the default path is the r2 target.
 
 ---
 
@@ -801,8 +1025,11 @@ available without an always-on analytics cluster.
 
 - **Least-privilege IAM** per Lambda; no shared broad roles.
 - **Encryption** at rest (KMS) and in transit throughout.
-- **WAF** on public endpoints; per-IP rate limiting and CAPTCHA on signup to
-  prevent list-bombing and abuse.
+- **WAF** on public endpoints — **operator-supplied, not created by addressium**
+  (§4.3) — plus per-IP rate limiting, a server-side honeypot, and optional
+  reCAPTCHA on signup to prevent list-bombing and abuse.
+  **[Decided r2 — not yet built]** for the operator-supplied half: the stack
+  still creates and associates its own WebACLs.
 - **Tokenized public actions**: confirm/preference/unsubscribe links are signed
   and scoped so a request can only affect its own subscriber.
 - **Consent provenance**: signup timestamp, IP, and source URL captured for
@@ -811,9 +1038,10 @@ available without an always-on analytics cluster.
   region.
 - **Server-side RBAC**: capability + org scope checked on every mutating handler
   (§4.12); the console UI is a convenience, never the boundary.
-- **Tenant isolation**: `orgId`-partitioned data + per-org Cognito pools and KMS
-  signing keys mean silos can't read each other's data or verify each other's
-  tokens (§4.11).
+- **Tenant isolation**: `orgId`-partitioned data + per-org KMS signing keys and
+  SES identities mean silos can't read each other's data or verify each other's
+  tokens (§4.11). Where an org links its own Cognito pool, that pool is a
+  further boundary addressium only reads (§4.10).
 - **Immutable audit log** of privileged actions (§4.19).
 
 ### 8.1 Magic-link security model
@@ -861,8 +1089,9 @@ link can ever grant, not from assuming it stays private:
   redirect, use a query param excluded from the cache key with logging redacted.)
 - **No tokens at rest in analytics.** The events processor strips the token
   before persisting click events (§4.5).
-- **Claim minimisation + whitelist.** Only coarse, operator-whitelisted profile
-  values ride in the URL-borne token.
+- **Claim minimisation.** Only coarse values ride in the URL-borne token, and
+  the claim set is **closed** — there is no extension point through which an
+  operator could put private account detail into a URL (§4.9).
 - **Confirmed subscribers only**, and tokens carry a bounded `exp`. Because the
   scope is lite and failure degrades to the wall, a longer TTL is an acceptable
   UX/security trade (§11); an operator who wants a tighter posture can shorten
@@ -874,20 +1103,45 @@ link can ever grant, not from assuming it stays private:
 
 - **Monorepo, AWS CDK (TypeScript)** — infra, backend Lambdas, and the React
   frontends share types (`packages/core`) and a single toolchain.
-- **One-command deploy**: `cdk deploy`, then a **setup wizard** that walks the
-  operator through SES domain verification (DKIM/SPF/DMARC), sandbox-exit
-  guidance, the physical mailing address, and creating the first admin user.
+- **Install is two stages, and neither of them is a bare `cdk deploy`.** First,
+  **once**, the account owner runs the CloudFormation **bootstrap stack**
+  (`infra/bootstrap/addressium-bootstrap.yaml`) with admin credentials, then
+  `cdk bootstrap` with `--custom-permissions-boundary addressium-<stage>-boundary`.
+  That produces a deploy identity which can deploy and operate addressium **and
+  nothing else**, so admin credentials never have to be handed to a pipeline, a
+  teammate, or an agent. Then, as the deployer:
+  `npm install && npm run build && npm run deploy`, where `deploy:check` runs
+  first as a `predeploy` hook and **cannot be skipped**. The exact sequence lives
+  in the README's Install section and in [`DEPLOYMENT.md`](./DEPLOYMENT.md) —
+  follow those, not a remembered `cdk deploy`.
+- **`deploy:check` is a data-destruction guard, not a health check.** It creates
+  a CloudFormation **change set without executing it** and exits non-zero if any
+  data-holding resource would be replaced or removed. This exists because
+  `RemovalPolicy.RETAIN` prevents *deletion* but not *replacement*: change a
+  partition key and CloudFormation builds a new empty table, orphans the old one,
+  satisfies RETAIN, and every subscriber vanishes from the application's view.
+  Only a pre-flight change-set diff catches that.
+- **Setup wizard**: after the first deploy, the console walks the operator
+  through SES domain verification (DKIM/SPF/DMARC), sandbox-exit guidance, the
+  physical mailing address, and the first admin user (§9.1).
 - **Environments**: one deployment hosts **multiple organizations** (§4.11);
   `dev`/`prod` stacks via CDK context. Adding an org provisions its per-org
-  resources (pool, KMS key, SES identity, config set, JWKS) at runtime via the
-  `provisioning` service.
-- **Cost posture**: near-$0 at idle (on-demand DynamoDB, Lambda, S3, no
-  always-on compute or DB). Dominant cost is SES (~$0.10 / 1,000 emails) plus
-  egress. Two components add cost only when opted in: the OpenSearch mirror
-  (§4.11, standing) and the reporting read-model (§4.23 — Kinesis, Firehose,
-  Athena scan at ~$5/TB, and the lake's own S3). Athena scan is bounded by a
-  per-query bytes-scanned cutoff on the workgroup so a bad query can't run up a
-  bill, and all of these drivers are metered per org (see §11).
+  resources (KMS key, SES identity, config set, JWKS) at runtime via the
+  `provisioning` service. Note the stage test is **literal string equality**
+  against `"prod"` — a stage named `staging` or `prod-eu` silently gets the
+  non-prod settings (§9.2).
+- **Cost posture**: near-$0 at idle — no always-on compute or database. The
+  standing bill is **≈ $5/month, plus $1 per organization**: 24 CloudWatch alarms
+  ($2.40), 2 Secrets Manager secrets ($0.80), one KMS signing key per org ($1.00
+  each), and roughly $1 of DynamoDB/S3/Lambda/SQS/SNS at test volume. Sending
+  adds SES at ~$0.10 per 1,000 emails plus one KMS `Sign` per recipient (§4.9).
+  **WAF is external and is the operator's own bill** (§4.3) — self-created ACLs
+  ran ~$17/month, which was 77% of idle cost and the reason they went. Two
+  components add cost only when opted in, and both are **off by default**: the
+  OpenSearch mirror (§5) and the reporting read-model (§4.23 — Kinesis, Firehose,
+  Athena scan at ~$5/TB, and the lake's own S3). The Athena workgroup carries a
+  per-query bytes-scanned cutoff so a bad query cannot run up a bill. All of
+  these drivers are metered per org (§11).
 
 ### 9.1 Bootstrapping the admin pool & first login
 
@@ -907,40 +1161,110 @@ this at deploy time, so no manual pool setup is ever required:
 - **Only bootstrap values live in config** (admin email(s), stage, region,
   hosted-UI prefix). Everything else is managed in-app afterward.
 
-This is deliberately different from the **per-org subscriber pools**, which are
-**not** in the bootstrap config: each is either **created** or **linked to an
-existing pool** (the one shared with that org's main website) during "Add
-organization" (§4.11). The admin pool is created once; subscriber pools come and
-go with organizations.
+This is deliberately different from the **per-org subscriber pool**, which is
+**not** in the bootstrap config, is **optional**, and — per §4.10 — should be a
+**link to an existing pool** supplied during "Add organization", never one
+addressium builds. The admin pool is created once and belongs to us; a subscriber
+pool belongs to the org's own website.
 
-### Proposed repository layout
+### 9.2 Observability & ops alerting
+
+Two audiences, two surfaces, and they are deliberately not the same surface
+(compendium #29). **Alarms are operational** — *is the system broken?* — and
+belong to an on-call engineer, who should not have to log into a marketing
+console to see them. **The console's reporting screen is campaign performance** —
+*how did my email do?* — and belongs to a marketer, who does not care about
+Lambda throttles.
+
+- **Logs.** 20 CloudWatch log groups, one per application handler, with
+  **explicit retention** — 90 days in prod, 7 days elsewhere — because Lambda's
+  default is *never expire*, i.e. unbounded cost forever. The stage test is
+  literal string equality against `"prod"`, so a `staging` or `prod-eu`
+  deployment silently gets 7 days. All 20 are `DESTROY` on stack removal.
+- **Alarms.** 24 CloudWatch alarms, identical in every stage and unconditional:
+  2 on the send queue (DLQ not empty, oldest-message age), 20 on Lambdas (errors
+  and throttles across the 10 functions on the send and event paths), and 2 on
+  DynamoDB (throttles, system errors).
+- **Ops alerting is an external topic** (compendium #22/#32/#67). Alert routing —
+  PagerDuty, Slack, an on-call rotation — is org infrastructure that a production
+  account already runs; creating our own topic competes with it. The operator
+  supplies `opsAlertTopicArn`, or `opsAlertEmail` for a simple setup.
+  **[Decided r2 — not yet built]** — the stack still creates its own
+  `OpsAlertsTopic` and points all 24 alarms at it, and neither `opsAlertTopicArn`
+  nor `opsAlertEmail` exists anywhere in the codebase.
+- **CloudWatch dashboard** (compendium #29) — **[Decided r2 — not yet built]**.
+  There are currently **zero** dashboard resources in the template.
+- **System health in the console** — a single derived **OK / degraded** badge on
+  the Overview screen (§4.1), not raw alarm state.
+  **[Decided r2 — not yet built]**.
+- **No preflight `doctor` command exists.** The only real preflight is
+  `npm run deploy:check`, and it checks a different thing entirely — data
+  destruction, not configuration. Nothing today warns an operator that no WAF is
+  associated or no alert target is set, which is exactly the warning that matters
+  most once WAF and ops alerting become operator-supplied.
+  **[Decided r2 — not yet built]**.
+
+### 9.3 Local development
+
+`npm install`, `npm run build`, `npm test`, `npm run test:web`. The domain layer
+imports no AWS SDK, so the full business logic runs against in-memory adapters,
+and the integration suite runs the whole journey — signup → double opt-in → send
+→ open/click → click map — against a real DynamoDB API via dynalite, with no Java
+or Docker. `docker-compose.localstack.yml` un-skips four adapter tests (SQS, KMS,
+Scheduler, SES) for anyone who wants them.
+
+**A local dev mode is not built** (compendium #61)
+**[Decided r2 — not yet built]**. The target is `npm run dev` running the *same*
+router on a port — the single biggest maintainability lever available, because it
+makes bugs reproducible without AWS. Today there is no `dev` script at the repo
+root and no HTTP server anywhere that mounts the router; the only `dev` scripts
+in the workspace are the three Vite frontends.
+
+### 9.4 Repository layout
 
 ```
 addressium/
 ├── apps/
-│   ├── admin-web/         # React admin SPA (operator console)
-│   ├── subscriber-web/    # subscriber signup + Cognito login + preference center
-│   └── public-web/        # embeddable signup snippet + hosted / confirm / unsubscribe pages
+│   ├── admin-web/            # React admin SPA (operator console)
+│   ├── subscriber-web/       # preference centre — token-based, no login
+│   └── public-web/           # embeddable signup snippet + hosted list/confirm/unsubscribe pages
 ├── packages/
-│   ├── core/             # shared domain types + zod schemas
-│   ├── segment/          # segment engine (GSI/tags impl; OpenSearch drop-in)
-│   └── rbac/             # capability/role definitions + server-side authorization
-├── services/
-│   ├── api/              # API Gateway handlers: entitlement-sync, RBAC enforcement, merge/ad tags, alerts
-│   ├── sender/           # SQS consumers → SES SendBulkEmail (throttled) + archive/link-map + ad-tag inject
-│   ├── events/           # SES event processor → counters + link-agg + token redaction + Firehose + alerts
-│   ├── automations/      # Step Functions drip/journey state machines
-│   ├── reporting/        # dashboards + click-overlay + series aggregation + A/B results
-│   ├── tokens/           # magic-link JWT minting + KMS signing + JWKS endpoint
-│   ├── provisioning/     # "Add organization" — creates per-org pool, KMS key, SES identity, config set, JWKS
-│   ├── feeds/            # RSS/Atom/JSON pull → merge-tag mapping
-│   ├── privacy/          # GDPR/CCPA export + erase-to-tombstone; audit log
-│   └── importer/         # Pinpoint / CSV migration importer
+│   ├── core/                 # entity types, zod schemas, version marker
+│   ├── domain/               # business logic — pure, no AWS imports
+│   ├── adapters-aws/         # DynamoDB / SES / KMS / SQS / Cognito implementations of the ports
+│   ├── rbac/                 # Cedar-backed authorization
+│   ├── segment/              # segment predicate evaluation
+│   ├── magiclink-verify/     # hardened reference verifier for publisher sites
+│   └── integration-tests/    # full-journey tests against a real DynamoDB API (dynalite)
+├── services/                 # Lambda entry points — thin wiring over the domain
+│   ├── api/                  # AdminApiFn (one router) + the public handlers
+│   ├── sender/               # SQS consumers → SES SendBulkEmail (throttled) + archive/link-map
+│   ├── events/               # SES event processor → event log + link-agg + token redaction
+│   ├── automations/          # Step Functions drip steps + recurring sweeps
+│   ├── reporting/            # dashboards + click overlay + series aggregation
+│   ├── tokens/               # magic-link JWT minting + KMS signing + JWKS endpoint
+│   ├── provisioning/         # "Add organization" — per-org KMS key, SES identity, config set
+│   ├── feeds/                # RSS/Atom/JSON pull → merge-tag mapping
+│   ├── privacy/              # GDPR/CCPA export + erase-to-tombstone; audit log
+│   ├── importer/             # CSV migration importer (§4.7)
+│   ├── segment-indexer/      # OpenSearch mirror indexer — opt-in only (§5)
+│   └── analytics-export/     # Firehose transform + table export — opt-in only (§4.23)
 ├── infra/
-│   └── cdk/              # all CDK stacks + setup wizard (per-org provisioning)
+│   ├── bootstrap/            # one-time account bootstrap: deploy role + permissions boundary
+│   └── cdk/                  # the application stack
+├── demo/                     # static UI prototype (addressium.com)
 └── docs/
-    └── ARCHITECTURE.md   # this document
+    └── ARCHITECTURE.md       # this document
 ```
+
+**`services/api` is one router, not 27 functions.** This design originally implied
+a Lambda per route; the build collapsed all **27 authenticated console routes**
+into a single **AdminApiFn** dispatching on `routeKey`, with a build-time parity
+test asserting that the CDK's route list and the handler's dispatch table agree.
+The unauthenticated handlers stay separate **on purpose** — they hold genuinely
+different privileges, and merging them would hand one internet-facing function
+the union of "can create Cognito users", "can send mail", and "holds the webhook
+signing secret".
 
 ---
 
@@ -950,13 +1274,20 @@ addressium/
   signup + double opt-in, subscribers, templates (visual/MJML/raw-HTML),
   merge tags + ad tags, broadcasts + ongoing series with aggregate reporting,
   suppression (hybrid), deliverability (DKIM/DMARC/one-click unsubscribe) + SNS
-  alerts, analytics + click overlay + A/B, sandbox mode, GDPR/CCPA + audit log,
-  Pinpoint/CSV importer, CDK deploy + per-org provisioning.
+  alerts, analytics + click overlay, sandbox mode, GDPR/CCPA + audit log, CSV
+  importer, bootstrap + gated deploy + per-org provisioning.
 - **v1.x**: drip automations (Step Functions), materialized-tag segment builder,
   magic-link token service (JWKS + entitlement sync + lite-scope tokens),
   feeds → campaign auto-build, preference center polish.
-- **v2 — Extensibility**: OpenSearch segmentation drop-in, visual
-  automation/journey builder, SSO/SAML for the admin pool.
+- **Next, per compendium §6/§8** — the named gaps this document tags
+  **[Decided r2 — not yet built]**: SQS in the event plane (§4.5), transactional
+  counters (§7), bulk export/portability (§4.19), the real Pinpoint-export reader
+  and the import wizard (§4.7), operator-supplied WAF and ops topic (§4.3, §9.2),
+  and local dev mode (§9.3).
+- **v2 — Extensibility**: visual automation/journey builder, SSO/SAML for the
+  admin pool. (The OpenSearch segmentation drop-in already ships behind
+  `enableOpenSearchMirror` — the v2 work is making it a supported posture rather
+  than an escape hatch, not writing it.)
 - **v3 — Multichannel**: activate the channel-agnostic seams for SMS
   (SNS / AWS End User Messaging) and push.
 
@@ -967,15 +1298,20 @@ addressium/
 - **Rendering fidelity**: whether to add a rendering-preview service (multiple
   client previews) or rely on test sends in v1.
 - **Per-org billing/usage metering** *(implemented)*: a per-org/period cost
-  model (`estimateCost`/`recordUsage`) meters **email** (SES), **storage** (S3),
-  **dedicated IPs**, and **Athena bytes scanned** (§4.23); a scheduled job feeds
-  the AWS-metric drivers and the admin **Usage & cost** screen surfaces the
-  breakdown + history. Rates are per-deployment overridable (`CostRates`).
-  *Not yet split out:* Kinesis/Firehose throughput and the analytics lake's own
-  S3 storage (folded into the streaming/storage lines for now) — tracked in the
-  backlog.
-- **Backups/export**: point-in-time recovery on DynamoDB plus a scheduled full
-  export to S3 for portability.
+  model (`estimateCost`/`recordUsage`) meters **email** (SES), **storage** (S3)
+  and **dedicated IPs**; a scheduled job feeds the AWS-metric drivers and the
+  admin **Usage & cost** screen surfaces the breakdown + history. Rates are
+  per-deployment overridable (`CostRates`). The model also carries an **Athena
+  bytes-scanned** line, which is **zero in a default deployment** — the Athena
+  tier only exists when `enableAnalytics` is set (§4.23), so that driver meters
+  an opt-in component and should be presented as such rather than as a standing
+  cost. Kinesis/Firehose throughput and the lake's own S3 storage are folded into
+  the streaming/storage lines and are likewise zero by default. Separately, the
+  model **prices a per-recipient transactional event+counter write that is not
+  yet implemented** (§4.5) — treat that line as a forecast, not a bill.
+- **Backups/export**: point-in-time recovery, deletion protection and a `RETAIN`
+  removal policy are on the DynamoDB table in **every** stage, not just prod. The
+  scheduled full export to S3 for portability is §4.19 and not yet built.
 - **Webhooks/API for operators**: an outbound webhook + public API so operators
   can integrate addressium with their own systems.
 - **Magic-link TTL default**: ship a sensible default (e.g. 7–30 days) with a
@@ -986,28 +1322,49 @@ addressium/
 ## 12. Main-site integration contract (magic-link, out of scope to build)
 
 addressium's responsibility ends at **minting a signed token and publishing the
-keys to verify it**. The operator's main website implements the other half. This
-section defines the boundary so both sides can be built independently.
+keys to verify it**. The operator's main website — in practice, its paywall
+plugin — implements the other half. This section defines the boundary so both
+sides can be built independently.
 
-The two systems **share a Cognito user pool**, so the token references an
-**existing** user — no JIT provisioning.
+**What crosses the boundary is a public key, never a secret.** The plugin is
+given the org's **JWKS** (or the raw public key) and verifies with it. **No
+shared secret is ever distributed.** This is not a preference — see §8.1:
+verification happens client-side on a CloudFront-cached page, so anything the
+page holds is extractable, and a symmetric key would therefore be forgeable.
+
+**The token identifies an addressium subscriber, not a directory user.** `sub` is
+`Subscriber.sub`, addressium's own durable id (§4.9). Nothing has to exist in any
+user pool for a magic link to work. A site that *does* run Cognito can map the
+subscriber to its own user through `Subscriber.externalId` and the identity-sync
+webhook (§4.10); a site on Auth0, a custom JWT scheme, or no accounts at all
+needs no mapping layer at all. That is deliberate — coupling magic links to
+Cognito would make the product work only for Cognito shops.
 
 **addressium provides:**
 - Editorial newsletter links containing a per-recipient magic-link JWT (per
-  §4.9) in the **URL fragment**, signed by a KMS asymmetric key.
-- A **JWKS endpoint** for offline (in-browser) verification, with key rotation.
-- A published **claim contract**: `sub` (shared Cognito subject),
+  §4.9) in the **URL fragment**, signed by a per-org **KMS ES256** key.
+- A public **JWKS endpoint** for offline (in-browser) verification, with key
+  rotation: `GET /orgs/{org}/.well-known/jwks.json`.
+- A published **claim contract**: `sub` (addressium's subscriber id),
   `scope: "content:read"`, `amr: ["magic_link"]`, `entitlement` (`free`/`paid`),
-  `entitlement_asof`, `aud`, `iss`, `exp`, plus whitelisted profile claims.
+  `entitlement_asof`, `aud`, `iss`, `iat`, `exp`. The set is **closed** — there
+  are no additional profile claims (§4.9).
+- A hardened reference verifier, `packages/magiclink-verify`, so a plugin author
+  does not have to get JWT verification right from first principles.
 
 **The main website implements (out of scope here):**
 1. Read the token from the inbound URL **fragment** client-side (the page itself
    is CloudFront-cached; the token must be **excluded from the cache key**).
-2. **Verify** the signature and `exp`/`aud`/`iss` against the JWKS — a bare
-   decode is forgeable and must not be trusted.
-3. Establish a **lite** session for the existing shared-pool user — e.g. a
-   **Cognito custom-auth (`CUSTOM_AUTH`) challenge** whose Define/Verify Auth
-   Challenge Lambdas validate the token against `sub`.
+2. **Verify** the signature and `exp`/`aud`/`iss` against the JWKS, with the
+   algorithm **pinned to ES256** — a bare decode is forgeable and must not be
+   trusted, and a verifier that honors the header's `alg` accepts `alg: none`
+   and HMAC-confusion forgeries.
+3. Establish a **lite** session for the subscriber the token names, keyed on the
+   addressium `sub`. *Resolving the token to an existing Cognito user* — e.g. a
+   **`CUSTOM_AUTH` challenge** whose Define/Verify Auth Challenge Lambdas match
+   on `externalId` — is the **optional** path for orgs that run a pool, and is
+   **[Decided r2 — not yet built]**: nothing downstream reads `externalId` yet
+   (§4.10).
 4. **Apply entitlement to the soft paywall**: remove the reg/paywall overlay when
    the token is valid and `entitlement` qualifies; otherwise leave the wall in
    place (**graceful fallback**). The content itself stays in the page for SEO.
@@ -1021,6 +1378,38 @@ This contract is the reason a forwarded newsletter is safe: the token can only
 ever mint a lite content session, the private profile page is unreachable
 without a real login the forwardee does not have, and any token failure simply
 degrades to the normal wall.
+
+---
+
+## 13. What is not yet proven
+
+A design document that reads "done" is worse than useless. Everything above
+describes the target; this is the part that is still unearned. It mirrors
+[`DESIGN-COMPENDIUM.md`](./DESIGN-COMPENDIUM.md) §9.
+
+- **Nothing has ever been deployed.** No AWS account has run this. Every count,
+  every alarm, every wiring claim in this document is read from a **synthesized
+  CloudFormation template**, not from a running system.
+- **The event plane was dead at three independent layers** until recently. The
+  fix is verified against the synthesized template — **never against real SES
+  traffic**. Until a real bounce arrives from a real mailbox provider, treat
+  §4.5 as designed rather than demonstrated.
+- **`deploy-check.sh` is fixture-validated**, never run against real
+  CloudFormation. It is the one thing standing between a key-schema change and
+  an empty table (§9), and it has never faced a live change set.
+- **The version marker is readable, but nothing writes it on deploy.** `GET
+  /version` returns the running version and a `deployed` of `null` on every real
+  install, forever, so it cannot yet confirm that a deploy landed. There is no
+  migration runner either, despite what a couple of source comments imply.
+- **GDPR erasure does not reach the S3 archive** (#164), and does not delete
+  engagement-event rows (§4.19).
+- **The counts that are safe to quote** — 24 alarms, 20 log groups, 27 admin
+  routes, 252 resources in a default dev synth (248 in prod) — are reproducible
+  with `npm run build && npx cdk synth`. They are template facts, which is a
+  weaker claim than it sounds.
+
+**1.0 is gated on** the end-to-end suite passing against a real AWS account,
+GDPR erasure completing, and one install running for 30 days.
 
 ---
 

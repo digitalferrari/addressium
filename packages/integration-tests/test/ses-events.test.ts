@@ -10,7 +10,7 @@ import { unwrap, normalize, SES_TAG, encodeTag } from "@addressium/adapters-aws"
 
 const tags = {
   [SES_TAG.org]: [encodeTag("acme")],
-  [SES_TAG.campaign]: [encodeTag("daily#ab-A")], // "#" is why tags are base64url
+  [SES_TAG.campaign]: [encodeTag("daily#resend")], // "#" is why tags are base64url
   [SES_TAG.subscriber]: [encodeTag("s001")],
 };
 
@@ -45,7 +45,7 @@ test("a bounce arriving over SNS resolves to a subscriber", () => {
   assert.ok(n, "must resolve — this returned undefined behaviour before the fix");
   assert.equal(n.eventType, "Bounce");
   assert.equal(n.orgId, "acme");
-  assert.equal(n.campaignId, "daily#ab-A", "base64url round-trips ids containing '#'");
+  assert.equal(n.campaignId, "daily#resend", "base64url round-trips ids containing '#'");
   assert.equal(n.subscriberId, "s001");
   assert.equal(n.email, "r@x.example");
   assert.equal(n.bounceType, "Permanent");

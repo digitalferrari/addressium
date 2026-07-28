@@ -18,8 +18,8 @@ export const SES_TAG = {
 /**
  * SES restricts message-tag values to `[A-Za-z0-9_-]{1,256}`. base64url uses
  * exactly that alphabet, so encoding is lossless for ids that legitimately
- * contain other characters — A/B sub-campaigns (`base#ab-A`) and drip steps
- * (`drip:seq#3`) would otherwise be rejected or silently mangled.
+ * contain other characters — drip steps (`drip:seq#3`) and resend sub-campaigns
+ * (`base#resend`) would otherwise be rejected or silently mangled.
  */
 export const encodeTag = (s: string): string => Buffer.from(s, "utf8").toString("base64url");
 export const decodeTag = (s: string): string => Buffer.from(s, "base64url").toString("utf8");

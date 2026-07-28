@@ -37,7 +37,7 @@ the same owner.
 | **Multi-org silos** | Per-org KMS key, SES identity and config set. Dev orgs are fail-closed to an allowlist, so a test blast cannot reach a live list. |
 | **Brandable subscriber site** | Per-org logo, theme, background; per-list presentation toggles, no rebuild |
 | **RBAC** | Developer Admin / Editor / Analyst / Support, org-scoped, enforced server-side via Cedar |
-| **Import & export** | CSV in, CSV/JSONL out — including consent records, so you can leave |
+| **Import & export** | CSV in. CSV/JSONL out, including consent records, so you can leave — **[Decided r2 — not yet built]**: today only the per-subject GDPR export exists |
 
 **Deliberately not included:** SMS, push, voice, in-app, recommender models, A/B
 testing, or an AI layer. Pinpoint's surviving non-email channels moved to AWS End
@@ -72,15 +72,16 @@ User Messaging; this is email only, on purpose.
                                    │  single table │
    Send ─────▶ SQS ─▶ SenderFn ─▶ SES ──▶│  RETAIN +   │
                                    │  deletion     │
-   Results ◀─ EventsFn ◀─ SQS ◀─ SNS ◀───│  protection │
+   Results ◀─ EventsFn ◀───── SNS ◀──────│  protection │
                         (SES event dest) └───────────────┘
 ```
 
-**21 Lambda functions, 252 CloudFormation resources.** One function serves all 27
-authenticated routes; the unauthenticated functions stay separate because they
-hold genuinely different privileges — merging them would give one
-internet-facing function the union of "can create Cognito users", "can send
-mail", and "holds the webhook signing secret".
+**21 Lambda functions, 252 CloudFormation resources** — the default `dev` synth;
+`prod` is 20 and 248, because non-prod adds a bucket auto-delete custom resource.
+One function serves 27 of the 33 authenticated routes; the unauthenticated
+functions stay separate because they hold genuinely different privileges —
+merging them would give one internet-facing function the union of "can create
+Cognito users", "can send mail", and "holds the webhook signing secret".
 
 ### Why each service
 
@@ -89,26 +90,32 @@ mail", and "holds the webhook signing secret".
 | **DynamoDB** | Single-digit-ms reads at any list size, no capacity planning, no idle cost. A relational DB needs an always-on instance. |
 | **SES** | The mail transport. Per-org configuration sets isolate deliverability reputation between tenants. |
 | **SQS** | Decouples "schedule a campaign" from "send 500,000 emails" — retries, backpressure, partial-batch failure reporting. |
-| **SNS → SQS → Lambda** for events | SNS alone invokes Lambda *asynchronously*: two retries, then the event is **discarded**. A dropped bounce is an address you keep mailing. SQS in the middle gives durability and a dead-letter queue. |
+| **SNS → Lambda** for events | As built, SNS invokes `EventsFn` *asynchronously*: two retries, then the event is **discarded**. A dropped bounce is an address you keep mailing, which is why SQS belongs in the middle — durability and a dead-letter queue. **[Decided r2 — not yet built]** |
 | **EventBridge Scheduler** | Timezone-aware recurring sends that track DST correctly. Plain cron does not. |
 | **Step Functions** | Drip steps wait days. Lambda cannot wait; Step Functions can, for fractions of a cent. |
 | **KMS (asymmetric, per org)** | Signs magic-link tokens. Per-org so one key's compromise cannot forge another org's tokens. The public half is published as JWKS, verifiable by any JWT library. |
 | **Cognito** | Operator login, MFA required, self-signup disabled. `custom:role` / `custom:orgs` claims drive server-side RBAC. |
-| **S3** | Rendered-body archive (powers click maps), audit log under Object Lock (GOVERNANCE), analytics archive. |
+| **S3** | Rendered-body archive (powers click maps), audit log under Object Lock, analytics archive. The lock mode that deploys today is COMPLIANCE with a 7-year default retention; GOVERNANCE is **[Decided r2 — not yet built]**. |
 | **CloudFront + OAC** | SPA delivery over HTTPS from private buckets. |
 
-### Services addressium does **not** create
+### Services addressium does **not** create **[Decided r2 — not yet built]**
 
 Your account probably already runs these. Creating our own would duplicate cost,
-fight your existing rules, or quietly bypass your security posture.
+fight your existing rules, or quietly bypass your security posture. That is the
+decision, not the code: **today the stack creates both**, and neither
+configuration key below exists yet. Do not attach a second WebACL expecting the
+stack to have left the slot empty.
 
-| Service | What you do |
-|---|---|
-| **WAF** | Attach your own WebACL. The stack outputs the API stage ARN and both CloudFront distribution ARNs. |
-| **Ops alerting** | Set `opsAlertTopicArn` (an existing SNS topic) and/or `opsAlertEmail`. Alert routing is your infrastructure. |
+| Service | What you will do | What the stack does today |
+|---|---|---|
+| **WAF** | Attach your own WebACL. The stack outputs the API stage ARN and both CloudFront distribution ARNs. | Creates two WebACLs of its own — regional and CloudFront — and associates them to the API stage and both distributions. It emits no ARN outputs to attach against. |
+| **Ops alerting** | Set `opsAlertTopicArn` (an existing SNS topic) and/or `opsAlertEmail`. Alert routing is your infrastructure. | Creates its own SNS topic and points all 24 alarms at it. Neither key is read anywhere in the repo. |
 
-`doctor` warns when no WAF association or alert target is configured — shipping
-silently unprotected is worse than shipping without them.
+The same decision calls for a `doctor` command that warns when no WAF
+association or alert target is configured — shipping silently unprotected is
+worse than shipping without them. That command does not exist either
+**[Decided r2 — not yet built]**. The only preflight that ships is
+`npm run deploy:check`, and it guards data-holding resources, not exposure.
 
 ---
 
@@ -147,10 +154,10 @@ Details: [`scripts/README.md`](scripts/README.md) ·
 ## Upgrades
 
 ```bash
-npm test                # 255 tests
+npm test                # 259 tests; 4 skip without LocalStack, 255 always run
 npm run deploy:check    # dry run — refuses anything that would destroy data
 npm run deploy          # in place; CloudFormation rolls back on failure
-curl $API/version       # confirm the new version is live
+curl $API/version       # running build; nothing writes the deploy marker yet
 ```
 
 `deploy:check` creates a CloudFormation **change set** without executing it, and
@@ -222,8 +229,8 @@ Daily sending is **$0.136 per 1,000 emails** all-in — 36% above SES's raw $0.1
 for the whole platform around it. A hosted ESP at 40,000 contacts sending daily
 is commonly $400–600/month.
 
-Excludes any WAF you attach, data transfer, and the free tiers most accounts
-still have — treat it as an upper bound.
+Excludes WAF — including the two WebACLs the stack currently creates itself —
+data transfer, and the free tiers most accounts still have.
 
 ---
 
@@ -255,8 +262,9 @@ Node 20+, npm workspaces.
 ```bash
 npm install
 npm run build
-npm test          # 255 tests: in-memory + real DynamoDB API via dynalite
-npm run test:web  # component tests
+npm test          # 259 tests: in-memory + real DynamoDB API via dynalite
+                  # 4 need LocalStack and skip without it; 255 always run
+npm run test:web  # 8 component tests
 ```
 
 Integration tests run the full journey — signup → double opt-in → send →
@@ -293,6 +301,8 @@ verifier — ships as a hardened, copy-paste module: `packages/magiclink-verify`
   CloudFormation.
 - The version marker is readable, but nothing writes it on deploy yet.
 - GDPR erasure does not yet reach the S3 archive.
+- **Bulk export does not exist yet.** A single subject can be exported for a
+  GDPR request; the CSV/JSONL list export with consent records is not written.
 - The importer **cannot read a real Pinpoint export file** — it is CSV-only,
   while Pinpoint exports gzipped JSON Lines.
 

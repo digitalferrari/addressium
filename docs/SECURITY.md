@@ -4,7 +4,12 @@
 > multi-tenant boundaries. Every control here maps to a **public, named
 > standard** so it can be independently reviewed — nothing bespoke.
 
-- **Status:** Design-level (tracks the scaffold in this repo).
+- **Status:** Design-level, tracking
+  [`DESIGN-COMPENDIUM.md`](./DESIGN-COMPENDIUM.md) revision 2. Nothing has ever
+  been deployed (compendium §9). Where r2 decided a control that the CDK does
+  not yet build, it carries the inline tag **[Decided r2 — not yet built]**.
+  Read an untagged control as present in the synthesized stack today, and a
+  tagged one as a decision, not a protection you currently have.
 - **Companion docs:** [`ARCHITECTURE.md`](./ARCHITECTURE.md) (system design),
   [`../SECURITY.md`](../SECURITY.md) (how to report a vulnerability).
 - **Audience:** contributors, security reviewers, and operators self-hosting
@@ -38,7 +43,7 @@ crypto** (KMS + a vetted JOSE library, never our own). We hold ourselves to:
 **Trust boundaries** (each crossing is an authorization decision):
 
 ```
-Internet ─▶ Public plane (unauth)  ─▶ Subscriber plane (Cognito, per-org pool)
+Internet ─▶ Public plane (unauth)  ─▶ Subscriber plane (signed action tokens)
                                     ─▶ Admin plane (admin pool + RBAC + org scope)
 Main website ◀── JWKS / magic-link token boundary (client-side verify)
 AWS account boundary ─▶ per-org silos (orgId partition + per-org KMS key + SES identity)
@@ -55,13 +60,42 @@ forwarded-email recipient, and a poisoned dependency in the supply chain.
 
 | Boundary | Top threats (STRIDE) | Primary controls |
 |---|---|---|
-| Public plane | Spoofing, DoS/denial-of-wallet, injection | Double opt-in, WAF + rate limits + CAPTCHA, signed action tokens, input validation |
+| Public plane | Spoofing, DoS/denial-of-wallet, injection | Double opt-in, signed action tokens, zod input validation, in-app honeypot + opt-in reCAPTCHA on `/signup*` (#40); edge rate limits and a WAF CAPTCHA rule are **operator-supplied** **[Decided r2 — not yet built]** |
 | Magic-link / main site | **Tampering** (alg confusion, forged token), **EoP** (paywall→account) | RFC 8725 alg-pinning, per-org keys, lite scope, step-up on the main site |
-| Subscriber plane | Spoofing, info disclosure | Cognito auth, per-org pool, object-level authz on the subscriber's own `sub` |
+| Subscriber plane | Spoofing, info disclosure | Signed, single-purpose action tokens (confirm, RFC 8058 unsubscribe) scoped to one subscriber's `sub`; a per-org Cognito pool is **optional** and, under r2, reference-only **[Decided r2 — not yet built]** |
 | Admin plane | **EoP**, repudiation | Server-side RBAC + org scope, TOTP MFA, immutable audit log |
 | Cross-org (tenancy) | **Info disclosure** (BOLA/BFLA) | Server-derived `orgId`, central authz, per-org keys, cross-tenant tests |
 | Feeds/webhooks | **SSRF**, spoofed callbacks | Egress allowlist + private-range blocking, signature verification |
 | Supply chain | Tampering (build), poisoned deps | SLSA provenance, signed releases, SBOM, pinned CI, OIDC-to-AWS |
+
+Two rows need reading carefully, because each mixes a control we ship with one we
+do not.
+
+**Public plane — two kinds of CAPTCHA, often conflated, failing differently:**
+
+- **The in-app bot checks are ours.** `/signup` and `/signup/batch` run a
+  honeypot check and, when the org has configured `recaptchaSecretArn`,
+  server-side reCAPTCHA verification (#40). These run inside the handler, on
+  every request, and a tripped honeypot returns a silent `202` so a scraper
+  cannot tell it was caught. They are built and tested.
+- **A WAF CAPTCHA rule is the operator's**, lives at the edge, and never reaches
+  our code. Under r2 addressium creates no WebACL (#30, #31, #66), so edge rate
+  limiting and edge CAPTCHA exist only once the operator creates and associates
+  one — see §8.
+
+**Subscriber plane — the subscriber record is the identity, not a pool account.**
+Signup is unauthenticated and creates an addressium subscriber keyed by our own
+durable id; a subscriber normally has no Cognito user at all. Under r2 a per-org
+subscriber pool is **optional and reference-only** — addressium links to a pool
+the org already owns via `Subscriber.externalId` and does not create or write to
+it. The linking half is real: the HMAC-verified identity-sync webhook,
+`externalId` as the join key, and email-change and delete handling are built.
+The read-only posture is not: today provisioning can **create** a per-org pool
+(`subscriberPool: { mode: "create" }`) and the confirm path can **create users**
+in it when an org sets `createAccountsOnConfirm` (off by default). Both are
+therefore **[Decided r2 — not yet built]**. There is no subscriber login or
+authenticated preference center at all — preference management is entirely
+signed-token-based.
 
 ---
 
@@ -78,17 +112,42 @@ verifier (ours and every integrator's):
 1. **Pin the algorithm to `ES256`.** Reject anything the JWT header selects —
    never let the token choose its own algorithm or key type (RFC 8725 §2.1, §3.1).
 2. **Reject `alg:none`** and all symmetric algorithms.
-3. Validate `iss`, `aud`, `exp`, `nbf`, `iat`; honor `kid` against the JWKS.
+3. Validate `iss`, `aud`, and `exp`; honor `kid` against the JWKS. Stated
+   precisely, because the reference verifier is the spec: `exp` is required
+   twice over (by the JOSE library and by an explicit type check), `nbf` is
+   checked only when present and addressium never mints one, and **`iat` is not
+   validated at all** — no `maxTokenAge` is supplied. Clock tolerance defaults
+   to 30s.
 4. **Per-org signing keys** so a token minted for one silo cannot verify against
    another (`ARCHITECTURE.md` §4.11).
 5. **Verify, don't decode** — an unverified base64 decode is trivially forged.
+   The package exports no decode-without-verify path.
 6. Enforce the **lite scope** (`scope: "content:read"`, `amr: ["magic_link"]`);
    never elevate a magic-link session — gate profile/account behind step-up.
+7. Require `entitlement` to be exactly `free` or `paid`, and `sub` to be a
+   non-empty string. A token missing either is **rejected**, not downgraded to
+   an anonymous read — fail closed, so a malformed token can never be mistaken
+   for a valid free-tier one.
+
+The operator's paywall plugin is an **integrator, not a trusted peer**. What it
+receives is the org's **public key**, fetched from the published JWKS endpoint
+(`GET /orgs/{org}/.well-known/jwks.json`, unauthenticated and cacheable).
+**No shared secret is ever distributed** — there is no symmetric material
+anywhere in the magic-link path. This is exactly why asymmetric signing is
+**mandatory rather than merely preferable**: verification happens client-side,
+in a CloudFront-cached page or a third-party plugin, and a verifier in that
+position cannot hold a secret. The verifying half must therefore be safe to
+publish, and the signing half never leaves KMS (§4.6). A symmetric scheme would
+require handing every integrator a key that also *mints* tokens.
 
 Because integrators write the client-side half, addressium ships a **hardened
 reference verifier** so nobody rolls their own: see
 [`packages/magiclink-verify`](../packages/magiclink-verify/src/index.ts). Use it
-verbatim in Node (custom-auth Lambda) and the browser.
+verbatim in Node (custom-auth Lambda) and the browser. Note what `sub` is: it is
+**addressium's own durable subscriber id**, not a Cognito subject. The token
+authenticates a *subscriber*; linking that subscriber to an account in the
+operator's own user pool is optional, and is the operator's business
+(`ARCHITECTURE.md` §4.10).
 
 ### 4.2 Multi-tenant isolation — OWASP API #1 (BOLA) / #5 (BFLA)
 
@@ -96,8 +155,9 @@ verbatim in Node (custom-auth Lambda) and the browser.
   trusted from a request body/param. The DynamoDB `orgId` partition prefix is
   **defense-in-depth, not the authorization**.
 - Authorization is centralized (see [`packages/rbac`](../packages/rbac)) rather
-  than ad-hoc per handler; a policy engine (**Cedar**) is the intended path as
-  rules grow.
+  than ad-hoc per handler, and it runs through a **Cedar** policy engine: the
+  policy set is generated from the ROLES matrix and evaluated server-side in
+  `authorize()` (§10, #30). Cedar is in place, not planned.
 - CI carries **cross-tenant tests** ("can a grant for org A read/write org B?")
   as a required gate.
 
@@ -107,8 +167,9 @@ verbatim in Node (custom-auth Lambda) and the browser.
   console UI mirror is convenience only. Destructive actions
   (delete contacts, close newsletters) are Developer-Admin-only.
 - **TOTP MFA required** on the admin pool (enforced in the CDK stack).
-- **Append-only audit log**; production uses S3 **Object Lock (WORM)** so history
-  cannot be rewritten even by an admin.
+- **Append-only audit log** on an S3 **Object Lock (WORM)** bucket, created in
+  every stage with a `RETAIN` removal policy, so history cannot be rewritten
+  even by an admin. The lock *mode* is an open item — see §10.
 - Only Developer Admin can change roles — no privilege-escalation path.
 
 ### 4.4 Send-path abuse & denial-of-wallet
@@ -121,8 +182,17 @@ vector.
   cannot be weaponized to spam third parties.
 - **Per-org sending quotas + anomaly alerts** (complaint/bounce spikes → SNS,
   auto-halt thresholds).
-- **AWS Budgets** alarms + WAF **rate-based rules** + CAPTCHA cap Lambda/SES
-  spend from abuse (denial-of-wallet).
+- **Honeypot + opt-in reCAPTCHA** on `/signup` and `/signup/batch` (#40), run
+  before any work is done. Two limits worth stating rather than glossing:
+  reCAPTCHA runs **only** when the org has set `recaptchaSecretArn`, so it is
+  off unless configured; and no first-party client renders the trap field yet,
+  so the honeypot currently catches only bots that invent it. The server-side
+  half is built and tested; end-to-end honeypot coverage is not.
+- **AWS Budgets** alarms are the spend cap that ships. WAF **rate-based rules**
+  and a WAF **CAPTCHA** rule are the operator's to add (#30, #31)
+  **[Decided r2 — not yet built]** — so until an operator WebACL is associated,
+  the denial-of-wallet story is Budgets plus the in-app checks above, and there
+  is no per-IP brake in front of the unauthenticated endpoints.
 
 ### 4.5 SSRF (feeds) & stored-HTML / XSS
 
@@ -182,6 +252,53 @@ vector.
 - **Consent provenance**, configurable retention, and **GDPR/CCPA** export +
   erase-to-tombstone (`ARCHITECTURE.md` §4.19).
 
+Three limits on that last bullet, stated here because a privacy control that is
+narrower than it sounds is worse than one that is absent:
+
+- **Erasure is DynamoDB-only.** `eraseSubscriber` unsubscribes every
+  subscription, writes a suppression tombstone, and anonymizes the profile in
+  place. It does **not** reach the S3 archive (compendium §9, #164)
+  **[Decided r2 — not yet built]**, and it does not rewrite the `EVENT#` rows,
+  which retain a pseudonymous subscriber id pointing at the now-anonymized
+  profile. The accurate promise is "the profile is anonymized and the address is
+  tombstoned", not "every trace of the person is gone".
+- **Export is per-subject only.** The DSAR path returns one subject's profile,
+  subscriptions, and entitlement as JSON. Bulk CSV/JSONL portability is
+  **[Decided r2 — not yet built]** (#58) — so the project's "you can export your
+  data at any time" promise is not yet true at the list level.
+- **Consent provenance is recorded on public double opt-in** (timestamp and
+  source URL, when the signup supplies one). The CSV importer records **no**
+  consent basis per row, so an imported subscriber has no provenance with which
+  to answer a later dispute; the import wizard that captures it is
+  **[Decided r2 — not yet built]** (#60).
+
+### 4.8 Event-plane integrity & durability
+
+Engagement events are not a reporting nicety: bounces and complaints drive
+suppression and auto-halt. A lost bounce is an address that keeps being mailed —
+reputation damage that compounds silently and that nobody is paged about. So
+delivery of the event stream is an integrity control.
+
+- **Deterministic `eventId`** (#183): the DynamoDB sort key is
+  `EVENT#<at>#<eventId>`, so a redelivered event overwrites its own row rather
+  than double-counting. Built.
+- **DLQ on the send path** (#92): `SendQueue` has a dead-letter queue with
+  `maxReceiveCount: 5`, and two of the 24 alarms watch it (DLQ-not-empty, queue
+  age). A message that repeatedly fails to send is inspectable and replayable
+  instead of lost. Built.
+- **SQS between SNS and `EventsFn`** (#20, #44) **[Decided r2 — not yet built]**.
+  Today SES → SNS invokes `EventsFn` **directly**, which is an async Lambda
+  invocation: AWS retries twice and then discards the event permanently, and
+  there is no events DLQ. Interposing SQS adds durable buffering, a real DLQ,
+  and partial-batch-failure reporting. Until it lands, treat bounce and
+  complaint ingestion as best-effort, not guaranteed.
+- **Event write + counter increment in one `TransactWriteItems`** (#57), made
+  exactly-once by the deterministic `eventId`.
+  **[Decided r2 — not yet built]** — campaign counters are derived today by
+  folding the whole event list on every read; the stored `Campaign.counters`
+  field is only ever zero-initialized and nothing increments it, so any figure
+  served straight from that field reads zero.
+
 ---
 
 ## 5. Cloud hardening (CIS / Well-Architected)
@@ -190,7 +307,7 @@ vector.
 |---|---|
 | IAM | Least-privilege per Lambda; scoped resource ARNs; **no wildcards**; no long-lived keys |
 | Detection | CloudTrail (all regions), GuardDuty, AWS Config, Security Hub |
-| Edge | WAF managed rule sets + rate rules on CloudFront/API Gateway |
+| Edge | **Operator-supplied WAF** (#30, #31) **[Decided r2 — not yet built]**: create or reuse a REGIONAL WebACL for the HTTP API and a CLOUDFRONT-scope one (in `us-east-1`) for the SPAs — AWS managed common + known-bad-inputs rule sets, a per-IP rate limit, optionally a CAPTCHA rule on `/signup` — then associate them |
 | Storage | S3 Block Public Access on; SSE-KMS; TLS-only bucket policies |
 | Compute | IMDSv2 only (any EC2/containers); minimal Lambda perms; DLQs |
 | Budget | AWS Budgets + anomaly alarms (denial-of-wallet backstop) |
@@ -228,10 +345,38 @@ first-class control:
 ## 8. Secure defaults (a fresh `cdk deploy`)
 
 Out of the box, with no tuning: admin **MFA required**, encryption at rest on all
-stores, S3 public access blocked, least-privilege IAM, WAF + rate limiting on
-public endpoints, double opt-in default, DKIM/SPF/DMARC guided in the setup
-wizard, and secrets sourced from Secrets Manager/SSM. Hardening beyond the
-defaults is documented, not assumed.
+stores, S3 public access blocked, least-privilege IAM, DynamoDB **PITR +
+deletion protection + a `RETAIN` removal policy in every stage** (not just
+prod), an Object-Lock audit bucket, per-org KMS signing keys, double opt-in
+default, DKIM/SPF/DMARC guided in the setup wizard, and secrets sourced from
+Secrets Manager/SSM. Hardening beyond the defaults is documented, not assumed.
+
+**What a fresh deploy does not give you.** This is the part a risk decision
+turns on, so it is stated plainly rather than left to be inferred:
+
+- **Edge protection is the operator's step.** r2 makes both WebACLs
+  operator-supplied (#30, #31, #66): addressium creates neither, and the
+  operator creates or reuses them and associates them with the API stage and the
+  two distributions. **[Decided r2 — not yet built]** — the current stack still
+  creates both ACLs and associates them, unconditionally, in every stage. So do
+  not read "WAF and rate limiting ship out of the box" as a durable property of
+  addressium: it is true of today's template and is scheduled to stop being
+  true. Plan the operator WebACL now. Without one, the public plane's brakes are
+  the in-app controls in §3 and §4.4 — double opt-in, signed action tokens, zod
+  validation, the honeypot check, and reCAPTCHA where an org has configured a
+  secret — and nothing rate-limits by IP.
+- **Alarms fire into a topic nobody is subscribed to.** All 24 CloudWatch alarms
+  publish to an SNS topic the stack creates, and a fresh deploy adds **no
+  subscription** to it — no email, no PagerDuty, no Slack. Alerting is therefore
+  silent until an operator subscribes something. r2 goes further and has
+  addressium consume an **external** ops topic instead of creating its own
+  (#32, #67, config `opsAlertTopicArn` / `opsAlertEmail`)
+  **[Decided r2 — not yet built]**; that config key does not exist yet.
+- **Nothing preflights either of the above.** The only preflight that exists is
+  `npm run deploy:check`, and it covers a different concern — whether a deploy
+  would replace or remove a data-holding resource. No command warns that no WAF
+  is associated or that no alert target is configured, so shipping unprotected
+  is currently silent.
 
 ## 9. ASVS Level 2 — condensed verification checklist
 
@@ -239,8 +384,8 @@ A living checklist mapped to our controls (full ASVS tracked separately):
 
 - **V1 Architecture** — documented threat model (this doc); trust boundaries defined.
 - **V2 Authentication** — Cognito + TOTP MFA (admin); NIST 800-63B alignment.
-- **V3 Session** — Cognito-managed sessions; magic-link is a **lite, scoped**
-  session, never elevated.
+- **V3 Session** — Cognito-managed sessions (admin); magic-link is a **lite,
+  scoped** session, never elevated.
 - **V4 Access Control** — server-side RBAC + org scope; deny-by-default; BOLA/BFLA tests.
 - **V5 Validation/Encoding** — zod validation at the edge; contextual output
   encoding; SSRF egress guard.
@@ -249,7 +394,8 @@ A living checklist mapped to our controls (full ASVS tracked separately):
 - **V9 Communications** — TLS 1.2+ everywhere; HSTS.
 - **V10 Malicious Code** — pinned deps, CodeQL, SBOM, signed releases.
 - **V12 Files/Resources** — SSRF controls on feeds; sanitized/sandboxed HTML.
-- **V13 API** — authz on every object/function; rate limiting.
+- **V13 API** — authz on every object/function; rate limiting is the operator's
+  WebACL (§5, §8), not an addressium default.
 - **V14 Config** — secure defaults; secrets never in repo; least-privilege IAM.
 
 ## 10. Open items (tracked)
@@ -257,8 +403,22 @@ A living checklist mapped to our controls (full ASVS tracked separately):
 - ~~Central policy engine (Cedar) for authorization as rules grow.~~ **Done** —
   enforcement runs through the Cedar engine; the policy set is generated from the
   ROLES matrix and evaluated server-side in `authorize()` (#30).
-- ~~WORM/Object-Lock wiring for the audit log.~~ **Done** — audit log backed by
-  S3 Object Lock (COMPLIANCE mode) in the CDK stack (#29).
+- ~~WORM/Object-Lock wiring for the audit log.~~ **Done** — the audit bucket is
+  Object-Lock enabled with a default retention and a `RETAIN` removal policy, so
+  history cannot be rewritten (#29). The *mode* is a separate open item, below.
 - ~~CI: pin all actions to SHAs, wire OIDC-to-AWS deploy role.~~ **Done** —
   every `uses:` pinned by SHA; OIDC `deploy` job assumes a scoped role on tags (#27).
+- **Switch the audit bucket's Object Lock from COMPLIANCE to GOVERNANCE**
+  (#9 **[CHANGED r2]**) **[Decided r2 — not yet built]**. The code and the
+  decision currently disagree, and the doc says so rather than papering over it:
+  the CDK sets **COMPLIANCE** with a 2555-day (7-year) default retention
+  (`ObjectLockRetention.compliance(...)`, `auditRetentionYears` defaulting to 7),
+  while r2 calls for **GOVERNANCE**. The reason to prefer GOVERNANCE is that a
+  sufficiently privileged principal can still remove an object with
+  `s3:BypassGovernanceRetention`, so a mistake — a wrong retention window, the
+  wrong object written to the wrong bucket — stays recoverable. COMPLIANCE
+  cannot be undone by anyone, **including AWS**. This has to land *before* the
+  first real deploy: an object already written under COMPLIANCE cannot be
+  relaxed afterwards, and the audit bucket is `RETAIN`, so the mistake outlives
+  the stack.
 - Formal, full ASVS L2 line-by-line review before a 1.0 release.

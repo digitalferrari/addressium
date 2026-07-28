@@ -3,11 +3,12 @@
  *
  * GET report for a campaign: derives HotCounters + deliverability rates from the
  * append-only event log and returns the click-overlay map. Deep, ad-hoc
- * analysis (funnels, series roll-ups, A/B) runs off the Firehose → S3 → Athena
- * tier wired in infra; this endpoint is the low-latency dashboard read.
+ * analysis (funnels, series roll-ups) runs off the optional Firehose → S3 →
+ * Athena tier, which is off by default (`enableAnalytics`); this endpoint is the
+ * low-latency dashboard read and never depends on it.
  */
 import { DynamoStores, HttpLlmAdvisor, getSecret } from "@addressium/adapters-aws";
-import { SystemClock, analyzeCampaign, buildAbReport, buildCampaignReport, recordUsage } from "@addressium/domain";
+import { SystemClock, analyzeCampaign, buildCampaignReport, recordUsage } from "@addressium/domain";
 import { authorize, grantFromClaims } from "@addressium/rbac";
 
 const clock = new SystemClock();
@@ -45,15 +46,10 @@ export async function handler(event: ReportEvent) {
   }
   const s = stores();
   const report = await buildCampaignReport(s, orgId, campaignId);
-  // If this campaign ran an A/B subject test, attach the per-variant scores.
-  const campaign = await s.campaigns.get(orgId, campaignId);
-  const abResults = campaign?.abTest
-    ? await buildAbReport(s, campaignId, orgId, campaign.abTest)
-    : undefined;
   return {
     statusCode: 200,
     headers: { "content-type": "application/json", "cache-control": "private, max-age=15" },
-    body: JSON.stringify({ ...report, abResults }),
+    body: JSON.stringify(report),
   };
 }
 

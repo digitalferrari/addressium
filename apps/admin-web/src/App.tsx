@@ -321,12 +321,6 @@ function Report({ org, grant }: { org: string; grant: Grant | null }) {
               </tbody>
             </table>
           </div>
-          {report.abResults && (
-            <div className="card">
-              <div className="muted">A/B ({report.abResults.metric}) — A {report.abResults.aScore} vs B {report.abResults.bScore}
-                {report.abResults.winner ? ` · winner ${report.abResults.winner}` : ""}</div>
-            </div>
-          )}
         </>
       )}
       {ai && (

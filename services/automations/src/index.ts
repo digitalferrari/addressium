@@ -13,7 +13,6 @@ import {
   emailTemplateFromStored,
   escapeHtml,
   evaluateDripStep,
-  finalizeAbTest,
   nextStepIndex,
   planLaunchDescriptor,
   runReengagementSweep,
@@ -23,7 +22,6 @@ import {
   type RecurringLaunchPayload,
   type SendDescriptor,
 } from "@addressium/domain";
-import type { AbTest } from "@addressium/core";
 import { fetchFeedItems } from "@addressium/svc-feeds";
 
 function env(name: string): string {
@@ -162,37 +160,6 @@ export async function dripStepHandler(event: DripStepEvent) {
     nextStepIndex: next ?? null,
     nextWaitSeconds: next !== undefined ? (sequence.steps[next]?.waitSeconds ?? 0) : null,
   };
-}
-
-/**
- * A/B finalize Task (#25, #96) — EventBridge Scheduler one-off target set
- * `decisionWindowMins` after phase 1. Resolves the winner and sends the winning
- * subject to the remainder exactly once (claim-guarded, so a retried firing is a
- * no-op). Reconstructs the org's magic signer + SES config the same way the drip
- * and reengagement handlers do.
- */
-export interface AbFinalizeEvent {
-  descriptor: SendDescriptor;
-  test: AbTest;
-}
-
-export async function abFinalizeHandler(event: AbFinalizeEvent) {
-  const s = stores();
-  const org = await s.organizations.get(event.descriptor.orgId);
-  if (!org) throw new Error(`unknown org ${event.descriptor.orgId}`);
-  const magic = new KmsMagicLinkSigner(
-    {
-      keyId: org.magicLink.kmsKeyArn,
-      kid: org.magicLink.kid,
-      issuer: org.magicLink.issuer,
-      audience: org.magicLink.audience,
-      ttlSeconds: TTL,
-    },
-    clock,
-  );
-  const ses = new SesEmailSender(org.sesConfigSet);
-  const result = await finalizeAbTest(s, ses, magic, clock, event.descriptor, event.test);
-  return { ok: true, winner: result.decision.winner, alreadyFinalized: result.alreadyFinalized };
 }
 
 /**

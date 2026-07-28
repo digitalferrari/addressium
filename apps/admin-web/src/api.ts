@@ -54,7 +54,6 @@ export interface CampaignReport {
   counters: { sent: number; delivered: number; opens: number; clicks: number; bounces: number; complaints: number; unsubscribes: number };
   rates: { openRate: number; clickRate: number; bounceRate: number; complaintRate: number };
   clickMap: { sent: number; rows: ClickMapRow[] };
-  abResults?: { aScore: number; bScore: number; winner?: "A" | "B"; metric: string };
 }
 
 export interface UsageRecord {
