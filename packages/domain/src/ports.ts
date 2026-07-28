@@ -199,6 +199,12 @@ export interface SentMessage {
   /** RFC 8058 List-Unsubscribe header value, angle-bracketed. An `https` URI
    *  supports one-click POST; a `mailto:` value does not (see SesEmailSender). */
   listUnsubscribe: string;
+  /**
+   * Correlation ids stamped as SES message tags so the event feed can map a
+   * bounce/complaint/open/click back to a subscriber. Without them SES events
+   * carry no way to identify the recipient and are unprocessable (#184).
+   */
+  tags?: { orgId: string; campaignId: string; subscriberId: string };
 }
 export interface EmailSender {
   send(msg: SentMessage): Promise<void>;

@@ -22,9 +22,23 @@ import { scheduleActive } from "./schedule-state.js";
 /** Alias kept for readability; a campaign send takes a SendDescriptor. */
 export type SendCampaignInput = SendDescriptor;
 
+/**
+ * Mints the RFC 8058 one-click unsubscribe URL for one recipient.
+ *
+ * Injected rather than built inline because the URL needs a deployment-specific
+ * base AND a signed token — `unsubscribeHandler` verifies a signed token, while
+ * the header used to carry bare `?sub=&list=` params at a `.example` host, so
+ * one-click was doubly broken (#178).
+ */
+export interface UnsubscribeLinkBuilder {
+  build(input: { orgId: string; subscriberId: string; listId: string }): Promise<string>;
+}
+
 export interface SendOptions {
   /** Paces per-recipient sends to the SES rate (§4.4). */
   throttle?: SendThrottle;
+  /** When absent, the header degrades to `mailto:` (see listUnsubscribeHeader). */
+  unsubscribeLink?: UnsubscribeLinkBuilder;
 }
 
 export interface SendResult {
@@ -117,9 +131,27 @@ export function recipientAllowedForDev(
   return false;
 }
 
-function listUnsubscribeHeader(list: List, sub: string): string {
-  // RFC 8058 one-click unsubscribe (docs/ARCHITECTURE.md §6).
-  return `<https://unsub.${list.orgId}.example/u?sub=${sub}&list=${list.listId}>`;
+/**
+ * RFC 8058 / RFC 2369 List-Unsubscribe value (docs/ARCHITECTURE.md §6).
+ *
+ * With a link builder this is a signed https URL the API can actually honor.
+ * WITHOUT one it degrades to `mailto:` rather than advertising an https
+ * endpoint that 404s — SesEmailSender only stamps `List-Unsubscribe-Post` for
+ * an https URI, so the mailto form correctly stops claiming one-click support.
+ * The old value pointed at `unsub.<org>.example`, a reserved domain that cannot
+ * resolve, and carried bare `?sub=&list=` params that `unsubscribeHandler`
+ * rejects anyway — so every one-click attempt failed (#178).
+ */
+async function listUnsubscribeHeader(
+  list: List,
+  sub: string,
+  builder?: UnsubscribeLinkBuilder,
+): Promise<string> {
+  if (builder) {
+    const url = await builder.build({ orgId: list.orgId, subscriberId: sub, listId: list.listId });
+    return `<${url}>`;
+  }
+  return `<mailto:${list.fromAddress}?subject=unsubscribe>`;
 }
 
 export interface SendOneInput {
@@ -132,6 +164,8 @@ export interface SendOneInput {
   template: EmailTemplate;
   /** Optional pacing — acquired only for an actual send (skips don't burn tokens). */
   throttle?: SendThrottle;
+  /** See SendOptions.unsubscribeLink — same contract for per-recipient sends. */
+  unsubscribeLink?: UnsubscribeLinkBuilder;
 }
 
 export interface SendOneResult {
@@ -190,7 +224,8 @@ export async function sendToSubscriber(
       to: subscriber.email,
       subject: input.subject,
       html: renderForRecipient(input.template, subscriber.attributes, token),
-      listUnsubscribe: listUnsubscribeHeader(list, subscriber.sub),
+      listUnsubscribe: await listUnsubscribeHeader(list, subscriber.sub, input.unsubscribeLink),
+      tags: { orgId: input.orgId, campaignId: input.campaignId, subscriberId: subscriber.sub },
     });
   } catch (e) {
     await release();
@@ -324,7 +359,8 @@ export async function sendCampaign(
         to: subscriber.email,
         subject: input.subject,
         html,
-        listUnsubscribe: listUnsubscribeHeader(list, subscriber.sub),
+        listUnsubscribe: await listUnsubscribeHeader(list, subscriber.sub, opts.unsubscribeLink),
+        tags: { orgId: input.orgId, campaignId: input.campaignId, subscriberId: subscriber.sub },
       });
     } catch (e) {
       // The claim guards a dispatch that did not happen — give it back so the

@@ -15,7 +15,7 @@
  */
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
-import { Stack, type StackProps, RemovalPolicy, Duration, CfnOutput, Lazy } from "aws-cdk-lib";
+import { Stack, type StackProps, RemovalPolicy, Duration, CfnOutput, Lazy, ArnFormat } from "aws-cdk-lib";
 import type { Construct } from "constructs";
 import { AttributeType, BillingMode, StreamViewType, Table } from "aws-cdk-lib/aws-dynamodb";
 import { Bucket, BlockPublicAccess, ObjectLockRetention, StorageClass } from "aws-cdk-lib/aws-s3";
@@ -44,7 +44,7 @@ import { Alarm, ComparisonOperator, TreatMissingData } from "aws-cdk-lib/aws-clo
 import { LogGroup, RetentionDays } from "aws-cdk-lib/aws-logs";
 import { SnsAction } from "aws-cdk-lib/aws-cloudwatch-actions";
 import { Secret } from "aws-cdk-lib/aws-secretsmanager";
-import { Role, ServicePrincipal, PolicyStatement } from "aws-cdk-lib/aws-iam";
+import { Role, ServicePrincipal, PolicyStatement, Effect } from "aws-cdk-lib/aws-iam";
 import { CfnScheduleGroup } from "aws-cdk-lib/aws-scheduler";
 import {
   Choice,
@@ -299,6 +299,30 @@ export class ControlPlaneStack extends Stack {
     // this account/region's `identity/*` and `configuration-set/*` is a real
     // tightening from `resources: ["*"]` (blocks sending as any other account's
     // verified identity). A fresh statement per caller keeps roles independent.
+    /**
+     * Per-org secrets are created at runtime under `addressium/{orgId}/…`, so
+     * exact ARNs can't be enumerated at synth — but scoping to that name prefix
+     * in this account/region stops these handlers from reading EVERY secret in
+     * the account, which is what `resources: ["*"]` allowed (#166). Reachable
+     * unauthenticated via /signup, so the blast radius mattered. Secrets Manager
+     * appends a 6-character suffix to the ARN, hence the trailing `*`.
+     *
+     * Stack-created secrets (confirm, webhook) are granted precisely via
+     * `grantRead` elsewhere and deliberately do NOT rely on this.
+     */
+    const orgSecretsScoped = () =>
+      new PolicyStatement({
+        actions: ["secretsmanager:GetSecretValue"],
+        resources: [
+          Stack.of(this).formatArn({
+            service: "secretsmanager",
+            resource: "secret",
+            resourceName: "addressium/*",
+            arnFormat: ArnFormat.COLON_RESOURCE_NAME,
+          }),
+        ],
+      });
+
     const sesSendScoped = () =>
       new PolicyStatement({
         actions: ["ses:SendEmail"],
@@ -333,15 +357,29 @@ export class ControlPlaneStack extends Stack {
       sesSendScoped(),
     );
     // The embed widget's reCAPTCHA secret is org-configured at runtime (#62).
-    signupBatchFn.addToRolePolicy(
-      new PolicyStatement({ actions: ["secretsmanager:GetSecretValue"], resources: ["*"] }),
-    );
+    signupBatchFn.addToRolePolicy(orgSecretsScoped());
     const confirmFn = fn("ConfirmFn", apiEntry, "confirmHandler", apiEnv);
     // Opt-in post-verify subscriber-account provisioning (#62). Per-org pools are
     // created at runtime, so we can't enumerate ARNs; the handler only calls this
     // when the org explicitly enables createAccountsOnConfirm.
     confirmFn.addToRolePolicy(
-      new PolicyStatement({ actions: ["cognito-idp:AdminCreateUser", "cognito-idp:AdminGetUser"], resources: ["*"] }),
+      new PolicyStatement({
+        actions: ["cognito-idp:AdminCreateUser", "cognito-idp:AdminGetUser"],
+        resources: [
+          Stack.of(this).formatArn({ service: "cognito-idp", resource: "userpool", resourceName: "*" }),
+        ],
+      }),
+    );
+    // The scoping above still leaves every pool in THIS account in range —
+    // including the admin pool. An explicit Deny (which always wins in IAM)
+    // closes the actual escalation: a publicly reachable /confirm handler being
+    // able to AdminCreateUser its way into the control plane (#167).
+    confirmFn.addToRolePolicy(
+      new PolicyStatement({
+        effect: Effect.DENY,
+        actions: ["cognito-idp:*"],
+        resources: [adminPool.userPoolArn],
+      }),
     );
     const unsubscribeFn = fn("UnsubscribeFn", apiEntry, "unsubscribeHandler", apiEnv);
     const entitlementFn = fn("EntitlementFn", apiEntry, "entitlementSyncHandler", apiEnv);
@@ -354,6 +392,11 @@ export class ControlPlaneStack extends Stack {
     // it on the first, unsliced message of every campaign) and send permission.
     const senderFn = fn("SenderFn", svc("services/sender/src/index.ts"), "handler", {
       SEND_QUEUE_URL: sendQueue.queueUrl,
+      // RFC 8058 one-click unsubscribe: the header must point at the real route
+      // and carry a signed token, so the sender needs both the API base and the
+      // confirm secret (#178). Without them it degrades to a mailto header.
+      UNSUBSCRIBE_URL_BASE: Lazy.string({ produce: () => `${api.apiEndpoint}/unsubscribe` }),
+      CONFIRM_SECRET_ARN: confirmSecret.secretArn,
     });
     // Per-org signing keys are created by provisioning at runtime, so we can't
     // enumerate their ARNs here; scope by an addressium key-tag condition + SES.
@@ -470,6 +513,7 @@ export class ControlPlaneStack extends Stack {
     confirmSecret.grantRead(signupBatchFn);
     confirmSecret.grantRead(confirmFn);
     confirmSecret.grantRead(unsubscribeFn);
+    confirmSecret.grantRead(senderFn); // signs the List-Unsubscribe token (#178)
     webhookSecret.grantRead(entitlementFn);
     webhookSecret.grantRead(identityFn);
     archiveBucket.grantReadWrite(senderFn);
@@ -623,9 +667,7 @@ export class ControlPlaneStack extends Stack {
 
     const analyzeFn = fn("AnalyzeFn", reportingEntry, "analyzeHandler", apiEnv);
     table.grantReadData(analyzeFn);
-    analyzeFn.addToRolePolicy(
-      new PolicyStatement({ actions: ["secretsmanager:GetSecretValue"], resources: ["*"] }),
-    );
+    analyzeFn.addToRolePolicy(orgSecretsScoped());
     api.addRoutes({
       path: "/reports/analyze",
       methods: [HttpMethod.POST],
