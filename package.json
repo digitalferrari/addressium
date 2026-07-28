@@ -11,7 +11,7 @@
     "infra/*"
   ],
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "scripts": {
     "build": "tsc --build && npm --workspace @addressium/magiclink-verify run bundle",
