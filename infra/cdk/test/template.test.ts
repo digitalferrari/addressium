@@ -308,3 +308,34 @@ test("naming the linked pools in context replaces the account-wide wildcard (#23
   assert.match(rendered, /us-east-1_bbb/);
   assert.doesNotMatch(rendered, /userpool\/\*/, "the wildcard must be gone once pools are named");
 });
+
+test("no role may write to any secret in the account (#227)", () => {
+  // `resources: ["*"]` on CreateSecret/PutSecretValue meant an internet-facing
+  // route could overwrite this stack's OWN confirmation-token and webhook
+  // signing secrets — silently invalidating every outstanding opt-in link and
+  // every inbound webhook, with no error anywhere to explain why.
+  for (const policy of Object.values(template().findResources("AWS::IAM::Policy"))) {
+    const doc = (policy.Properties as { PolicyDocument: { Statement: Record<string, unknown>[] } })
+      .PolicyDocument;
+    for (const st of doc.Statement ?? []) {
+      if (st.Effect === "Deny") continue;
+      const writes = actionsOf(st).filter(
+        (a) => a.startsWith("secretsmanager:") && !a.includes("GetSecretValue"),
+      );
+      if (writes.length === 0) continue;
+      const resources = Array.isArray(st.Resource) ? st.Resource : [st.Resource];
+      const rendered = JSON.stringify(resources);
+      assert.doesNotMatch(
+        rendered,
+        /^\["\*"\]$/,
+        `${writes.join(", ")} is granted on every secret in the account`,
+      );
+      // Either our own namespace, or a direct reference to a secret this stack
+      // created — both name what may be written. A bare "*" names nothing.
+      assert.ok(
+        rendered.includes("addressium/") || rendered.includes('"Ref"'),
+        `${writes.join(", ")} granted on an unscoped resource: ${rendered}`,
+      );
+    }
+  }
+});
