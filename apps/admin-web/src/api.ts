@@ -229,7 +229,59 @@ export interface AlertConfig {
   notifyTargets: string[];
 }
 
+export type ColumnMapping =
+  | { kind: "email" }
+  | { kind: "attribute"; key: string }
+  | {
+      kind: "audience";
+      list: { existingId: string } | { createNamed: string };
+      consentBasis: "explicit" | "implicit";
+    }
+  | { kind: "optOut"; optedOutValues: string[] }
+  | { kind: "endpointStatus"; activeValues: string[] }
+  | { kind: "channel"; emailValues: string[] }
+  | { kind: "discard" };
+
+export interface MappingPlan {
+  columns: Record<string, ColumnMapping>;
+}
+export interface ImportPreview {
+  headers: string[];
+  sample: Record<string, string>[];
+  rowCount: number;
+  fingerprint: string;
+  suggested: MappingPlan;
+  problems: { column?: string; problem: string }[];
+}
+export interface MappedImportReport {
+  created: number;
+  updated: number;
+  nonMailable: number;
+  duplicates: number;
+  suppressed: number;
+  subscriptionsCreated: number;
+  declinesRecorded: number;
+  listsCreated: string[];
+  discardedCells: number;
+  errors: string[];
+}
+export interface NewListDefaults {
+  fromAddress: string;
+  complianceFooter: string;
+  physicalAddress: string;
+}
+
 export const api = {
+  importPreview: (orgId: string, csv: string, consentBasis?: "explicit" | "implicit") =>
+    call<ImportPreview>("POST", `/orgs/${orgId}/import/preview`, { csv, consentBasis }),
+  importMapped: (orgId: string, body: {
+    csv: string;
+    plan: MappingPlan;
+    status?: "confirmed" | "pending";
+    sourceFile?: string;
+    newListDefaults?: NewListDefaults;
+    dryRun?: boolean;
+  }) => call<MappedImportReport>("POST", `/orgs/${orgId}/import/mapped`, body),
   /** null means this org has NO thresholds — render "unprotected", not zeros. */
   alertConfig: (org: string) => call<AlertConfig | null>("GET", `/orgs/${org}/alerts`),
   saveAlertConfig: (body: AlertConfig) => call<AlertConfig>("POST", `/orgs/alerts`, body),

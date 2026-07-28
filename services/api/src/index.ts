@@ -34,6 +34,12 @@ import {
   manualSuppress,
   liftSuppression,
   importCsvSubscribers,
+  importWithMapping,
+  previewCsv,
+  suggestMapping,
+  validateMapping,
+  type MappingPlan,
+  type NewListDefaults,
   exportSubscriber,
   eraseSubscriber,
   publicListView,
@@ -649,6 +655,84 @@ export async function subscriberUnsuppressHandler(event: HttpEvent): Promise<Htt
  * subscribers default to `pending` (not double-opt-in confirmed) unless the
  * caller sets status; suppressed addresses are skipped by the domain importer.
  */
+/**
+ * POST /orgs/{org}/import/preview — headers, sample rows and a suggested
+ * mapping (#216). Writes NOTHING: the console renders this so the operator can
+ * see what the file actually contains before committing to it.
+ */
+export async function importPreviewHandler(event: HttpEvent): Promise<HttpResult> {
+  try {
+    const orgId = event.pathParameters?.org ?? "";
+    requireGrant(event, "subscribers:manage", orgId);
+    const body = JSON.parse(event.body ?? "{}") as { csv?: string; consentBasis?: "explicit" | "implicit" };
+    if (typeof body.csv !== "string" || body.csv.trim() === "") {
+      return json(400, { error: "csv required" });
+    }
+
+    const preview = previewCsv(body.csv);
+    if (preview.headers.length === 0) return json(400, { error: "file has no header row" });
+
+    // Bind suggestions to what this org already has, so a column maps to an
+    // existing list or attribute rather than proposing a duplicate.
+    const lists = await stores().lists.list(orgId);
+    const plan = suggestMapping(preview, {
+      knownLists: lists.map((l) => ({ listId: l.listId, name: l.name })),
+      ...(body.consentBasis ? { consentBasis: body.consentBasis } : {}),
+    });
+    return json(200, {
+      headers: preview.headers,
+      sample: preview.sample,
+      rowCount: preview.rowCount,
+      fingerprint: preview.fingerprint,
+      suggested: plan,
+      problems: validateMapping(plan, preview.headers),
+    });
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+/** POST /orgs/{org}/import/mapped — run an import through an operator-confirmed mapping (#216). */
+export async function importMappedHandler(event: HttpEvent): Promise<HttpResult> {
+  try {
+    const orgId = event.pathParameters?.org ?? "";
+    requireGrant(event, "subscribers:manage", orgId);
+    const body = JSON.parse(event.body ?? "{}") as {
+      csv?: string;
+      plan?: MappingPlan;
+      status?: "confirmed" | "pending";
+      batchId?: string;
+      sourceFile?: string;
+      newListDefaults?: NewListDefaults;
+      dryRun?: boolean;
+    };
+    if (typeof body.csv !== "string" || !body.plan?.columns) {
+      return json(400, { error: "csv and plan required" });
+    }
+    const report = await importWithMapping(stores(), clock, {
+      orgId,
+      csv: body.csv,
+      plan: body.plan,
+      ...(body.status ? { status: body.status } : {}),
+      // A batch id is always stamped, so a bad file's rows stay findable even
+      // when the caller did not think to supply one (#223).
+      batchId: body.batchId ?? `imp_${clock.now().toISOString()}`,
+      ...(body.sourceFile ? { sourceFile: body.sourceFile } : {}),
+      ...(body.newListDefaults ? { newListDefaults: body.newListDefaults } : {}),
+      ...(body.dryRun ? { dryRun: true } : {}),
+    });
+    // A plan that could not be applied is a 400, not a 200 with errors in the
+    // body — the original importer's silent `200 {created:0}` is exactly the
+    // failure #209 is about.
+    if (report.errors.length > 0 && report.created === 0 && report.updated === 0) {
+      return json(400, { error: report.errors[0], report });
+    }
+    return json(200, report);
+  } catch (e) {
+    return fail(e);
+  }
+}
+
 export async function importHandler(event: HttpEvent): Promise<HttpResult> {
   try {
     const orgId = event.pathParameters?.org ?? "";
@@ -919,6 +1003,8 @@ const ADMIN_ROUTES: Record<string, RouteHandler> = {
   "POST /subscribers/unsubscribe": subscriberUnsubscribeHandler,
   "POST /subscribers/unsuppress": subscriberUnsuppressHandler,
   "POST /orgs/{org}/import": importHandler,
+  "POST /orgs/{org}/import/preview": importPreviewHandler,
+  "POST /orgs/{org}/import/mapped": importMappedHandler,
   "POST /privacy": privacyHandler,
   "POST /orgs/branding": brandingHandler,
   "GET /orgs/{org}/alerts": alertConfigHandler,

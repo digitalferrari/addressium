@@ -107,3 +107,45 @@ test("saveAlertConfig() omits an empty topic rather than sending a blank string"
   const body = JSON.parse(String(lastCall().init.body));
   expect(body.snsTopicArn).toBeUndefined();
 });
+
+test("importPreview() POSTs the csv and writes nothing", async () => {
+  await api.importPreview("acme", "email\na@x.com", "implicit");
+  const { url, init } = lastCall();
+  expect(url).toMatch(/\/orgs\/acme\/import\/preview$/);
+  expect(init.method).toBe("POST");
+  const body = JSON.parse(String(init.body));
+  expect(body.csv).toContain("a@x.com");
+  expect(body.consentBasis).toBe("implicit");
+});
+
+test("importMapped() POSTs the operator-confirmed plan", async () => {
+  await api.importMapped("acme", {
+    csv: "Address\na@x.com",
+    plan: { columns: { Address: { kind: "email" } } },
+    sourceFile: "export.csv",
+    dryRun: true,
+  });
+  const { url, init } = lastCall();
+  expect(url).toMatch(/\/orgs\/acme\/import\/mapped$/);
+  const body = JSON.parse(String(init.body));
+  expect(body.plan.columns.Address.kind).toBe("email");
+  expect(body.sourceFile).toBe("export.csv");
+  expect(body.dryRun).toBe(true);
+});
+
+test("importMapped() carries newListDefaults when the plan creates a list", async () => {
+  // A list with no footer or physical address is a CAN-SPAM violation, so these
+  // are required rather than defaulted server-side (#216).
+  await api.importMapped("acme", {
+    csv: "Address,Ski\na@x.com,true",
+    plan: {
+      columns: {
+        Address: { kind: "email" },
+        Ski: { kind: "audience", list: { createNamed: "Ski" }, consentBasis: "implicit" },
+      },
+    },
+    newListDefaults: { fromAddress: "n@x.com", complianceFooter: "f", physicalAddress: "p" },
+  });
+  const body = JSON.parse(String(lastCall().init.body));
+  expect(body.newListDefaults.physicalAddress).toBe("p");
+});

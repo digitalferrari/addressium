@@ -782,6 +782,9 @@ export class ControlPlaneStack extends Stack {
     adminRoute("UnsuppressFn", "subscriberUnsuppressHandler", HttpMethod.POST, "/subscribers/unsuppress");
     // Subscriber migration (#100) + GDPR/CCPA data-subject requests (#101).
     adminRoute("ImportFn", "importHandler", HttpMethod.POST, "/orgs/{org}/import");
+    // Field mapper (#216): preview writes nothing; mapped runs the import.
+    adminRoute("ImportPreviewFn", "importPreviewHandler", HttpMethod.POST, "/orgs/{org}/import/preview");
+    adminRoute("ImportMappedFn", "importMappedHandler", HttpMethod.POST, "/orgs/{org}/import/mapped");
     adminRoute("PrivacyFn", "privacyHandler", HttpMethod.POST, "/privacy");
     adminRoute("BrandingPostFn", "brandingHandler", HttpMethod.POST, "/orgs/branding");
     // Deliverability thresholds — these drive the auto-halt (#217).
