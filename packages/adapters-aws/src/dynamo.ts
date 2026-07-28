@@ -14,12 +14,15 @@ import {
   GetCommand,
   PutCommand,
   QueryCommand,
+  TransactWriteCommand,
   UpdateCommand,
   type QueryCommandInput,
 } from "@aws-sdk/lib-dynamodb";
+import { TransactionCanceledException } from "@aws-sdk/client-dynamodb";
 import { VERSION_ITEM } from "@addressium/core";
 import type {
   AlertConfig,
+  HotCounters,
   Campaign,
   CampaignSeries,
   DripSequence,
@@ -77,10 +80,26 @@ interface Item<T> {
 export class DynamoStores implements Stores {
   private readonly doc: DynamoDBDocumentClient;
 
+  /**
+   * TEST-ONLY escape hatch. `dynalite` — the pure-JS DynamoDB used by the
+   * integration suite — implements no `TransactWriteItems` action at all, so the
+   * transactional counter append (#221) cannot run against it. Setting this
+   * degrades that one write to sequential puts, which is NOT exactly-once.
+   *
+   * Deliberately a constructor option rather than error-detection: a silent
+   * fallback would mean a production misconfiguration quietly losing the
+   * exactly-once guarantee, which is the whole point of the transaction. Every
+   * service constructs `new DynamoStores(env("TABLE_NAME"))`, so production
+   * cannot reach this path.
+   */
+  private readonly nonTransactionalCounters: boolean;
+
   constructor(
     private readonly tableName: string,
     client?: DynamoDBClient,
+    opts?: { nonTransactionalCountersForTests?: boolean },
   ) {
+    this.nonTransactionalCounters = opts?.nonTransactionalCountersForTests ?? false;
     this.doc = DynamoDBDocumentClient.from(client ?? new DynamoDBClient({}), {
       // Optional entity fields (consent, entitlementAsof, …) may be undefined.
       marshallOptions: { removeUndefinedValues: true },
@@ -302,18 +321,114 @@ export class DynamoStores implements Stores {
       this.put({ pk: `${org(a.orgId)}#CAMPAIGN#${a.campaignId}`, sk: "ARCHIVE", data: a }),
   };
 
+  /** event.type -> the HotCounters field it increments. */
+  private static readonly COUNTER_FIELD: Record<EngagementEvent["type"], keyof HotCounters> = {
+    sent: "sent",
+    delivered: "delivered",
+    open: "opens",
+    click: "clicks",
+    bounce: "bounces",
+    complaint: "complaints",
+    unsubscribe: "unsubscribes",
+  };
+
+  /**
+   * Append an engagement event and increment its campaign counter atomically.
+   *
+   * `opens` and `clicks` are UNIQUE per subscriber (see deriveCounters), which a
+   * plain increment cannot express — so those carry an extra uniqueness marker
+   * in the same transaction. Three outcomes:
+   *
+   *   - transaction succeeds        -> new event, counter moved
+   *   - the EVENT row already exists-> exact redelivery; nothing to do
+   *   - only the MARKER exists      -> a genuine repeat open/click by the same
+   *                                    subscriber: record the event, but do not
+   *                                    move a counter that counts people
+   */
+  private async appendEvent(e: EngagementEvent): Promise<void> {
+    const field = DynamoStores.COUNTER_FIELD[e.type];
+    const eventItem = {
+      pk: `${org(e.orgId)}#CAMPAIGN#${e.campaignId}`,
+      sk: `EVENT#${e.at}#${e.eventId ?? randomUUID()}`,
+      data: e,
+    };
+    const bumpCounter = {
+      Update: {
+        TableName: this.tableName,
+        Key: { pk: org(e.orgId), sk: `CAMPAIGN#${e.campaignId}` },
+        // if_not_exists covers campaigns written before counters were
+        // maintained, and rows where the map is absent entirely.
+        UpdateExpression:
+          "SET #c = if_not_exists(#c, :empty), #c.#f = if_not_exists(#c.#f, :zero) + :one",
+        ExpressionAttributeNames: { "#c": "data", "#f": field },
+        ExpressionAttributeValues: { ":empty": {}, ":zero": 0, ":one": 1 },
+        // Do not resurrect a campaign that does not exist.
+        ConditionExpression: "attribute_exists(pk)",
+      },
+    };
+    const putEvent = {
+      Put: {
+        TableName: this.tableName,
+        Item: eventItem,
+        ConditionExpression: "attribute_not_exists(sk)",
+      },
+    };
+    const unique = e.type === "open" || e.type === "click";
+    const items: Record<string, unknown>[] = [putEvent, bumpCounter];
+    if (unique) {
+      items.push({
+        Put: {
+          TableName: this.tableName,
+          Item: {
+            pk: `${org(e.orgId)}#CAMPAIGN#${e.campaignId}`,
+            sk: `UNIQ#${e.type}#${e.subscriberId}`,
+            data: { at: e.at },
+          },
+          ConditionExpression: "attribute_not_exists(sk)",
+        },
+      });
+    }
+
+    if (this.nonTransactionalCounters) {
+      // Degraded path — see the constructor. Ordering matters even here: write
+      // the event first so a crash loses a count rather than an event.
+      await this.put(eventItem);
+      return;
+    }
+    try {
+      await this.doc.send(new TransactWriteCommand({ TransactItems: items as never }));
+    } catch (err) {
+      if (!(err instanceof TransactionCanceledException)) throw err;
+      const reasons = err.CancellationReasons ?? [];
+      const eventExists = reasons[0]?.Code === "ConditionalCheckFailed";
+      // An exact redelivery: the row is already there, counters already moved.
+      if (eventExists) return;
+      const markerExists = unique && reasons[2]?.Code === "ConditionalCheckFailed";
+      if (markerExists) {
+        // A real second open by the same person. Keep the event — it is genuine
+        // history, and #183 deliberately made repeats distinguishable — but do
+        // not move a counter whose unit is people, not events.
+        await this.put(eventItem);
+        return;
+      }
+      throw err;
+    }
+  }
+
   events: EventStore = {
     // The sort key carries the event's stable id, so re-writing the same source
     // event overwrites its own row instead of appending a duplicate. It used to
     // be a fresh randomUUID() per call, which made every at-least-once
     // redelivery a permanent phantom open/click/bounce with no way to tell them
     // apart after the fact (#183).
-    append: (e) =>
-      this.put({
-        pk: `${org(e.orgId)}#CAMPAIGN#${e.campaignId}`,
-        sk: `EVENT#${e.at}#${e.eventId ?? randomUUID()}`,
-        data: e,
-      }),
+    //
+    // The append and the campaign counter increment happen in ONE
+    // TransactWriteItems, made exactly-once by that id (#221, compendium #57).
+    // A bare ADD would double-count under redelivery, and since the event plane
+    // moved to SQS (#218) redelivery is guaranteed rather than incidental — an
+    // inflated bounce count halts a healthy campaign, a lost one lets a bad
+    // campaign run.
+    append: (e) => this.appendEvent(e),
     all: (orgId, campaignId) =>
       this.queryAll<EngagementEvent>({
         TableName: this.tableName,

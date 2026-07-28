@@ -23,7 +23,7 @@ import type {
 import { schemas } from "@addressium/core";
 import type { Clock, Stores } from "./ports.js";
 
-const ZERO_COUNTERS: HotCounters = {
+export const ZERO_COUNTERS: HotCounters = {
   sent: 0,
   delivered: 0,
   opens: 0,

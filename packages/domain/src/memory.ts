@@ -4,6 +4,7 @@
  */
 import type {
   AlertConfig,
+  HotCounters,
   Campaign,
   CampaignSeries,
   DripSequence,
@@ -49,6 +50,7 @@ import type {
   UsageStore,
   VersionStore,
 } from "./ports.js";
+import { ZERO_COUNTERS } from "./admin.js";
 
 const subKey = (o: string, s: string) => `${o}#${s}`;
 const subnKey = (o: string, s: string, l: string) => `${o}#${s}#${l}`;
@@ -186,11 +188,56 @@ export class MemArchive implements ArchiveStore {
   }
 }
 
+/**
+ * Mirrors the DynamoDB adapter's transactional append (#221): the event row and
+ * the campaign counter move together, made exactly-once by the deterministic
+ * `eventId`, and `opens`/`clicks` count PEOPLE rather than events.
+ *
+ * The parity matters — a fake that merely appends would let every counter test
+ * pass while the real adapter double-counted under redelivery, which since #218
+ * is guaranteed rather than incidental.
+ */
 export class MemEvents implements EventStore {
   private list: EngagementEvent[] = [];
+  private seen = new Set<string>();
+  private unique = new Set<string>();
+  /** Set by memStores so an append can move the campaign's counters. */
+  campaigns?: CampaignStore;
+
+  private static readonly FIELD: Record<EngagementEvent["type"], keyof HotCounters> = {
+    sent: "sent",
+    delivered: "delivered",
+    open: "opens",
+    click: "clicks",
+    bounce: "bounces",
+    complaint: "complaints",
+    unsubscribe: "unsubscribes",
+  };
+
   async append(e: EngagementEvent) {
+    const id = `${e.orgId}#${e.campaignId}#${e.at}#${e.eventId ?? ""}`;
+    // Exact redelivery of the same source event: already recorded, already counted.
+    if (e.eventId && this.seen.has(id)) return;
+    this.seen.add(id);
     this.list.push(e);
+
+    const isUnique = e.type === "open" || e.type === "click";
+    if (isUnique) {
+      const key = `${e.orgId}#${e.campaignId}#${e.type}#${e.subscriberId}`;
+      // A genuine repeat open by the same person is real history, but it must
+      // not move a counter whose unit is people.
+      if (this.unique.has(key)) return;
+      this.unique.add(key);
+    }
+
+    const campaign = await this.campaigns?.get(e.orgId, e.campaignId);
+    if (!campaign) return; // never resurrect a campaign that does not exist
+    const field = MemEvents.FIELD[e.type];
+    const counters = { ...ZERO_COUNTERS, ...(campaign.counters ?? {}) };
+    counters[field] += 1;
+    await this.campaigns?.put({ ...campaign, counters });
   }
+
   async all(orgId: string, campaignId: string) {
     return this.list.filter((e) => e.orgId === orgId && e.campaignId === campaignId);
   }
@@ -351,6 +398,11 @@ export class MemScheduler implements CampaignScheduler {
 }
 
 export function memStores(): Stores {
+  const events = new MemEvents();
+  const campaigns = new MemCampaigns();
+  // The counter increment lives with the append, so the fake needs the campaign
+  // store the way the real adapter needs the same table.
+  events.campaigns = campaigns;
   return {
     organizations: new MemOrganizations(),
     subscribers: new MemSubscribers(),
@@ -358,11 +410,11 @@ export function memStores(): Stores {
     lists: new MemLists(),
     suppression: new MemSuppression(),
     archive: new MemArchive(),
-    events: new MemEvents(),
+    events,
     entitlements: new MemEntitlements(),
     sendClaims: new MemSendClaims(),
     version: new MemVersion(),
-    campaigns: new MemCampaigns(),
+    campaigns,
     series: new MemCampaignSeries(),
     schedules: new MemSendSchedules(),
     templates: new MemTemplates(),

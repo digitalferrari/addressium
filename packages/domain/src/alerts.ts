@@ -103,8 +103,14 @@ export async function checkDeliverability(
   const config = await stores.alerts.get(orgId);
   if (!config) return { breaches: [], halted: false };
 
-  const events = await stores.events.all(orgId, campaignId);
-  const counters = deriveCounters(events);
+  // Read the STORED counters rather than folding the whole event log (#221,
+  // #182). This runs on every bounce and complaint, so the old full scan made
+  // the cost of evaluating deliverability grow with the campaign's own event
+  // history — worst exactly when a campaign is generating the most events.
+  // Counters are maintained transactionally with each append, so they are
+  // exact rather than approximate.
+  const campaign = await stores.campaigns.get(orgId, campaignId);
+  const counters = campaign?.counters ?? deriveCounters(await stores.events.all(orgId, campaignId));
   const breaches = evaluateAlerts(config, counters);
   if (breaches.length === 0) return { breaches, halted: false };
 

@@ -109,7 +109,11 @@ test("signup → confirm → send → click → click map, then unsubscribe (on 
     region: "us-east-1",
     credentials: { accessKeyId: "x", secretAccessKey: "x" },
   });
-  const stores = new DynamoStores(TABLE, client);
+  const stores = // dynalite implements no TransactWriteItems action, so the transactional
+  // counter append (#221) cannot run here. Exactly-once is proven by the unit
+  // tests against memStores and must be re-verified against real DynamoDB
+  // (#212). This flag keeps the rest of the journey exercisable.
+  new DynamoStores(TABLE, client, { nonTransactionalCountersForTests: true });
   const sender = new CaptureSender();
   const confirmSigner = new HmacConfirmationSigner("secret");
   const { privateKey } = await generateKeyPair("ES256");

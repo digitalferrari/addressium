@@ -64,7 +64,9 @@ test("checkDeliverability publishes to SNS and halts the campaign on a halt brea
     templateId: "t",
     audience: { listId: "l" },
     status: "sending",
-    counters: counters({}),
+    // Start at zero: appending an event now maintains the counters
+    // transactionally (#221), so pre-seeding them here would double-count.
+    counters: counters({ sent: 0, delivered: 0 }),
   };
   await stores.campaigns.put(campaign);
 
@@ -84,6 +86,10 @@ test("checkDeliverability publishes to SNS and halts the campaign on a halt brea
   assert.equal(publisher.published[0]?.message.action, "halted");
   const after = await stores.campaigns.get(ORG, C);
   assert.equal(after?.status, "halted");
+  // The counters the gate read were maintained by the appends themselves, not
+  // derived by folding the event log on every bounce (#221, #182).
+  assert.equal(after?.counters?.sent, 1000);
+  assert.equal(after?.counters?.complaints, 6);
 });
 
 test("checkDeliverability is a no-op when the org has no alert config", async () => {
