@@ -846,8 +846,13 @@ export class ControlPlaneStack extends Stack {
       // Scopes the health check to THIS deployment's alarms; every alarm this
       // stack creates is named with the construct id prefix.
       ALARM_PREFIX: `${Stack.of(this).stackName}-`,
+      // Resuming a paused one-off re-enqueues the send that fired while it was
+      // paused (#179). Without the queue, resume would 500 at the last step
+      // having already flipped the record to active — the worst place to fail.
+      SEND_QUEUE_URL: sendQueue.queueUrl,
     });
     table.grantReadWriteData(adminApiFn);
+    sendQueue.grantSendMessages(adminApiFn);
     // Scoped to this pool only, and to the four actions team management needs —
     // not cognito-idp:* on the account. The router is internet-facing, so a
     // wildcard here would let one compromised route reach every pool in the

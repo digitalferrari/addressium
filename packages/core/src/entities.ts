@@ -347,6 +347,24 @@ export interface SendScheduleState {
   timezone?: string;
   createdAt: string;
   updatedAt: string;
+  /**
+   * A one-off delivery that fired while this schedule was PAUSED (#179).
+   *
+   * Pausing a one-off used to destroy it. The EventBridge schedule fires,
+   * `ActionAfterCompletion: DELETE` removes it, the message lands on SQS, the
+   * sender sees `paused` and returns `{skipped: true}`, and SQS deletes the
+   * message. Nothing remains: Resume-then-Start produced no send at all, and
+   * nothing reported it.
+   *
+   * So the send is parked here instead of dropped, and resuming re-enqueues it.
+   * The whole descriptor — template included — because that is what makes it
+   * re-sendable without reconstructing it from a draft that may have changed
+   * since. Shape owned by @addressium/domain (`SendDescriptor`).
+   *
+   * Cleared on resume and on archive. Archive is terminal: a parked send is
+   * discarded, which is what "archive" has to mean if it means anything.
+   */
+  deferred?: unknown;
 }
 
 export interface HotCounters {

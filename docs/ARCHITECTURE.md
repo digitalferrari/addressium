@@ -478,7 +478,21 @@ transitions it; the console's **Schedules** screen exposes the three actions.
   so `close a newsletter` is no longer the only lever — you can stop a daily send
   outright and resume it later.
 - **One-off** sends are gated in the campaign sender **before** the idempotency
-  claim, so pausing doesn't burn the claim and a resumed send still goes out.
+  claim, so pausing doesn't burn the claim — and the send is **parked on its
+  lifecycle record**, then re-enqueued on resume (#179).
+
+  The parking is what makes "a resumed send still goes out" true, and it was not
+  true before. A one-off's EventBridge schedule fires once and deletes itself, so
+  by the time the sender sees `paused` the schedule is already gone; returning
+  `skipped` let SQS delete the message too, and the send simply ceased to exist.
+  Resume-then-Start produced nothing, silently. The parked descriptor carries the
+  template, so the resumed send does not have to be reconstructed from a draft
+  that may have changed since; its fan-out **slice is dropped**, so it re-fans
+  against the recipient set as it stands on resume rather than one snapshotted
+  before the pause.
+
+  **Archive discards the parked send.** A terminal state that leaves something
+  waiting to fire is not terminal.
 - We **never delete** the EventBridge schedule or the record — pause is
   reversible and archive is a terminal "put it away" that retains history. (This
   is why scheduling needs only `scheduler:CreateSchedule`, not `DeleteSchedule`.)

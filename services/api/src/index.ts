@@ -15,6 +15,7 @@ import {
   EventBridgeScheduler,
   GoogleRecaptchaVerifier,
   SesEmailSender,
+  SqsSendQueue,
   getSecret,
   sanitizeEmailHtml,
 } from "@addressium/adapters-aws";
@@ -438,7 +439,15 @@ export async function scheduleLifecycleHandler(event: HttpEvent): Promise<HttpRe
     }
     requireGrant(event, "campaigns:schedule", orgId);
     const state = await transitionSchedule(stores(), clock, { orgId, scheduleId, action });
-    return json(200, state);
+
+    // Resuming a one-off that fired while paused re-enqueues it (#179). Without
+    // this the parking is pointless: the EventBridge schedule deleted itself
+    // when it fired, so nothing else will ever deliver this send.
+    const { resumed, ...record } = state as typeof state & { resumed?: SendDescriptor };
+    if (resumed) {
+      await new SqsSendQueue(env("SEND_QUEUE_URL")).enqueue(resumed);
+    }
+    return json(200, { ...record, ...(resumed ? { resent: true } : {}) });
   } catch (e) {
     return fail(e);
   }

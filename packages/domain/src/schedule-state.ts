@@ -10,7 +10,7 @@
  * "put it away" state that likewise keeps the record and its history.
  */
 import type { ScheduleKind, ScheduleStatus, SendScheduleState } from "@addressium/core";
-import type { Clock, Stores } from "./ports.js";
+import type { Clock, SendDescriptor, Stores } from "./ports.js";
 
 /**
  * May a send under this schedule fire? Only when active. A missing record
@@ -51,12 +51,52 @@ export async function transitionSchedule(
   stores: Stores,
   clock: Clock,
   input: { orgId: string; scheduleId: string; action: "start" | "pause" | "archive" },
-): Promise<SendScheduleState> {
+): Promise<SendScheduleState & { resumed?: SendDescriptor }> {
   const existing = await stores.schedules.get(input.orgId, input.scheduleId);
   if (!existing) throw new Error(`unknown schedule ${input.scheduleId}`);
   const status: ScheduleStatus =
     input.action === "start" ? "active" : input.action === "pause" ? "paused" : "archived";
-  const state: SendScheduleState = { ...existing, status, updatedAt: clock.now().toISOString() };
+
+  // A one-off that fired while paused was parked rather than dropped (#179).
+  // Resuming hands it back so the caller can re-enqueue it; archiving discards
+  // it, because a terminal state that leaves a send waiting to fire is not
+  // terminal.
+  const parked = existing.deferred as SendDescriptor | undefined;
+  const resumed = input.action === "start" ? parked : undefined;
+
+  const state: SendScheduleState = {
+    ...existing,
+    status,
+    updatedAt: clock.now().toISOString(),
+  };
+  // `pause` keeps whatever is parked; start and archive both clear it.
+  if (input.action !== "pause") delete state.deferred;
+
   await stores.schedules.put(state);
-  return state;
+  return resumed ? { ...state, resumed } : state;
+}
+
+/**
+ * Park a one-off whose delivery arrived while the schedule was paused (#179).
+ *
+ * Called by the sender instead of silently dropping the message. Idempotent: a
+ * redelivery overwrites the same parked descriptor rather than stacking.
+ */
+export async function deferSend(
+  stores: Stores,
+  clock: Clock,
+  descriptor: SendDescriptor,
+): Promise<void> {
+  const existing = await stores.schedules.get(descriptor.orgId, descriptor.campaignId);
+  // Nothing to park against — a legacy send with no lifecycle record is treated
+  // as active by `scheduleActive`, so it never reaches here.
+  if (!existing) return;
+  await stores.schedules.put({
+    ...existing,
+    // The slice is deliberately dropped: on resume the campaign fans out afresh
+    // against the recipient set as it stands THEN, which is both correct and
+    // simpler than parking N slices and hoping they still tile the list.
+    deferred: { ...descriptor, slice: undefined },
+    updatedAt: clock.now().toISOString(),
+  });
 }

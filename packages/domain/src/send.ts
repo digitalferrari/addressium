@@ -18,7 +18,7 @@ import type {
   Stores,
 } from "./ports.js";
 import { buildLinkMap, renderForRecipient, type EmailTemplate } from "./render.js";
-import { scheduleActive } from "./schedule-state.js";
+import { deferSend, scheduleActive } from "./schedule-state.js";
 
 /** Alias kept for readability; a campaign send takes a SendDescriptor. */
 export type SendCampaignInput = SendDescriptor;
@@ -348,12 +348,28 @@ export async function sendCampaign(
     throw new Error(`refusing to send empty template for campaign ${input.campaignId}`);
   }
 
-  // Lifecycle gate: a paused or archived one-off never sends (§4.6). Checked
-  // before the idempotency claim so resuming can still send later. Recurring
+  // Lifecycle gate: a paused or archived one-off never sends (§4.6). Recurring
   // editions carry an edition-stamped id with no schedule record here — they're
   // gated upstream in the launch handler — so this only bites one-offs.
+  //
+  // PAUSED and ARCHIVED are not the same and used to behave identically (#179).
+  // The one-off's EventBridge schedule has already fired and deleted itself by
+  // the time we get here, and returning `skipped` lets SQS delete the message —
+  // so a pause destroyed the send outright and Resume-then-Start produced
+  // nothing, silently. A paused send is now PARKED on its lifecycle record and
+  // re-enqueued on resume; an archived one is genuinely dropped, which is what
+  // archive is for.
   const schedule = await stores.schedules.get(input.orgId, input.campaignId);
   if (!scheduleActive(schedule)) {
+    if (schedule?.status === "paused") {
+      await deferSend(stores, clock, {
+        orgId: input.orgId,
+        campaignId: input.campaignId,
+        listId: input.listId,
+        subject: input.subject,
+        template: input.template,
+      });
+    }
     return { sent: 0, suppressed: 0, skipped: true };
   }
 
