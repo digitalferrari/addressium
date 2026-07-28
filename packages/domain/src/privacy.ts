@@ -71,6 +71,12 @@ export async function eraseSubscriber(
   });
 
   // Anonymize the profile — remove PII, keep the id so references stay valid.
+  //
+  // Conditional on the rev read at the top (#194). This is a read-modify-write,
+  // and a concurrent identity-sync upsert or CSV import landing in between would
+  // RESTORE the PII — while this function returned `true` and the API told the
+  // data subject their data was erased. A lost race must surface, not be
+  // reported as success.
   await stores.subscribers.put({
     ...subscriber,
     email: `erased:${subscriber.sub}`,
@@ -81,6 +87,6 @@ export async function eraseSubscriber(
     entitlementAsof: undefined,
     source: undefined,
     locale: undefined,
-  });
+  }, { ifRev: subscriber.rev });
   return true;
 }

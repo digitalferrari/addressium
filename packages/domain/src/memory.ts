@@ -54,6 +54,7 @@ import type {
   ImportBatchStore,
   ImportMappingStore,
 } from "./ports.js";
+import { ConcurrentModificationError } from "./ports.js";
 import { ZERO_COUNTERS } from "./admin.js";
 
 const subKey = (o: string, s: string) => `${o}#${s}`;
@@ -74,6 +75,8 @@ export class MemOrganizations implements OrganizationStore {
 
 export class MemSubscribers implements SubscriberStore {
   private byId = new Map<string, Subscriber>();
+  /** email -> the sub that holds it, mirroring the Dynamo reservation item. */
+  private emailOwner = new Map<string, string>();
   async get(orgId: string, sub: string) {
     return this.byId.get(subKey(orgId, sub));
   }
@@ -89,8 +92,27 @@ export class MemSubscribers implements SubscriberStore {
     }
     return undefined;
   }
-  async put(sub: Subscriber) {
-    this.byId.set(subKey(sub.orgId, sub.sub), sub);
+  async put(sub: Subscriber, opts?: { ifRev?: number }) {
+    const key = subKey(sub.orgId, sub.sub);
+    if (opts && "ifRev" in opts) {
+      const current = this.byId.get(key);
+      // A missing record has no rev either, so `ifRev: undefined` on a record
+      // that has since been deleted still passes — which is correct: there is
+      // nothing to lose.
+      if (current?.rev !== opts.ifRev) throw new ConcurrentModificationError("subscriber");
+    }
+    this.byId.set(key, { ...sub, rev: (sub.rev ?? 0) + 1 });
+  }
+  async reserveEmail(orgId: string, email: string, sub: string) {
+    const key = subKey(orgId, email.toLowerCase());
+    const held = this.emailOwner.get(key);
+    if (held) return { sub: held };
+    this.emailOwner.set(key, sub);
+    return { sub };
+  }
+  async getConsistent(orgId: string, sub: string) {
+    // A single map: every read here is already consistent.
+    return this.byId.get(subKey(orgId, sub));
   }
   async list(orgId: string) {
     return [...this.byId.values()].filter((s) => s.orgId === orgId);
@@ -290,8 +312,13 @@ export class MemTemplates implements TemplateStore {
   async get(orgId: string, templateId: string) {
     return this.map.get(subKey(orgId, templateId));
   }
-  async put(t: Template) {
-    this.map.set(subKey(t.orgId, t.templateId), t);
+  async put(t: Template, opts?: { ifVersion?: number }) {
+    const key = subKey(t.orgId, t.templateId);
+    if (opts && "ifVersion" in opts) {
+      const current = this.map.get(key);
+      if (current?.version !== opts.ifVersion) throw new ConcurrentModificationError("template");
+    }
+    this.map.set(key, t);
   }
   async list(orgId: string) {
     return [...this.map.values()].filter((t) => t.orgId === orgId);

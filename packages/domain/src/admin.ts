@@ -107,7 +107,10 @@ export async function saveTemplate(stores: Stores, input: schemas.SaveTemplateIn
     mergeTags: input.mergeTags,
     adSlots: input.adSlots,
   };
-  await stores.templates.put(template);
+  // Conditional on the version we just read (#194). Two concurrent saves both
+  // compute N+1; without this both write it, one body is lost silently, and the
+  // archive believes it pinned two distinct versions when it pinned one twice.
+  await stores.templates.put(template, { ifVersion: existing?.version });
   return template;
 }
 

@@ -57,12 +57,52 @@ export interface OrganizationStore {
   list(): Promise<Organization[]>;
 }
 
+/**
+ * A conditional write lost a race (#194). The caller re-reads and decides: for
+ * erasure that means retrying against the record that actually exists now, and
+ * for a template save it means telling the operator their edit was overwritten
+ * rather than silently discarding one of the two bodies.
+ */
+export class ConcurrentModificationError extends Error {
+  constructor(what: string) {
+    super(`${what} was modified concurrently`);
+    this.name = "ConcurrentModificationError";
+  }
+}
+
 export interface SubscriberStore {
   get(orgId: string, sub: string): Promise<Subscriber | undefined>;
   findByEmail(orgId: string, email: string): Promise<Subscriber | undefined>;
   /** Resolve by the external pool's Cognito `sub` (the stable identity join key). */
   findByExternalId(orgId: string, externalId: string): Promise<Subscriber | undefined>;
-  put(sub: Subscriber): Promise<void>;
+  /**
+   * Write the subscriber, bumping `rev`.
+   *
+   * `opts.ifRev` makes it conditional (#194): the write is refused with a
+   * `ConcurrentModificationError` unless the stored `rev` still matches. Use it
+   * on any read-modify-write whose loss would be a compliance failure rather
+   * than an inconvenience — erasure above all, where a concurrent upsert
+   * silently un-erases someone. Unconditional stays the default because most
+   * writes are last-writer-wins by intent (a status bump, an engagement stamp).
+   */
+  put(sub: Subscriber, opts?: { ifRev?: number }): Promise<void>;
+  /**
+   * Claim `email` for `sub`, atomically (#194).
+   *
+   * Returns the `sub` that HOLDS the address — `sub` itself if this call won,
+   * someone else's if it did not. Callers must use the returned id rather than
+   * the one they proposed.
+   *
+   * `findByEmail` reads an eventually-consistent GSI with no uniqueness
+   * constraint, so two concurrent signups for one address both saw "no such
+   * subscriber" and both created a record. Later lookups then resolved
+   * non-deterministically, and an erasure could report success while a complete
+   * duplicate profile survived alongside it. A conditional write on a single
+   * item is the only thing that actually decides a race.
+   */
+  reserveEmail(orgId: string, email: string, sub: string): Promise<{ sub: string }>;
+  /** Strongly-consistent read, for the moment after losing a reservation. */
+  getConsistent(orgId: string, sub: string): Promise<Subscriber | undefined>;
   /** Enumerate every subscriber for an org — batch sweeps (re-engagement, reporting). */
   list(orgId: string): Promise<Subscriber[]>;
   /**
@@ -192,7 +232,8 @@ export interface SendScheduleStore {
 /** Reusable templates (§4.15): visual (MJML), MJML source, or raw HTML. */
 export interface TemplateStore {
   get(orgId: string, templateId: string): Promise<Template | undefined>;
-  put(t: Template): Promise<void>;
+  /** `opts.ifVersion` guards the read-modify-write in `saveTemplate` (#194). */
+  put(t: Template, opts?: { ifVersion?: number }): Promise<void>;
   list(orgId: string): Promise<Template[]>;
 }
 

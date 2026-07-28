@@ -65,6 +65,7 @@ import type {
   UsageStore,
   VersionStore,
 } from "@addressium/domain";
+import { ConcurrentModificationError } from "@addressium/domain";
 import { randomUUID } from "node:crypto";
 
 const org = (o: string) => `ORG#${o}`;
@@ -112,6 +113,44 @@ export class DynamoStores implements Stores {
 
   private async put(item: Item<unknown>): Promise<void> {
     await this.doc.send(new PutCommand({ TableName: this.tableName, Item: item }));
+  }
+
+  /**
+   * Optimistic-concurrency write (#194). A failed condition becomes a domain
+   * error rather than an AWS one, so the caller can act on it without importing
+   * the SDK — and so a lost race is never mistaken for a successful write, which
+   * is how a concurrent upsert used to un-erase a subscriber while the caller
+   * was told the erasure succeeded.
+   */
+  private async putConditional(
+    item: Item<unknown>,
+    condition: { ConditionExpression: string; ExpressionAttributeValues?: Record<string, unknown> },
+    what: string,
+  ): Promise<void> {
+    // Only the aliases the expression actually mentions. DynamoDB rejects the
+    // whole request with a ValidationException if any declared name goes unused,
+    // so a fixed map here silently works in the fake and fails in production —
+    // which is how a guard ends up never rejecting anything. Caught by the
+    // dynalite integration test rather than by review.
+    const ALIASES: Record<string, string> = { "#d": "data", "#r": "rev", "#v": "version" };
+    const names = Object.fromEntries(
+      Object.entries(ALIASES).filter(([alias]) => condition.ConditionExpression.includes(alias)),
+    );
+    try {
+      await this.doc.send(
+        new PutCommand({
+          TableName: this.tableName,
+          Item: item,
+          ...condition,
+          ...(Object.keys(names).length > 0 ? { ExpressionAttributeNames: names } : {}),
+        }),
+      );
+    } catch (e) {
+      if ((e as Error).name === "ConditionalCheckFailedException") {
+        throw new ConcurrentModificationError(what);
+      }
+      throw e;
+    }
   }
 
   private async get<T>(pk: string, sk: string): Promise<T | undefined> {
@@ -191,14 +230,33 @@ export class DynamoStores implements Stores {
       if (!ptr) return undefined;
       return this.get<Subscriber>(org(orgId), `SUBSCRIBER#${ptr.sub}`);
     },
-    put: async (s) => {
-      await this.put({
+    put: async (s, opts) => {
+      const item = {
         pk: org(s.orgId),
         sk: `SUBSCRIBER#${s.sub}`,
         gsi1pk: `${org(s.orgId)}#EMAIL`,
         gsi1sk: s.email.toLowerCase(),
-        data: s,
-      });
+        // The store owns the counter, so a caller cannot forge a rev to win a
+        // race it lost.
+        data: { ...s, rev: (s.rev ?? 0) + 1 },
+      };
+      if (opts && "ifRev" in opts) {
+        // `ifRev: undefined` means "this must still be a record written before
+        // `rev` existed" — expressed as attribute_not_exists, not as an equality
+        // against a value that isn't there.
+        await this.putConditional(
+          item,
+          opts.ifRev === undefined
+            ? { ConditionExpression: "attribute_not_exists(#d.#r)" }
+            : {
+                ConditionExpression: "#d.#r = :r",
+                ExpressionAttributeValues: { ":r": opts.ifRev },
+              },
+          "subscriber",
+        );
+      } else {
+        await this.put(item);
+      }
       if (s.externalId) {
         await this.put({ pk: `${org(s.orgId)}#EXTID`, sk: `EXTID#${s.externalId}`, data: { sub: s.sub } });
       }
@@ -211,6 +269,42 @@ export class DynamoStores implements Stores {
         KeyConditionExpression: "pk = :pk AND begins_with(sk, :s)",
         ExpressionAttributeValues: { ":pk": org(orgId), ":s": "SUBSCRIBER#" },
       }),
+    // A single item whose existence decides the race — see the port doc. Kept in
+    // its own partition so it never shows up in a subscriber listing.
+    reserveEmail: async (orgId, email, sub) => {
+      const key = { pk: `${org(orgId)}#EMAILRESV`, sk: `EMAIL#${email.toLowerCase()}` };
+      try {
+        await this.doc.send(
+          new PutCommand({
+            TableName: this.tableName,
+            Item: { ...key, data: { sub } },
+            ConditionExpression: "attribute_not_exists(pk)",
+          }),
+        );
+        return { sub };
+      } catch (e) {
+        if ((e as Error).name !== "ConditionalCheckFailedException") throw e;
+        // Lost the race. ConsistentRead, because the winner's write is at most
+        // milliseconds old and an eventually-consistent read here would return
+        // "nothing" and send us straight back to creating a duplicate.
+        const res = await this.doc.send(
+          new GetCommand({ TableName: this.tableName, Key: key, ConsistentRead: true }),
+        );
+        const holder = (res.Item as Item<{ sub: string }> | undefined)?.data.sub;
+        if (!holder) throw new Error(`email reservation for ${email} vanished mid-race`);
+        return { sub: holder };
+      }
+    },
+    getConsistent: async (orgId, sub) => {
+      const res = await this.doc.send(
+        new GetCommand({
+          TableName: this.tableName,
+          Key: { pk: org(orgId), sk: `SUBSCRIBER#${sub}` },
+          ConsistentRead: true,
+        }),
+      );
+      return (res.Item as Item<Subscriber> | undefined)?.data;
+    },
     stream: (orgId) =>
       this.queryPages<Subscriber>({
         TableName: this.tableName,
@@ -567,7 +661,22 @@ export class DynamoStores implements Stores {
 
   templates: TemplateStore = {
     get: (orgId, templateId) => this.get<Template>(org(orgId), `TEMPLATE#${templateId}`),
-    put: (t) => this.put({ pk: org(t.orgId), sk: `TEMPLATE#${t.templateId}`, data: t }),
+    put: async (t, opts) => {
+      const item = { pk: org(t.orgId), sk: `TEMPLATE#${t.templateId}`, data: t };
+      if (!opts || !("ifVersion" in opts)) return this.put(item);
+      // `version` IS the revision here, so no second counter is needed: two
+      // concurrent saves both compute N+1 and the second one's condition fails.
+      await this.putConditional(
+        item,
+        opts.ifVersion === undefined
+          ? { ConditionExpression: "attribute_not_exists(pk)" }
+          : {
+              ConditionExpression: "#d.#v = :v",
+              ExpressionAttributeValues: { ":v": opts.ifVersion },
+            },
+        "template",
+      );
+    },
     list: (orgId) =>
       this.queryAll<Template>({
         TableName: this.tableName,

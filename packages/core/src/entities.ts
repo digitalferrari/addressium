@@ -244,6 +244,19 @@ export interface Subscriber {
   lastEngagedAt?: string;
   /** Win-back automation enrollment state, present only while enrolled (§4.22). */
   reengagement?: ReengagementState;
+  /**
+   * Optimistic-concurrency counter (#194). Bumped by the store on every write.
+   *
+   * Absent on records written before this field existed — a caller passing
+   * `ifRev: undefined` is asking "this must still be the pre-rev record", which
+   * is the honest reading and still fails closed the moment anything writes.
+   *
+   * Only compliance paths guard on it. Erasure is the one that matters: it is a
+   * read-modify-write, and a concurrent identity-sync upsert or CSV import
+   * landing between the read and the write RESTORES the PII while the caller is
+   * told `{erased: true}`.
+   */
+  rev?: number;
 }
 
 /**

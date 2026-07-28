@@ -79,9 +79,27 @@ async function findOrCreateSubscriber(
   // the per-subscription record below captures fresh provenance for the new
   // list, which is what a dispute about THAT list needs.
   if (existing) return existing;
+
+  // The lookup above reads an eventually-consistent GSI with no uniqueness
+  // constraint, so two concurrent signups for one address both reach here (#194).
+  // The reservation is a single conditional write, which is the only thing that
+  // actually decides the race: whoever loses gets the winner's id back.
+  const proposed = randomUUID();
+  const { sub } = await stores.subscribers.reserveEmail(orgId, email, proposed);
+  if (sub !== proposed) {
+    const winner = await stores.subscribers.getConsistent(orgId, sub);
+    // The winner holds the address but has not finished writing their record —
+    // a window of milliseconds. Failing the signup is the right answer: the
+    // caller retries and finds them, whereas creating a second record here is
+    // the duplicate this whole mechanism exists to prevent, and duplicates are
+    // what let an erasure report success while a full profile survives.
+    if (!winner) throw new Error("signup raced another signup for this address; retry");
+    return winner;
+  }
+
   const subscriber: Subscriber = {
     orgId,
-    sub: randomUUID(),
+    sub,
     email,
     attributes: attributes ?? {},
     source: ctx.sourceUrl,

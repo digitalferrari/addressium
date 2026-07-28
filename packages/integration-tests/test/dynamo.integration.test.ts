@@ -276,3 +276,70 @@ test("a batch's rows are enumerable, and live outside the org partition", async 
   // however large the import was. This is the whole reason for the split key.
   assert.deepEqual(await stores.subscribers.list(ORG), []);
 });
+
+/**
+ * Optimistic concurrency against the real API (#194).
+ *
+ * The in-memory store checks a field; DynamoDB evaluates a ConditionExpression
+ * on a nested attribute and raises a specific exception. Those are different
+ * enough that the fake proves nothing about the adapter — a mistyped attribute
+ * name or a missing alias would pass every unit test and then never reject
+ * anything in production, which is the worst possible failure for a guard.
+ */
+test("a stale conditional write is refused, and a current one is not", async () => {
+  const client = new DynamoDBClient({
+    endpoint,
+    region: "us-east-1",
+    credentials: { accessKeyId: "x", secretAccessKey: "x" },
+  });
+  const stores = new DynamoStores(TABLE, client, { nonTransactionalCountersForTests: true });
+  const ORG = "revorg";
+
+  await stores.subscribers.put({
+    orgId: ORG,
+    sub: "s1",
+    email: "alice@example.com",
+    attributes: {},
+    status: "active",
+    entitlement: "free",
+  });
+  const first = await stores.subscribers.get(ORG, "s1");
+  assert.equal(first?.rev, 1, "the store stamps the counter, not the caller");
+
+  // Someone else writes, moving the rev forward.
+  await stores.subscribers.put({ ...first!, attributes: { by: "them" } });
+
+  // Our write, based on what we read before that, must lose.
+  await assert.rejects(
+    () => stores.subscribers.put({ ...first!, email: "erased:s1" }, { ifRev: first!.rev }),
+    (e: Error) => e.name === "ConcurrentModificationError",
+  );
+  assert.equal((await stores.subscribers.get(ORG, "s1"))?.email, "alice@example.com");
+
+  // Re-reading and retrying against current state succeeds — the guard must be
+  // survivable, not just strict.
+  const current = await stores.subscribers.get(ORG, "s1");
+  await stores.subscribers.put({ ...current!, email: "erased:s1" }, { ifRev: current!.rev });
+  assert.equal((await stores.subscribers.get(ORG, "s1"))?.email, "erased:s1");
+});
+
+test("the email reservation decides a race and never yields two ids", async () => {
+  const client = new DynamoDBClient({
+    endpoint,
+    region: "us-east-1",
+    credentials: { accessKeyId: "x", secretAccessKey: "x" },
+  });
+  const stores = new DynamoStores(TABLE, client, { nonTransactionalCountersForTests: true });
+  const ORG = "resvorg";
+
+  // Genuinely concurrent, not sequential: exactly one conditional Put may win.
+  const claims = await Promise.all(
+    ["a", "b", "c", "d"].map((id) => stores.subscribers.reserveEmail(ORG, "race@example.com", id)),
+  );
+  const winners = new Set(claims.map((c) => c.sub));
+  assert.equal(winners.size, 1, `four callers agreed on ${winners.size} ids`);
+
+  // The reservation lives outside the org partition, so it never appears in a
+  // subscriber listing.
+  assert.deepEqual(await stores.subscribers.list(ORG), []);
+});

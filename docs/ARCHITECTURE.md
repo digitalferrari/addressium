@@ -1033,6 +1033,41 @@ Entities:
 
 | Entity | Purpose | Key notes |
 |---|---|---|
+**Concurrency (#194).** Most writes are last-writer-wins by intent — a status
+bump, an engagement stamp. Four are not, and each failed silently by telling the
+caller it had succeeded:
+
+- **Erasure** is a read-modify-write. A concurrent identity-sync upsert or CSV
+  import landing between the read and the write restored the PII while the data
+  subject was told their data was erased. `Subscriber.rev` is stamped by the
+  store on every write — never accepted from a caller, so a lost race cannot be
+  won by forging one — and `eraseSubscriber` writes conditionally on the rev it
+  read. A lost race raises `ConcurrentModificationError` rather than reporting
+  success.
+- **`saveTemplate`** computes `version = existing + 1`. Two concurrent saves both
+  wrote N+1, one body was lost, and the archive believed it had pinned two
+  distinct versions. `version` is itself the revision, so the write is
+  conditional on it and no second counter is needed.
+- **`applyEntitlementSync`** recorded `version` and never compared it, so two
+  webhooks delivered out of order — routine on any at-least-once transport —
+  silently downgraded a paying subscriber, the only symptom being a paywall
+  appearing for someone who had just paid. `version` is an opaque string from
+  someone else's system, so the ordering rule is stated rather than assumed:
+  numeric when both sides parse as finite numbers (otherwise `"10"` sorts before
+  `"9"` and every tenth update from a counter-based feed is rejected),
+  lexicographic otherwise, which is right for the ISO timestamps most providers
+  send. Equality is **not** newer — reapplying a redelivery would restamp
+  `entitlementAsof` and make stale data look fresh to every token minted after.
+- **Signup** resolved by `findByEmail`, an eventually-consistent GSI read with no
+  uniqueness constraint, so two concurrent signups for one address both saw "no
+  such subscriber" and both created a record. Later lookups then resolved
+  non-deterministically and an erasure could report success while a complete
+  duplicate profile survived. A single conditional write on an `EMAILRESV`
+  reservation item now decides the race; the loser is handed the winner's id and
+  reads it with `ConsistentRead`, because the winner's record is milliseconds old
+  and an eventually-consistent read would send it straight back to creating the
+  duplicate.
+
 | **Organization** | A silo | name, domain(s), **optional** linked subscriber pool ID (§4.10), `magicLink` {kmsKeyArn, kid, issuer, audience}, SES config set, IP mode (shared/dedicated), suppression scope, **defaultTimezone** (IANA), setup state |
 | **AdminMember** | Staff ↔ role ↔ orgs | admin-pool `sub`, role, org-scope list, MFA state (in admin pool) |
 | **Role** | Capability set | named set of capabilities (built-in + custom) |
