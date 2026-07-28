@@ -17,6 +17,6 @@
     "@addressium/magiclink-verify": "0.1.0"
   },
   "devDependencies": {
-    "dynalite": "^3.2.2"
+    "dynalite": "^4.0.0"
   }
 }
