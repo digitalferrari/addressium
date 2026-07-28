@@ -11,6 +11,7 @@ import type {
   Clock,
   EmailSender,
   MagicLinkSigner,
+  RecipientSlice,
   SendDescriptor,
   SendQueue,
   SendThrottle,
@@ -80,14 +81,38 @@ function recipientClaimKey(campaignId: string, subscriberId: string): string {
   return `${campaignId}#${subscriberId}`;
 }
 
-/** Split a confirmed-recipient count into offset/limit windows of `chunkSize`. */
-export function planFanOut(total: number, chunkSize: number): Array<{ offset: number; limit: number }> {
+/**
+ * Split an ORDERED list of recipient ids into key-range windows of `chunkSize`
+ * (#171). Takes the ids themselves, not a count, because the boundaries have to
+ * be ids — a count can only produce offsets, and offsets are what break.
+ *
+ * The last window is deliberately open-ended: someone who confirms after the
+ * plan is made still falls inside it and gets the campaign, rather than landing
+ * past the final boundary and being silently dropped.
+ */
+export function planFanOut(orderedIds: string[], chunkSize: number): RecipientSlice[] {
   if (chunkSize <= 0) throw new Error("chunkSize must be > 0");
-  const slices: Array<{ offset: number; limit: number }> = [];
-  for (let offset = 0; offset < total; offset += chunkSize) {
-    slices.push({ offset, limit: Math.min(chunkSize, total - offset) });
+  const slices: RecipientSlice[] = [];
+  for (let i = 0; i < orderedIds.length; i += chunkSize) {
+    const isLast = i + chunkSize >= orderedIds.length;
+    const after = i === 0 ? undefined : orderedIds[i - 1];
+    const until = isLast ? undefined : orderedIds[i + chunkSize - 1];
+    slices.push({ ...(after ? { after } : {}), ...(until ? { until } : {}) });
   }
   return slices;
+}
+
+/** The recipients of one key-range window. Ranges are disjoint and cover everything. */
+export function recipientsInSlice<T extends { subscriberId: string }>(
+  ordered: T[],
+  slice: RecipientSlice | undefined,
+): T[] {
+  if (!slice) return ordered;
+  return ordered.filter(
+    (s) =>
+      (slice.after === undefined || s.subscriberId > slice.after) &&
+      (slice.until === undefined || s.subscriberId <= slice.until),
+  );
 }
 
 /**
@@ -101,10 +126,14 @@ export async function fanOutCampaign(
   queue: SendQueue,
   descriptor: SendDescriptor,
   chunkSize: number,
-): Promise<Array<{ offset: number; limit: number }>> {
+): Promise<RecipientSlice[]> {
   const confirmed = await stores.subscriptions.listConfirmed(descriptor.orgId, descriptor.listId);
   if (confirmed.length <= chunkSize) return [];
-  const slices = planFanOut(confirmed.length, chunkSize);
+  // Ordered by subscriber id — the order the store returns and the order the
+  // ranges are expressed in. Sorting here rather than trusting the caller keeps
+  // the boundaries meaningful even if a store ever returns unordered rows.
+  const ordered = [...confirmed].sort((a, b) => a.subscriberId.localeCompare(b.subscriberId));
+  const slices = planFanOut(ordered.map((c) => c.subscriberId), chunkSize);
   for (const slice of slices) {
     await queue.enqueue({ ...descriptor, slice });
   }
@@ -344,10 +373,10 @@ export async function sendCampaign(
   const org = await stores.organizations.get(input.orgId);
 
   const all = await stores.subscriptions.listConfirmed(input.orgId, input.listId);
-  // A slice sends only its window of the confirmed set; no slice → the whole list.
-  const confirmed = input.slice
-    ? all.slice(input.slice.offset, input.slice.offset + input.slice.limit)
-    : all;
+  // A slice sends only its KEY RANGE of the confirmed set; no slice → the whole
+  // list. Ranges are immune to the set changing under them mid-fan-out (#171).
+  const ordered = [...all].sort((a, b) => a.subscriberId.localeCompare(b.subscriberId));
+  const confirmed = recipientsInSlice(ordered, input.slice);
   let sent = 0;
   let suppressed = 0;
   let devBlocked = 0;

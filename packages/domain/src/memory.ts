@@ -139,8 +139,17 @@ export class MemSubscriptions implements SubscriptionStore {
     this.map.set(subnKey(s.orgId, s.subscriberId, s.listId), s);
   }
   async listConfirmed(orgId: string, listId: string) {
-    return [...this.map.values()].filter(
-      (s) => s.orgId === orgId && s.listId === listId && s.status === "confirmed",
+    return (
+      [...this.map.values()]
+        .filter((s) => s.orgId === orgId && s.listId === listId && s.status === "confirmed")
+        // Sorted by subscriberId, because that is what DynamoDB does (#171). The
+        // real store ranges over `sk = SUBSCRIPTION#<subscriberId>`, so results
+        // come back in lexicographic id order and a NEW signup lands at a random
+        // position in the middle. Returning Map insertion order instead made a
+        // new signup always append at the end, which is precisely the ordering
+        // under which the old offset-based fan-out looked correct — the fake was
+        // hiding the bug it was supposed to catch.
+        .sort((a, b) => a.subscriberId.localeCompare(b.subscriberId))
     );
   }
   async listBySubscriber(orgId: string, subscriberId: string) {

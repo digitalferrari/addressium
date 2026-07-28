@@ -42,12 +42,14 @@ test("bucket paces the 6th token to the refill rate", async () => {
   assert.ok(sleeper.slept[0]! >= 100);
 });
 
-test("planFanOut splits a total into offset/limit windows", () => {
-  assert.deepEqual(planFanOut(5, 2), [
-    { offset: 0, limit: 2 },
-    { offset: 2, limit: 2 },
-    { offset: 4, limit: 1 },
+test("planFanOut splits ordered ids into key-range windows (#171)", () => {
+  // Boundaries are IDS, not counts. The last window is open-ended so a
+  // confirmation that lands after the plan is made is still picked up.
+  assert.deepEqual(planFanOut(["a", "b", "c", "d", "e"], 2), [
+    { until: "b" },
+    { after: "b", until: "d" },
+    { after: "d" },
   ]);
-  assert.deepEqual(planFanOut(0, 2), []);
-  assert.deepEqual(planFanOut(2, 5), [{ offset: 0, limit: 2 }]);
+  assert.deepEqual(planFanOut([], 2), []);
+  assert.deepEqual(planFanOut(["a", "b"], 5), [{}], "one open-ended window covers everything");
 });

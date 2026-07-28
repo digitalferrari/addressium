@@ -38,9 +38,37 @@ export interface SendDescriptor {
   /**
    * Recipient window for SQS fan-out of large lists. Absent → the whole list is
    * a candidate for fan-out; present → send only this slice of confirmed
-   * recipients (offset/limit over the confirmed set).
+   * recipients — a KEY RANGE over the confirmed set, never a numeric offset
+   * (#171). See `RecipientSlice`.
    */
-  slice?: { offset: number; limit: number };
+  slice?: RecipientSlice;
+}
+
+/**
+ * One fan-out window, expressed as a half-open KEY RANGE `(after, until]` over
+ * subscriber ids (#171).
+ *
+ * It used to be `{offset, limit}`. That is wrong for a set that can change while
+ * the fan-out runs, and it changes constantly — people confirm and unsubscribe
+ * during a send. Slices re-read the confirmed set at T1..Tn and re-sliced by a
+ * number computed at T0, while DynamoDB returns rows ordered by subscriber id,
+ * so a new signup lands at a RANDOM position and shifts every later index:
+ *
+ *  - an unsubscribe before the window pulls the boundary back by one, and the
+ *    recipient who was last in the previous slice is **never sent**;
+ *  - a confirmation before the window pushes it forward by one, and the
+ *    recipient who was last in the previous slice is **sent twice**.
+ *
+ * A key range has no such dependency. Boundaries are ids fixed at plan time, so
+ * a mutation elsewhere in the set cannot move them. The ranges are disjoint and
+ * the last one is open-ended, so every id falls in exactly one window — and
+ * someone who confirms mid-fan-out is picked up rather than dropped.
+ */
+export interface RecipientSlice {
+  /** Exclusive lower bound. Absent on the first slice. */
+  after?: string;
+  /** Inclusive upper bound. Absent on the LAST slice, which runs to the end. */
+  until?: string;
 }
 
 /**

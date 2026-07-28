@@ -40,9 +40,15 @@ const queue = () => (_queue ??= new SqsSendQueue(env("SEND_QUEUE_URL")));
 /**
  * Numeric env with a fail-fast guard. `Number("typo")` is NaN, and `NaN <= 0` is
  * false — so a malformed value slipped past every downstream guard: a NaN rate
- * made the TokenBucket a no-op (unthrottled), and a NaN chunk size made
- * planFanOut yield `limit: NaN`, so `slice(0, NaN)` returned [] and the campaign
- * claimed itself then "succeeded" having sent to nobody (#201).
+ * made the TokenBucket a no-op (unthrottled), and a NaN chunk size made the
+ * campaign claim itself and then "succeed" having sent to nobody (#201).
+ *
+ * The chunk-size half of that reads differently since #171: fan-out plans KEY
+ * RANGES rather than offset/limit windows, so a NaN can no longer produce a
+ * window that silently matches nothing. `planFanOut` still rejects a
+ * non-positive chunk size outright, and this guard still stops the value
+ * reaching it — belt and braces on a failure whose symptom was a campaign that
+ * reported success.
  */
 function numEnv(name: string, fallback: number): number {
   const raw = process.env[name];

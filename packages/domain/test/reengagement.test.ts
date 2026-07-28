@@ -255,6 +255,44 @@ test("a re-opt-in can self-clear an inactive sunset suppression", async () => {
 });
 
 test("reengagementCampaignId is per-step so engagement aggregates apart", () => {
-  assert.equal(reengagementCampaignId("ledger", 1), "reengagement:ledger#1");
+  assert.equal(reengagementCampaignId("ledger", 1), "reengagement:ledger#new#1");
   assert.notEqual(reengagementCampaignId("ledger", 1), reengagementCampaignId("ledger", 2));
+});
+
+/**
+ * Re-enrollment must start a fresh claim namespace (#207).
+ *
+ * The key had no notion of WHICH enrollment it belonged to, so a subscriber who
+ * went cold, ran the sequence, clicked, graduated, and went cold again months
+ * later found every step's claim already burned from the first cycle. They
+ * received zero win-back emails on the second, and the enrollment never moved.
+ */
+test("a second enrollment gets its own claim namespace", () => {
+  const first = reengagementCampaignId("ledger", 1, "2026-01-10T00:00:00.000Z");
+  const second = reengagementCampaignId("ledger", 1, "2026-07-10T00:00:00.000Z");
+  assert.notEqual(first, second, "the same step in a new cycle must not reuse a burned claim");
+  assert.match(first, /2026-01-10/);
+});
+
+test("within one cycle the key is stable, so a redelivered sweep still dedupes", () => {
+  // The whole point of the claim. Scoping it per cycle must not weaken
+  // at-most-once within a cycle.
+  const at = "2026-01-10T00:00:00.000Z";
+  assert.equal(reengagementCampaignId("ledger", 2, at), reengagementCampaignId("ledger", 2, at));
+  assert.notEqual(reengagementCampaignId("ledger", 2, at), reengagementCampaignId("ledger", 3, at));
+});
+
+test("an enrolling subscriber's namespace cannot collide with a dated cycle", () => {
+  // `new` is used for the first step, claimed before the enrollment record
+  // exists. It must not be reachable as a real enrolledAt value.
+  assert.equal(reengagementCampaignId("ledger", 1, undefined), "reengagement:ledger#new#1");
+  assert.notEqual(
+    reengagementCampaignId("ledger", 1, undefined),
+    reengagementCampaignId("ledger", 1, "2026-01-10T00:00:00.000Z"),
+  );
+});
+
+test("different lists never share a claim", () => {
+  const at = "2026-01-10T00:00:00.000Z";
+  assert.notEqual(reengagementCampaignId("ledger", 1, at), reengagementCampaignId("arts", 1, at));
 });

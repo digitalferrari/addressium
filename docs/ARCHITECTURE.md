@@ -353,6 +353,17 @@ compensate for a missing trap.
 - Recipients are batched onto **SQS**; sender Lambdas consume batches, render
   the MJML template with per-recipient merge variables, and call SES
   `SendBulkEmail` (up to 50 destinations/call).
+- **Fan-out slices are KEY RANGES over subscriber ids, never offsets** (#171).
+  The recipient set changes while a large send runs — people confirm and
+  unsubscribe — and DynamoDB returns rows ordered by subscriber id, so a new
+  signup lands at a random position and shifts every later index. Slices planned
+  as `{offset, limit}` at T0 and re-sliced against the set at T1..Tn therefore
+  skipped and duplicated recipients silently: an unsubscribe before a window
+  dropped the previous window's last recipient, a confirmation before it sent
+  them twice. A range's boundaries are ids fixed at plan time, so a mutation
+  elsewhere cannot move them; the windows are disjoint and contiguous, and the
+  last is open-ended so someone confirming mid-send is picked up rather than
+  dropped past the final boundary.
 - A **token-bucket throttle** keeps aggregate send rate within the account's SES
   quota so the sandbox/production sending limits are never exceeded.
 - Every message is tagged (campaign id, subscriber id) via SES message tags so

@@ -55,9 +55,29 @@ export function coldnessAnchor(sub: Subscriber): string | undefined {
   return sub.lastEngagedAt ?? sub.consent?.timestamp;
 }
 
-/** The per-step sub-campaign id, so each win-back step's opens/clicks aggregate on their own. */
-export function reengagementCampaignId(listId: string, step: number): string {
-  return `reengagement:${listId}#${step}`;
+/**
+ * The per-step sub-campaign id, so each win-back step's opens/clicks aggregate
+ * on their own — and so the send claim is scoped to ONE enrollment (#207).
+ *
+ * `enrolledAt` is what makes each cycle its own claim namespace. Without it the
+ * key was `reengagement:{listId}#{step}#{subscriberId}` with no notion of which
+ * enrollment it belonged to, so a subscriber who went cold, ran the sequence,
+ * clicked, graduated, and went cold again months later found every step's claim
+ * already burned from the first cycle. They received ZERO win-back emails on the
+ * second, and the enrollment never progressed.
+ *
+ * Idempotency within a cycle is unchanged: a redelivered sweep computes the same
+ * `enrolledAt` and so the same key, and still sends each step at most once.
+ */
+export function reengagementCampaignId(
+  listId: string,
+  step: number,
+  enrolledAt?: string,
+): string {
+  // Absent only for a subscriber enrolling right now, whose first step is being
+  // claimed before the enrollment record exists. `new` is a distinct namespace
+  // from any dated cycle, so it cannot collide with one.
+  return `reengagement:${listId}#${enrolledAt ?? "new"}#${step}`;
 }
 
 export type ReengagementDecision =
@@ -164,7 +184,9 @@ export async function runReengagementSweep(
         // and the idempotency claim is per step.
         const r = await sendToSubscriber(stores, sender, magic, clock, {
           orgId: input.orgId,
-          campaignId: reengagementCampaignId(input.listId, decision.step),
+          // The CURRENT enrollment's stamp — a re-enrolled subscriber gets a
+          // fresh claim namespace and therefore the whole sequence again.
+          campaignId: reengagementCampaignId(input.listId, decision.step, s.reengagement?.enrolledAt),
           subscriberId: s.sub,
           listId: input.listId,
           subject: input.subject,

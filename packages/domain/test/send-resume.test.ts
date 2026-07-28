@@ -99,7 +99,8 @@ test("an unsliced send followed by a sliced one cannot double-send (#172)", asyn
   const sliced = new FlakySender();
   const r = await sendCampaign(stores, sliced, magic, clock, {
     ...descriptor,
-    slice: { offset: 0, limit: 6 },
+    slice: {}, // the whole range — one open-ended window
+
   });
   assert.equal(sliced.sent.length, 0, "slice must not re-send an already-sent list");
   assert.equal(r.alreadySent, 6);
