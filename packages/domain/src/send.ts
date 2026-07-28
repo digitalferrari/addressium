@@ -13,6 +13,7 @@ import type {
   MagicLinkSigner,
   RecipientSlice,
   SendDescriptor,
+  SegmentResolver,
   SendQueue,
   SendThrottle,
   Stores,
@@ -40,6 +41,46 @@ export interface SendOptions {
   throttle?: SendThrottle;
   /** When absent, the header degrades to `mailto:` (see listUnsubscribeHeader). */
   unsubscribeLink?: UnsubscribeLinkBuilder;
+  /**
+   * Resolves `descriptor.segmentId` to its members (#203). Required whenever a
+   * descriptor carries a segment — see `segmentRecipients`.
+   */
+  segments?: SegmentResolver;
+}
+
+/**
+ * Narrow a confirmed-subscription set to a segment's members (#203).
+ *
+ * **Fails closed.** A descriptor that names a segment with no resolver
+ * configured, or names a segment that no longer exists, throws — it does not
+ * fall back to the whole list. The two failure directions are not symmetric:
+ * sending to nobody is a visible mistake someone fixes in a minute, and sending
+ * a segment-targeted campaign to every confirmed subscriber on the list is
+ * unrecallable. The old code had no segment support at all, so a campaign saved
+ * with a segment audience simply mailed the whole list.
+ */
+async function segmentRecipients<T extends { subscriberId: string }>(
+  stores: Stores,
+  rows: T[],
+  orgId: string,
+  segmentId: string | undefined,
+  resolver: SegmentResolver | undefined,
+): Promise<T[]> {
+  if (!segmentId) return rows;
+  if (!resolver) {
+    throw new Error(
+      `campaign targets segment ${segmentId} but no segment resolver is configured — refusing to send to the whole list`,
+    );
+  }
+  const segment = await stores.segments.get(orgId, segmentId);
+  if (!segment) throw new Error(`unknown segment ${segmentId}`);
+
+  const members = new Set<string>();
+  for await (const id of resolver.resolve(orgId, segment.predicate as never)) members.add(id);
+  // Intersected with the confirmed set rather than used directly: segment
+  // membership is not consent. A subscriber who unsubscribed from this list must
+  // not be reachable by being named in a segment.
+  return rows.filter((r) => members.has(r.subscriberId));
 }
 
 export interface SendResult {
@@ -75,6 +116,20 @@ export interface SendResult {
  * subscriberId is a UUID, so it cannot contain `#` either; the campaign
  * constraint alone is enough, but both halves are worth stating because a change
  * to either one reopens this.
+ *
+ * It is PER RECIPIENT, and that is load-bearing. The claim used to be taken once
+ * for the whole campaign/slice before the loop and never released — so a crash
+ * at recipient 500 of 2000 left it held, the SQS redelivery returned `skipped`
+ * and ACKed the message, and the remaining 1500 were never sent with nothing
+ * reporting it (#163). Per recipient makes a send resumable: a retry re-sends
+ * nobody and delivers exactly the remainder. It also closes the
+ * duplicate-whole-list window at the fan-out chunk boundary (#172), because the
+ * slice and non-slice paths share one key space.
+ *
+ * `sendOne` and `sendCampaign` had SEPARATE, identical copies of this
+ * expression. They agreed, but only by inspection — and a claim taken under one
+ * key and released under another is a subscriber who can never receive the
+ * campaign again.
  */
 export function sendClaimKey(campaignId: string, subscriberId: string): string {
   return `${campaignId}#${subscriberId}`;
@@ -82,22 +137,6 @@ export function sendClaimKey(campaignId: string, subscriberId: string): string {
 
 /** How often the halt flag is re-read mid-loop (in recipients). */
 const HALT_CHECK_EVERY = 100;
-
-/**
- * Per-recipient idempotency key.
- *
- * The claim used to be taken ONCE for the whole campaign/slice *before* the
- * loop and never released — so a crash at recipient 500 of 2000 left the claim
- * held, and the SQS redelivery returned `skipped` and ACKed the message. The
- * remaining 1500 were never sent and nothing reported it (#163). Claiming per
- * recipient instead makes a send resumable: a retry re-sends nobody and
- * delivers exactly the remainder. It also removes the duplicate-whole-list
- * window at the fan-out chunk boundary (#172), since slice and non-slice paths
- * now share one key space.
- */
-function recipientClaimKey(campaignId: string, subscriberId: string): string {
-  return `${campaignId}#${subscriberId}`;
-}
 
 /**
  * Split an ORDERED list of recipient ids into key-range windows of `chunkSize`
@@ -144,8 +183,18 @@ export async function fanOutCampaign(
   queue: SendQueue,
   descriptor: SendDescriptor,
   chunkSize: number,
+  segments?: SegmentResolver,
 ): Promise<RecipientSlice[]> {
-  const confirmed = await stores.subscriptions.listConfirmed(descriptor.orgId, descriptor.listId);
+  // Narrowed BEFORE the windows are computed (#203). Slicing the whole list and
+  // filtering per slice would produce mostly-empty messages and boundaries that
+  // mean nothing — and for a small cohort on a large list, thousands of them.
+  const confirmed = await segmentRecipients(
+    stores,
+    await stores.subscriptions.listConfirmed(descriptor.orgId, descriptor.listId),
+    descriptor.orgId,
+    descriptor.segmentId,
+    segments,
+  );
   if (confirmed.length <= chunkSize) return [];
   // Ordered by subscriber id — the order the store returns and the order the
   // ranges are expressed in. Sorting here rather than trusting the caller keeps
@@ -415,7 +464,16 @@ export async function sendCampaign(
   // per campaign/slice, not per recipient.
   const org = await stores.organizations.get(input.orgId);
 
-  const all = await stores.subscriptions.listConfirmed(input.orgId, input.listId);
+  // Narrowed to the segment first, so the key ranges below tile the same set the
+  // fan-out sliced (#203). Filtering after the range would drop recipients whose
+  // ids fall in a later window.
+  const all = await segmentRecipients(
+    stores,
+    await stores.subscriptions.listConfirmed(input.orgId, input.listId),
+    input.orgId,
+    input.segmentId,
+    opts.segments,
+  );
   // A slice sends only its KEY RANGE of the confirmed set; no slice → the whole
   // list. Ranges are immune to the set changing under them mid-fan-out (#171).
   const ordered = [...all].sort((a, b) => a.subscriberId.localeCompare(b.subscriberId));
@@ -463,7 +521,7 @@ export async function sendCampaign(
 
     // Idempotency, per recipient (#163). Claimed immediately before the send so
     // a redelivery skips exactly those already dispatched and delivers the rest.
-    if (!(await stores.sendClaims.claim(input.orgId, recipientClaimKey(input.campaignId, subscriber.sub)))) {
+    if (!(await stores.sendClaims.claim(input.orgId, sendClaimKey(input.campaignId, subscriber.sub)))) {
       alreadySent++;
       continue;
     }
@@ -487,7 +545,7 @@ export async function sendCampaign(
     } catch (e) {
       // The claim guards a dispatch that did not happen — give it back so the
       // retry re-attempts THIS recipient instead of skipping them forever.
-      await stores.sendClaims.release(input.orgId, recipientClaimKey(input.campaignId, subscriber.sub));
+      await stores.sendClaims.release(input.orgId, sendClaimKey(input.campaignId, subscriber.sub));
       throw e;
     }
 

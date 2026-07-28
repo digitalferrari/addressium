@@ -21,6 +21,7 @@ import {
   sendCampaign,
   type SendDescriptor,
 } from "@addressium/domain";
+import { GsiSegmentEngine } from "@addressium/segment";
 
 export interface SqsEvent {
   Records: Array<{ body: string; messageId?: string }>;
@@ -37,6 +38,15 @@ let _stores: DynamoStores | undefined;
 const stores = () => (_stores ??= new DynamoStores(env("TABLE_NAME")));
 let _queue: SqsSendQueue | undefined;
 const queue = () => (_queue ??= new SqsSendQueue(env("SEND_QUEUE_URL")));
+/**
+ * Resolves a segment-targeted campaign to its members (#203).
+ *
+ * The v1 GSI engine, matching what the console's segment picker offers. Without
+ * one wired here `sendCampaign` throws on a segment-targeted descriptor rather
+ * than mailing the whole list, which is the direction that cannot be undone.
+ */
+let _segments: GsiSegmentEngine | undefined;
+const segments = () => (_segments ??= new GsiSegmentEngine(stores()));
 /**
  * Numeric env with a fail-fast guard. `Number("typo")` is NaN, and `NaN <= 0` is
  * false — so a malformed value slipped past every downstream guard: a NaN rate
@@ -138,7 +148,7 @@ export async function handler(event: SqsEvent) {
     // Large lists with no slice yet: fan out into per-window SQS messages so
     // the queue parallelizes the work instead of one long invocation (#9).
     if (!descriptor.slice) {
-      const slices = await fanOutCampaign(s, queue(), descriptor, CHUNK_SIZE);
+      const slices = await fanOutCampaign(s, queue(), descriptor, CHUNK_SIZE, segments());
       if (slices.length > 0) {
         results.push({ fannedOut: slices.length });
         continue;
@@ -166,6 +176,9 @@ export async function handler(event: SqsEvent) {
       await sendCampaign(s, ses, magic, clock, descriptor, {
         throttle,
         unsubscribeLink: unsubscribeLinkBuilder,
+        // Required whenever a descriptor names a segment; `sendCampaign` throws
+        // rather than falling back to the whole list if it is missing (#203).
+        segments: segments(),
       }),
     );
    } catch (e) {

@@ -13,6 +13,7 @@
  */
 import type { OrgId, Subscriber, SubscriberId, Subscription } from "@addressium/core";
 import type { Condition, SegmentEngine, SegmentPredicate } from "./index.js";
+import { isExplicit } from "./index.js";
 
 /** Minimal transport surface (a real @opensearch-project/opensearch client fits). */
 export interface OpenSearchClient {
@@ -77,8 +78,23 @@ function conditionClause(c: Condition): Clause {
   }
 }
 
-/** Translate a predicate into an OpenSearch bool query. */
-export function buildQuery(predicate: SegmentPredicate): { query: unknown } {
+/**
+ * Translate a predicate into an OpenSearch query.
+ *
+ * `orgId` is required only for an explicit cohort (#203), whose members are
+ * addressed by document id — and a document id here is `${orgId}:${sub}`, not
+ * the bare subscriber id. Passing the wrong one (or none) matches nothing, which
+ * on a send path reads as "the segment is empty" rather than as an error, so the
+ * explicit branch refuses rather than guessing.
+ */
+export function buildQuery(predicate: SegmentPredicate, orgId?: OrgId): { query: unknown } {
+  // An explicit cohort is an id list, not a rule — `ids` is the exact query for
+  // it, and it keeps the mirror answering the same set as the GSI engine rather
+  // than silently returning everything for a predicate it cannot express.
+  if (isExplicit(predicate)) {
+    if (!orgId) throw new Error("buildQuery: an explicit segment needs orgId to address documents");
+    return { query: { ids: { values: predicate.subscriberIds.map((id) => docId(orgId, id)) } } };
+  }
   const clauses = predicate.conditions.map(conditionClause);
   if (predicate.match === "all") {
     return {
@@ -126,7 +142,7 @@ export class OpenSearchSegmentEngine implements SegmentEngine {
   constructor(private readonly client: OpenSearchClient) {}
 
   async *resolve(orgId: OrgId, predicate: SegmentPredicate): AsyncIterable<SubscriberId> {
-    const body = { ...buildQuery(predicate), _source: false, size: 10_000 };
+    const body = { ...buildQuery(predicate, orgId), _source: false, size: 10_000 };
     const res = await this.client.search(indexForOrg(orgId), body);
     for (const hit of res.hits.hits) {
       // _id is `${orgId}:${sub}` — yield the subscriber id half.
@@ -136,7 +152,7 @@ export class OpenSearchSegmentEngine implements SegmentEngine {
   }
 
   async estimate(orgId: OrgId, predicate: SegmentPredicate): Promise<number> {
-    const res = await this.client.count(indexForOrg(orgId), buildQuery(predicate));
+    const res = await this.client.count(indexForOrg(orgId), buildQuery(predicate, orgId));
     return res.count;
   }
 }

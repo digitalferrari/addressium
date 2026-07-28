@@ -178,6 +178,12 @@ export const scheduleCampaignSchema = z.object({
   orgId: idSchema,
   campaignId: idSchema,
   listId: idSchema,
+  /**
+   * Narrow the send to a segment's members (#203). The list is still required —
+   * a segment targets WITHIN a list, and the list carries the from-address and
+   * the CAN-SPAM footer every message needs.
+   */
+  segmentId: idSchema.optional(),
   subject: z.string().min(1),
   template: emailTemplateSchema,
   when: z.union([
@@ -225,13 +231,45 @@ const segmentCondition = z
  * a typo saw a plausible preview and mailed the entire list, including the
  * recipients the segment existed to exclude.
  */
-export const segmentPredicateSchema = z.object({
+export const rulePredicateSchema = z.object({
   match: z.enum(["all", "any"]),
   // Bounded: an unbounded condition list is an amplification vector on a
   // per-subscriber evaluation loop.
   conditions: z.array(segmentCondition).min(1).max(50),
 });
+
+/**
+ * An explicitly-enumerated cohort (#203) — "these five addresses", not a rule.
+ *
+ * The rule engine is the right tool for an audience defined by a property, and
+ * the wrong one for a hand-curated test cohort: expressing "exactly these five"
+ * as conditions means inventing a marker attribute and hoping nobody else has
+ * it. This kind resolves to its listed members and nothing else.
+ *
+ * Members are subscriber ids, not addresses. An address is mutable — a
+ * subscriber who changes their email would silently leave the cohort — and
+ * storing addresses here would put PII in a second place with its own erasure
+ * path. The console resolves address → id at add time.
+ *
+ * 1000 is a test-cohort bound. A segment big enough to need more is a rule.
+ */
+export const explicitPredicateSchema = z.object({
+  match: z.literal("explicit"),
+  subscriberIds: z.array(z.string().min(1).max(64)).max(1000),
+});
+
+export const segmentPredicateSchema = z.union([rulePredicateSchema, explicitPredicateSchema]);
 export type SegmentPredicateInput = z.infer<typeof segmentPredicateSchema>;
+export type ExplicitPredicateInput = z.infer<typeof explicitPredicateSchema>;
+
+/** Add or remove one address from an explicit-membership segment (#203). */
+export const segmentMemberSchema = z.object({
+  orgId: idSchema,
+  segmentId: idSchema,
+  action: z.enum(["add", "remove"]),
+  email: emailSchema,
+});
+export type SegmentMemberInput = z.infer<typeof segmentMemberSchema>;
 
 export const saveSegmentSchema = z.object({
   orgId: idSchema,

@@ -64,6 +64,8 @@ import {
   saveCampaignDraft,
   saveList,
   saveSegment,
+  listSegmentMembers,
+  updateSegmentMembership,
   saveDripSequence,
   saveTemplate,
   setListVisibility,
@@ -367,6 +369,10 @@ export async function scheduleCampaignHandler(event: HttpEvent): Promise<HttpRes
       listId: body.listId,
       subject: body.subject,
       template,
+      // Carried through to the sender (#203). Before this the console offered a
+      // segment picker whose value was dropped here, so a "send to my test
+      // cohort" campaign mailed the entire list.
+      ...(body.segmentId ? { segmentId: body.segmentId } : {}),
     };
     // Not string concatenation: `-` is legal inside both ids, so the old
     // `camp-${orgId}-${campaignId}` was ambiguous across tenants (#196).
@@ -659,6 +665,35 @@ export async function segmentsHandler(event: HttpEvent): Promise<HttpResult> {
     const orgId = event.pathParameters?.org ?? "";
     requireGrant(event, "reports:view", orgId);
     return json(200, await stores().segments.list(orgId));
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+/**
+ * GET /orgs/{org}/segments/{segment}/members — the explicit cohort (#203).
+ * POST /segments/members — add or remove one address.
+ *
+ * Reading the cohort is `segments:manage`, not `reports:view`: the response is a
+ * list of subscriber email addresses, so it is a subscriber read wearing a
+ * segment's name. An analyst who can see segment DEFINITIONS should not get a
+ * roster of addresses out of the same screen.
+ */
+export async function segmentMembersHandler(event: HttpEvent): Promise<HttpResult> {
+  try {
+    const method = event.requestContext?.http?.method ?? (event.body ? "POST" : "GET");
+    if (method === "POST") {
+      const input = schemas.segmentMemberSchema.parse(JSON.parse(event.body ?? "{}"));
+      requireGrant(event, "segments:manage", input.orgId);
+      const result = await updateSegmentMembership(stores(), input);
+      // Audited (#191): changing who a test send reaches is a change to who gets
+      // mailed, and the whole point of the cohort is that it is hand-edited.
+      await audit(event, input.orgId, `segment.member.${input.action}`, `${input.segmentId}:${input.email}`);
+      return json(200, result.members);
+    }
+    const orgId = event.pathParameters?.org ?? "";
+    requireGrant(event, "segments:manage", orgId);
+    return json(200, await listSegmentMembers(stores(), orgId, event.pathParameters?.segment ?? ""));
   } catch (e) {
     return fail(e);
   }
@@ -1395,6 +1430,8 @@ const ADMIN_ROUTES: Record<string, RouteHandler> = {
   "POST /templates": templatesHandler,
   "GET /orgs/{org}/segments": segmentsHandler,
   "POST /segments": segmentsHandler,
+  "GET /orgs/{org}/segments/{segment}/members": segmentMembersHandler,
+  "POST /segments/members": segmentMembersHandler,
   "GET /orgs/{org}/drip-sequences": dripSequencesHandler,
   "POST /drip-sequences": dripSequencesHandler,
   "GET /orgs/{org}/subscribers": subscribersListHandler,

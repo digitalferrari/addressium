@@ -178,6 +178,8 @@ export interface ScheduleCampaignBody {
   orgId: string;
   campaignId: string;
   listId: string;
+  /** Narrow the send to a segment's members (#203); the list still selects the base set. */
+  segmentId?: string;
   subject: string;
   template: EmailTemplateBody;
   when: ScheduleWhen;
@@ -217,6 +219,27 @@ export interface Segment {
   segmentId: string;
   name: string;
   predicate: unknown;
+}
+
+/** One member of an explicit-membership segment (#203). */
+export interface SegmentMember {
+  subscriberId: string;
+  email: string;
+  status: "active" | "suppressed";
+  entitlement: "free" | "paid";
+  /** True when the send path will skip this address regardless of membership. */
+  suppressed: boolean;
+}
+
+/** An explicitly-enumerated test cohort, as opposed to a rule (#203). */
+export interface ExplicitPredicate {
+  match: "explicit";
+  subscriberIds: string[];
+}
+export const EMPTY_EXPLICIT: ExplicitPredicate = { match: "explicit", subscriberIds: [] };
+
+export function isExplicitPredicate(p: unknown): p is ExplicitPredicate {
+  return !!p && typeof p === "object" && (p as ExplicitPredicate).match === "explicit";
 }
 
 export interface SubscriberRow {
@@ -451,6 +474,16 @@ export const api = {
   segments: (org: string) => call<Segment[]>("GET", `/orgs/${org}/segments`),
   saveSegment: (orgId: string, segmentId: string, name: string, predicate: unknown) =>
     call<Segment>("POST", `/segments`, { orgId, segmentId, name, predicate }),
+  /**
+   * The cohort of an explicit-membership segment (#203). Gated on
+   * `segments:manage` rather than `reports:view`, because the response is a list
+   * of subscriber addresses — a subscriber read wearing a segment's name.
+   */
+  segmentMembers: (orgId: string, segmentId: string) =>
+    call<SegmentMember[]>("GET", `/orgs/${orgId}/segments/${encodeURIComponent(segmentId)}/members`),
+  /** Add or remove one address; returns the cohort as it stands afterwards. */
+  segmentMember: (orgId: string, segmentId: string, action: "add" | "remove", email: string) =>
+    call<SegmentMember[]>("POST", `/segments/members`, { orgId, segmentId, action, email }),
   subscribers: (org: string, q?: string) =>
     call<SubscriberRow[]>("GET", `/orgs/${org}/subscribers${q ? `?q=${encodeURIComponent(q)}` : ""}`),
   suppressions: (org: string) => call<SuppressionEntry[]>("GET", `/orgs/${org}/suppressions`),

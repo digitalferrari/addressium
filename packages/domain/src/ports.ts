@@ -29,12 +29,31 @@ import type {
 import type { EmailTemplate } from "./render.js";
 
 /** The unit of work sent through the queue and produced by a schedule firing. */
+/**
+ * Resolves a stored segment predicate to subscriber ids (#203).
+ *
+ * A PORT, not an import: `@addressium/segment` depends on this package, so
+ * depending on it here would be a cycle. The shape is `SegmentEngine.resolve`,
+ * so `GsiSegmentEngine` (and the OpenSearch one) satisfy it structurally with
+ * nothing to adapt. Declared as a method so TypeScript's bivariant method
+ * parameters accept an engine whose predicate type is narrower than `unknown`.
+ */
+export interface SegmentResolver {
+  resolve(orgId: string, predicate: never): AsyncIterable<string>;
+}
+
 export interface SendDescriptor {
   orgId: string;
   campaignId: string;
   listId: string;
   subject: string;
   template: EmailTemplate;
+  /**
+   * Narrow this send to a segment's members (#203). The list still selects the
+   * base set — a segment targets WITHIN a list, and the list is what carries the
+   * from-address and the CAN-SPAM footer. Absent → the whole confirmed list.
+   */
+  segmentId?: string;
   /**
    * Recipient window for SQS fan-out of large lists. Absent → the whole list is
    * a candidate for fan-out; present → send only this slice of confirmed

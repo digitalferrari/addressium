@@ -131,6 +131,110 @@ export async function saveSegment(stores: Stores, input: schemas.SaveSegmentInpu
   return segment;
 }
 
+/** One member of an explicit-membership segment, as the console shows them. */
+export interface SegmentMember {
+  subscriberId: string;
+  email: string;
+  status: "active" | "suppressed";
+  entitlement: "free" | "paid";
+  /** True when this address would be skipped at send time (#203). */
+  suppressed: boolean;
+}
+
+/**
+ * Resolve an explicit segment's stored ids into displayable members (#203).
+ *
+ * Ids that no longer resolve are dropped rather than shown as blanks: a deleted
+ * or erased subscriber is not a member, and a console that lists them invites an
+ * operator to "fix" a row that is already correct.
+ *
+ * `suppressed` is computed for display only. The send path enforces it in
+ * `mayMail`; showing it here is what stops an operator concluding a test send is
+ * broken when it was in fact obeying a suppression.
+ */
+export async function listSegmentMembers(
+  stores: Stores,
+  orgId: string,
+  segmentId: string,
+): Promise<SegmentMember[]> {
+  const segment = await stores.segments.get(orgId, segmentId);
+  if (!segment) throw new Error(`unknown segment ${segmentId}`);
+  const ids = explicitMemberIds(segment.predicate);
+  if (!ids) throw new Error(`segment ${segmentId} is rule-based — it has no explicit members`);
+
+  const members: SegmentMember[] = [];
+  for (const id of ids) {
+    const s = await stores.subscribers.get(orgId, id);
+    if (!s) continue;
+    members.push({
+      subscriberId: s.sub,
+      email: s.email,
+      status: s.status,
+      entitlement: s.entitlement,
+      // Both halves, exactly as `mayMail` checks them (#193): a suppression
+      // entry OR a suppressed subscriber record. Showing only one would tell the
+      // operator an address is mailable when the send path disagrees.
+      suppressed: s.status === "suppressed" || (await stores.suppression.isSuppressed(orgId, s.email)),
+    });
+  }
+  return members;
+}
+
+/** The member ids of an explicit predicate, or `undefined` if it is rule-based. */
+function explicitMemberIds(predicate: unknown): string[] | undefined {
+  const p = predicate as { match?: unknown; subscriberIds?: unknown };
+  if (!p || p.match !== "explicit") return undefined;
+  return Array.isArray(p.subscriberIds) ? (p.subscriberIds as string[]) : [];
+}
+
+/**
+ * Add or remove one address from an explicit-membership segment (#203).
+ *
+ * **An address that is not already a subscriber is REJECTED**, not created. The
+ * issue offered both; this is the choice and the reason: every other path that
+ * creates a subscriber records consent provenance — a signup captures the source
+ * URL and timestamp, an import captures a consent basis and a batch id. A
+ * subscriber conjured from a segment-editor text box has none of that, and the
+ * record is indistinguishable afterwards from one that does. Building a test
+ * cohort is not a lawful basis for mailing someone. The operator imports or adds
+ * the address first, which takes one screen and leaves provenance behind.
+ */
+export async function updateSegmentMembership(
+  stores: Stores,
+  input: schemas.SegmentMemberInput,
+): Promise<{ segment: Segment; members: SegmentMember[] }> {
+  const segment = await stores.segments.get(input.orgId, input.segmentId);
+  if (!segment) throw new Error(`unknown segment ${input.segmentId}`);
+  const ids = explicitMemberIds(segment.predicate);
+  if (!ids) {
+    throw new Error(
+      `segment ${input.segmentId} is rule-based — its members come from its conditions, not a list`,
+    );
+  }
+
+  const email = input.email.trim().toLowerCase();
+  const subscriber = await stores.subscribers.findByEmail(input.orgId, email);
+  if (!subscriber) {
+    throw new Error(
+      `${email} is not a subscriber in this organization — import or add them first, so their consent provenance is recorded`,
+    );
+  }
+
+  const next =
+    input.action === "add"
+      ? ids.includes(subscriber.sub)
+        ? ids // idempotent: adding twice is not an error, and must not duplicate
+        : [...ids, subscriber.sub]
+      : ids.filter((id) => id !== subscriber.sub);
+
+  const updated: Segment = {
+    ...segment,
+    predicate: { match: "explicit", subscriberIds: next },
+  };
+  await stores.segments.put(updated);
+  return { segment: updated, members: await listSegmentMembers(stores, input.orgId, input.segmentId) };
+}
+
 /** Create/update a drip sequence (§4.6, #104). */
 export async function saveDripSequence(
   stores: Stores,

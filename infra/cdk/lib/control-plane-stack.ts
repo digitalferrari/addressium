@@ -1033,6 +1033,8 @@ export class ControlPlaneStack extends Stack {
     adminRoute("TemplatesPostFn", "templatesHandler", HttpMethod.POST, "/templates");
     adminRoute("SegmentsGetFn", "segmentsHandler", HttpMethod.GET, "/orgs/{org}/segments");
     adminRoute("SegmentsPostFn", "segmentsHandler", HttpMethod.POST, "/segments");
+    adminRoute("SegmentMembersGetFn", "segmentMembersHandler", HttpMethod.GET, "/orgs/{org}/segments/{segment}/members");
+    adminRoute("SegmentMembersPostFn", "segmentMembersHandler", HttpMethod.POST, "/segments/members");
     // Drip sequences (#104): list + create/edit.
     adminRoute("DripSeqGetFn", "dripSequencesHandler", HttpMethod.GET, "/orgs/{org}/drip-sequences");
     adminRoute("DripSeqPostFn", "dripSequencesHandler", HttpMethod.POST, "/drip-sequences");

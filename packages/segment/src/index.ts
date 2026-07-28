@@ -16,9 +16,29 @@ export type Condition =
   | { field: "last_open_at"; op: "before" | "after"; value: string }
   | { field: string; op: "eq" | "neq" | "exists"; value?: string };
 
-export interface SegmentPredicate {
+/** A rule-based audience: conditions over attributes, entitlement and engagement. */
+export interface RulePredicate {
   match: "all" | "any";
   conditions: Condition[];
+}
+
+/**
+ * A hand-enumerated cohort (#203) — "exactly these subscribers".
+ *
+ * Kept as a separate kind rather than squeezed into `conditions`, because
+ * expressing "exactly these five" as a rule means inventing a marker attribute
+ * and hoping it stays unique. Members are subscriber ids: an address is mutable,
+ * so a subscriber who changed their email would silently drop out of the cohort.
+ */
+export interface ExplicitPredicate {
+  match: "explicit";
+  subscriberIds: SubscriberId[];
+}
+
+export type SegmentPredicate = RulePredicate | ExplicitPredicate;
+
+export function isExplicit(p: SegmentPredicate): p is ExplicitPredicate {
+  return (p as ExplicitPredicate).match === "explicit";
 }
 
 export interface SegmentEngine {
@@ -50,6 +70,28 @@ export class GsiSegmentEngine implements SegmentEngine {
   }
 
   private async *matching(orgId: OrgId, predicate: SegmentPredicate): AsyncIterable<SubscriberId> {
+    if (isExplicit(predicate)) {
+      // Deduplicated and existence-checked, in the stored order.
+      //
+      // An id that no longer resolves is skipped rather than yielded: a deleted
+      // or erased subscriber must not reach the send path, where "unknown
+      // subscriber" would burn a send claim before failing. This is also what
+      // makes an erasure (#101) take effect on a test cohort without anyone
+      // having to remember to prune it.
+      //
+      // Suppression is NOT checked here. It is enforced per recipient in
+      // `mayMail` on the send path, which is the single place that has to be
+      // right — a second check here would drift and imply the send path's was
+      // optional. The segment test asserts the end-to-end behaviour.
+      const seen = new Set<SubscriberId>();
+      for (const id of predicate.subscriberIds) {
+        if (seen.has(id)) continue;
+        seen.add(id);
+        const subscriber = await this.stores.subscribers.get(orgId, id);
+        if (subscriber) yield subscriber.sub;
+      }
+      return;
+    }
     const listCond = predicate.conditions.find(
       (c): c is { field: "list"; op: "in"; value: string } => c.field === "list" && c.op === "in",
     );

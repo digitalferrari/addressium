@@ -1157,6 +1157,41 @@ state — the table has no stream, there is no indexer Lambda, and a synthesized
 template contains no OpenSearch resources at all. The escape hatch stays
 documented precisely because it should stay shut until someone needs it.
 
+**Two kinds of segment (#203).** A predicate is either a **rule**
+(`{match: "all"|"any", conditions: [...]}`) or an **explicit cohort**
+(`{match: "explicit", subscriberIds: [...]}`). The rule engine is right for an
+audience defined by a property; it is the wrong tool for "these five addresses
+are my test cohort", which would otherwise mean inventing a marker attribute and
+hoping it stays unique. Both kinds resolve through the same `SegmentEngine`
+interface, so the Compose picker and the send path treat them identically.
+
+Three rules govern the explicit kind, and they are the whole design:
+
+- **Members are subscriber ids, not addresses.** An address is mutable — a
+  subscriber who changes their email would silently leave the cohort — and
+  storing addresses here would put PII in a second place with its own erasure
+  path. The console resolves address → id when a member is added; ids that no
+  longer resolve are dropped on read, so an erasure takes effect without anyone
+  pruning cohorts by hand.
+- **Membership is not consent.** The resolved set is *intersected* with the
+  list's confirmed subscriptions, never used in their place, and suppression is
+  still enforced per recipient by `mayMail` on the send path. A subscriber who
+  unsubscribed cannot be reached by being named in a segment.
+- **Adding an address that is not already a subscriber is rejected, not
+  created.** Every other path that creates a subscriber records consent
+  provenance — a signup captures a source URL and timestamp, an import captures
+  a consent basis and a batch id. One conjured from a segment-editor text box
+  would have none and would be indistinguishable afterwards from one that does.
+  The operator imports or adds the address first.
+
+**Segment targeting reaches the sender.** `SendDescriptor.segmentId` is resolved
+in `fanOutCampaign` *before* the key ranges are computed, so the slices tile the
+cohort rather than the list. A descriptor that names a segment with no resolver
+configured, or names a segment that no longer exists, **throws** — it does not
+fall back to the whole list. The two failure directions are not symmetric:
+sending to nobody is a visible mistake fixed in a minute, and sending a
+segment-targeted campaign to every confirmed subscriber is unrecallable.
+
 ---
 
 ## 6. Email sending & deliverability
