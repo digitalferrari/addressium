@@ -109,6 +109,22 @@ export interface SaveTemplateBody {
   adSlots?: string[];
 }
 
+/** What POST /lists requires. Mirrors `createListSchema` — CAN-SPAM makes the
+ * footer and physical address mandatory, not optional niceties (#6). */
+export interface CreateListInput {
+  orgId: string;
+  listId: string;
+  name: string;
+  description?: string;
+  optInPolicy: "single" | "double";
+  fromAddress: string;
+  replyTo?: string;
+  access: "free" | "paid";
+  visibility: "open" | "closed";
+  complianceFooter: string;
+  physicalAddress: string;
+}
+
 export interface AdminList {
   orgId: string;
   listId: string;
@@ -426,7 +442,7 @@ export const api = {
     call<SendScheduleState>("POST", `/campaigns/lifecycle`, { orgId, scheduleId, action }),
   usage: (org: string) => call<UsageRecord[] | null>("GET", `/orgs/${org}/usage`),
   setup: (org: string) => call<SetupState>("GET", `/orgs/${org}/setup`),
-  saveList: (input: unknown) => call<unknown>("POST", `/lists`, input),
+  saveList: (input: CreateListInput) => call<AdminList>("POST", `/lists`, input),
   setVisibility: (orgId: string, listId: string, visibility: "open" | "closed") =>
     call<unknown>("POST", `/lists/visibility`, { orgId, listId, visibility }),
   report: (org: string, campaign: string) => call<CampaignReport>("GET", `/orgs/${org}/campaigns/${campaign}/report`),

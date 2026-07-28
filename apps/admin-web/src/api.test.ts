@@ -252,3 +252,37 @@ test("importBatches() lists runs; importBatch() asks for one run's rows", async 
   // an unescaped one would be read as a URL delimiter.
   expect(lastCall().url).toMatch(/batchId=imp_2026-07-28T00%3A00%3A00\.000Z$/);
 });
+
+test("saveList() posts every CAN-SPAM-required field (#130)", async () => {
+  // `saveList` existed and was called by nothing — there was no way to create a
+  // newsletter from the console at all. The footer and physical address are
+  // legal requirements on every message the list sends, so the client must send
+  // them rather than let the server default something plausible.
+  await api.saveList({
+    orgId: "acme",
+    listId: "ledger",
+    name: "The Ledger",
+    optInPolicy: "double",
+    fromAddress: "ledger@acme.example",
+    access: "free",
+    visibility: "open",
+    complianceFooter: "You subscribed at acme.example",
+    physicalAddress: "1 Main St, Springfield",
+  });
+  const { url, init } = lastCall();
+  expect(url).toMatch(/\/lists$/);
+  expect(init.method).toBe("POST");
+  const body = JSON.parse(String(init.body));
+  expect(body.complianceFooter).toBe("You subscribed at acme.example");
+  expect(body.physicalAddress).toBe("1 Main St, Springfield");
+  expect(body.optInPolicy).toBe("double");
+});
+
+test("setVisibility() closes and reopens a newsletter (#130)", async () => {
+  // Closing keeps subscribers and stops new signups — and removes the list from
+  // the public directory (#124).
+  await api.setVisibility("acme", "ledger", "closed");
+  expect(JSON.parse(String(lastCall().init.body)).visibility).toBe("closed");
+  await api.setVisibility("acme", "ledger", "open");
+  expect(JSON.parse(String(lastCall().init.body)).visibility).toBe("open");
+});
