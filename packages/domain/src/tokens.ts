@@ -8,7 +8,10 @@
  *   with a per-org KMS key in production. Verified by @addressium/magiclink-verify.
  */
 import { createHmac, timingSafeEqual } from "node:crypto";
-import { SignJWT, type KeyLike } from "jose";
+// jose 6 removed `KeyLike` in favour of `CryptoKey`, the Web Crypto type every
+// supported runtime exposes. Same thing by a name that is now standard rather
+// than jose's own (#152).
+import { SignJWT, type CryptoKey } from "jose";
 import type { Clock, ConfirmationTokenSigner, ConfirmClaims, MagicLinkSigner } from "./ports.js";
 
 export class SystemClock implements Clock {
@@ -54,7 +57,7 @@ export class HmacConfirmationSigner implements ConfirmationTokenSigner {
 }
 
 export interface MagicLinkSignerConfig {
-  privateKey: KeyLike;
+  privateKey: CryptoKey;
   kid: string;
   issuer: string;
   audience: string;

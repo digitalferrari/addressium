@@ -17,6 +17,6 @@
     "jose": "^6.2.4"
   },
   "devDependencies": {
-    "dynalite": "^3.2.2"
+    "dynalite": "^4.0.0"
   }
 }

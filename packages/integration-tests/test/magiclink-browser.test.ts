@@ -16,7 +16,7 @@ import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { exportJWK, generateKeyPair, SignJWT, type JSONWebKeySet, type KeyLike } from "jose";
+import { exportJWK, generateKeyPair, SignJWT, type CryptoKey, type JSONWebKeySet } from "jose";
 import {
   clearSession,
   consume,
@@ -30,9 +30,9 @@ const ISS = "https://addressium.example/summit";
 const AUD = "https://summitdaily.example";
 
 interface Keys {
-  privateKey: KeyLike;
+  privateKey: CryptoKey;
   jwks: JSONWebKeySet;
-  other: KeyLike;
+  other: CryptoKey;
 }
 
 async function keys(): Promise<Keys> {
@@ -47,7 +47,7 @@ async function keys(): Promise<Keys> {
 }
 
 async function mint(
-  key: KeyLike,
+  key: CryptoKey,
   over: Record<string, unknown> = {},
   ttlSec = 900,
 ): Promise<string> {
