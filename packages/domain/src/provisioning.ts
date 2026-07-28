@@ -11,6 +11,7 @@
  */
 import type { Organization, schemas } from "@addressium/core";
 import type { Stores } from "./ports.js";
+import { defaultAlertConfig } from "./alerts.js";
 
 type CreateOrgInput = schemas.CreateOrgInput;
 
@@ -139,5 +140,15 @@ export async function provisionOrganization(
     setupComplete: ses.verificationStatus === "verified",
   };
   await stores.organizations.put(org);
+
+  // Deliverability protection is on from the first send (#217). Before this,
+  // every org provisioned with no AlertConfig, checkDeliverability
+  // short-circuited on the missing record, and the auto-halt was unreachable on
+  // every real install. The operator can tune or disable the rules; they cannot
+  // accidentally start with none.
+  if (!(await stores.alerts.get(orgId))) {
+    await stores.alerts.put(defaultAlertConfig(orgId, input.alertTopicArn));
+  }
+
   return { org, dns: dnsRecords(input.primaryDomain, ses.dkimTokens), alreadyExisted: false };
 }

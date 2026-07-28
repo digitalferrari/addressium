@@ -784,6 +784,9 @@ export class ControlPlaneStack extends Stack {
     adminRoute("ImportFn", "importHandler", HttpMethod.POST, "/orgs/{org}/import");
     adminRoute("PrivacyFn", "privacyHandler", HttpMethod.POST, "/privacy");
     adminRoute("BrandingPostFn", "brandingHandler", HttpMethod.POST, "/orgs/branding");
+    // Deliverability thresholds — these drive the auto-halt (#217).
+    adminRoute("AlertConfigGetFn", "alertConfigHandler", HttpMethod.GET, "/orgs/{org}/alerts");
+    adminRoute("AlertConfigPostFn", "alertConfigHandler", HttpMethod.POST, "/orgs/alerts");
     adminRoute("PresentationFn", "listPresentationHandler", HttpMethod.POST, "/lists/presentation");
     // AI config writes the API key to Secrets Manager (create/put).
     const aiConfigFn = adminRoute("AiConfigFn", "aiConfigHandler", HttpMethod.POST, "/orgs/ai-config");

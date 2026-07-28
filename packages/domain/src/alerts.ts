@@ -51,6 +51,38 @@ export function evaluateAlerts(config: AlertConfig, counters: HotCounters): Aler
   return breaches;
 }
 
+/**
+ * Thresholds a newly provisioned org starts with (#217).
+ *
+ * A control that is off by default is not a control: before this, every org
+ * deployed with NO alert config, `checkDeliverability` short-circuited on the
+ * missing record, and the auto-halt README advertises could never fire on any
+ * real install. Defaults make it fire; the operator tunes or disables it.
+ *
+ * The numbers follow the thresholds mailbox providers actually act on — Google
+ * Postmaster treats a 0.3% complaint rate as the level to stay under, so the
+ * warn sits there and the halt at 0.5%. Bounce rates above 5% put an SES
+ * account under review, so warn at 5% and halt at 10%.
+ */
+export const DEFAULT_ALERT_RULES: AlertConfig["rules"] = [
+  { metric: "complaint_rate", warnAt: 0.003, haltAt: 0.005, enabled: true },
+  { metric: "bounce_rate", warnAt: 0.05, haltAt: 0.1, enabled: true },
+  // Informational only until a live reputation signal exists (metricValue
+  // returns 0), so it is off — an always-zero rule would never fire anyway and
+  // leaving it enabled implies a signal we do not have.
+  { metric: "reputation", warnAt: 0, haltAt: 0, enabled: false },
+];
+
+/** The config a newly provisioned org gets, so protection is never opt-in. */
+export function defaultAlertConfig(orgId: string, snsTopicArn?: string): AlertConfig {
+  return {
+    orgId,
+    snsTopicArn,
+    rules: DEFAULT_ALERT_RULES.map((r) => ({ ...r })),
+    notifyTargets: [],
+  };
+}
+
 export interface DeliverabilityCheckResult {
   breaches: AlertBreach[];
   halted: boolean;
@@ -77,13 +109,26 @@ export async function checkDeliverability(
   if (breaches.length === 0) return { breaches, halted: false };
 
   const halted = breaches.some((b) => b.level === "halt");
-  await publisher.publish(config.snsTopicArn, {
-    orgId,
-    campaignId,
-    at: clock.now().toISOString(),
-    breaches,
-    action: halted ? "halted" : "warned",
-  });
+  // Notification is best-effort; halting is not. An org with no topic still
+  // stops the campaign, and a publish failure must not prevent the halt — the
+  // whole point is to stop sending to a list that is generating complaints.
+  if (config.snsTopicArn) {
+    try {
+      await publisher.publish(config.snsTopicArn, {
+        orgId,
+        campaignId,
+        at: clock.now().toISOString(),
+        breaches,
+        action: halted ? "halted" : "warned",
+      });
+    } catch (e) {
+      console.error("alerts: publish failed, continuing to halt", {
+        orgId,
+        campaignId,
+        error: (e as Error).message,
+      });
+    }
+  }
 
   if (halted) {
     const campaign = await stores.campaigns.get(orgId, campaignId);

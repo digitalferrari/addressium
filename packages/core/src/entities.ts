@@ -420,7 +420,12 @@ export interface EntitlementSync {
 // ---- ops ----
 export interface AlertConfig {
   orgId: OrgId;
-  snsTopicArn: string;
+  /**
+   * Where breach notifications go. OPTIONAL: halting is the safety control and
+   * notification is secondary, so an org with no topic still stops a campaign
+   * that breaches — it just does so quietly (#217).
+   */
+  snsTopicArn?: string;
   rules: Array<{
     metric: "complaint_rate" | "bounce_rate" | "send_failures" | "reputation";
     warnAt: number;

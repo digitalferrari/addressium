@@ -213,6 +213,33 @@ export const identitySyncSchema = z
 export type IdentitySyncInput = z.infer<typeof identitySyncSchema>;
 
 /** Add-organization / provision-silo payload (§4.11). */
+/**
+ * Deliverability thresholds (#217, §4.18). `haltAt` must not sit below `warnAt`
+ * — inverted thresholds would halt before ever warning, which reads as a
+ * mis-typed rule rather than an intended one.
+ */
+export const saveAlertConfigSchema = z.object({
+  orgId: z.string().min(1),
+  snsTopicArn: z.string().optional(),
+  rules: z
+    .array(
+      z
+        .object({
+          metric: z.enum(["complaint_rate", "bounce_rate", "send_failures", "reputation"]),
+          warnAt: z.number().min(0),
+          haltAt: z.number().min(0),
+          enabled: z.boolean().default(true),
+        })
+        .refine((r) => r.haltAt >= r.warnAt, {
+          message: "haltAt must be greater than or equal to warnAt",
+          path: ["haltAt"],
+        }),
+    )
+    .max(16),
+  notifyTargets: z.array(z.string()).max(32).default([]),
+});
+export type SaveAlertConfigInput = z.infer<typeof saveAlertConfigSchema>;
+
 export const createOrgSchema = z
   .object({
     name: z.string().min(1),
@@ -241,6 +268,12 @@ export const createOrgSchema = z
     environment: z.enum(["prod", "dev"]).default("prod"),
     /** Dev-org send allowlist: exact emails or `@domain` suffixes. Fail-closed for dev orgs. */
     devAllowlist: z.array(z.string()).optional(),
+    /**
+     * SNS topic for deliverability breach notifications (#217). Optional — the
+     * org gets default halt thresholds either way; without a topic the halt is
+     * silent rather than absent.
+     */
+    alertTopicArn: z.string().optional(),
   })
   // Pool present if and only if magic links are on. Enforced here, at the API
   // boundary, because neither half is any use without the other: a token has to

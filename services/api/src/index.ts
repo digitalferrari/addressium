@@ -15,7 +15,7 @@ import {
   sanitizeEmailHtml,
   upsertSecret,
 } from "@addressium/adapters-aws";
-import { schemas, APP_VERSION, EXPECTED_SCHEMA_VERSION } from "@addressium/core";
+import { schemas, APP_VERSION, EXPECTED_SCHEMA_VERSION, type AlertConfig } from "@addressium/core";
 import {
   HmacConfirmationSigner,
   SystemClock,
@@ -735,6 +735,43 @@ export async function brandingHandler(event: HttpEvent): Promise<HttpResult> {
   }
 }
 
+/**
+ * GET/POST /orgs/alerts — deliverability thresholds (#217, §4.18).
+ *
+ * These drive the auto-halt. Before this route existed, `stores.alerts.put` had
+ * exactly one caller in the repo and it was a unit test, so on every real
+ * install `checkDeliverability` short-circuited on a missing record and the
+ * campaign ran to completion regardless of complaint rate.
+ */
+export async function alertConfigHandler(event: HttpEvent): Promise<HttpResult> {
+  try {
+    const method = event.requestContext?.http?.method ?? (event.body ? "POST" : "GET");
+    if (method === "GET") {
+      const orgId = event.pathParameters?.org ?? event.queryStringParameters?.orgId ?? "";
+      if (!orgId) return json(400, { error: "orgId required" });
+      requireGrant(event, "alerts:manage", orgId);
+      const config = await stores().alerts.get(orgId);
+      // A missing record is reported as such rather than as an empty config, so
+      // the console can say "unprotected" instead of showing zeroed thresholds
+      // that look deliberate.
+      return json(200, config ?? null);
+    }
+    const parsed = schemas.saveAlertConfigSchema.safeParse(JSON.parse(event.body ?? "{}"));
+    if (!parsed.success) return json(400, { error: parsed.error.issues[0]?.message ?? "invalid" });
+    requireGrant(event, "alerts:manage", parsed.data.orgId);
+    const config: AlertConfig = {
+      orgId: parsed.data.orgId,
+      ...(parsed.data.snsTopicArn ? { snsTopicArn: parsed.data.snsTopicArn } : {}),
+      rules: parsed.data.rules,
+      notifyTargets: parsed.data.notifyTargets,
+    };
+    await stores().alerts.put(config);
+    return json(200, config);
+  } catch (e) {
+    return fail(e);
+  }
+}
+
 /** POST /lists/presentation — set a list's subscriber-site toggles (#33). */
 export async function listPresentationHandler(event: HttpEvent): Promise<HttpResult> {
   try {
@@ -870,6 +907,8 @@ const ADMIN_ROUTES: Record<string, RouteHandler> = {
   "POST /orgs/{org}/import": importHandler,
   "POST /privacy": privacyHandler,
   "POST /orgs/branding": brandingHandler,
+  "GET /orgs/{org}/alerts": alertConfigHandler,
+  "POST /orgs/alerts": alertConfigHandler,
   "POST /orgs/ai-config": aiConfigHandler,
 };
 
