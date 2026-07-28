@@ -135,11 +135,13 @@ Pass with `-c key=value` on `cdk deploy`, or add to `cdk.json` → `context`:
 | `opsAlertTopicArn` | An **existing** SNS topic the 24 CloudWatch alarms publish to. Alert routing (PagerDuty, Slack, on-call rotation) is account-wide infrastructure; addressium consumes it rather than creating a competing topic (#22/#32/#67). |
 | `opsAlertEmail` | Simple alternative for a setup with no existing topic — one email subscription. |
 
-**As built, neither key exists.** Grep the repo and `opsAlertTopicArn` and
-`opsAlertEmail` appear only in prose. `lib/control-plane-stack.ts` creates its
-own `OpsAlertsTopic`, points all 24 alarms at it, and emits its ARN as the
-`OpsAlertsTopicArn` output. Until this lands, subscribe your ops channel to
-*that* topic — see §9.
+Set **one** of them. With `opsAlertTopicArn`, no topic is created and no
+`OpsAlertsTopicArn` output is emitted — addressium does not export an ARN it
+does not own. With only `opsAlertEmail`, a topic is created and that address is
+subscribed. Set **neither** and the stack still deploys, but every alarm
+publishes to a topic with no subscribers: `npm run deploy:check` warns about
+exactly this before it inspects anything else, because a stack that ships 26
+alarms into a void *looks* monitored, which is worse than one with none.
 
 ## 4. Deploy
 
@@ -383,12 +385,12 @@ and construct the ARNs by hand.
 
 ### 8.4 Alert routing
 
-The target is `opsAlertTopicArn` (or `opsAlertEmail`) in config — see §3. Until
-then, subscribe your ops channel to the `OpsAlertsTopicArn` output.
+Set `opsAlertTopicArn` (or `opsAlertEmail`) in config — see §3. If you supplied
+only an email, the `OpsAlertsTopicArn` output names the topic that was created
+for you; with your own ARN there is no such output.
 
-Nothing warns you if you skip any of this. There is no `doctor` command;
-`deploy:check` (§4) inspects change sets for data destruction and checks neither
-WAF association nor alert targets.
+`deploy:check` (§4) warns when neither is set. It does **not** yet check WAF
+association, and there is still no `doctor` command.
 
 ---
 

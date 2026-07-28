@@ -1233,10 +1233,10 @@ Lambda throttles.
 - **Ops alerting is an external topic** (compendium #22/#32/#67). Alert routing —
   PagerDuty, Slack, an on-call rotation — is org infrastructure that a production
   account already runs; creating our own topic competes with it. The operator
-  supplies `opsAlertTopicArn`, or `opsAlertEmail` for a simple setup.
-  **[Decided r2 — not yet built]** — the stack still creates its own
-  `OpsAlertsTopic` and points all 24 alarms at it, and neither `opsAlertTopicArn`
-  nor `opsAlertEmail` exists anywhere in the codebase.
+  supplies `opsAlertTopicArn`, or `opsAlertEmail` for a simple setup. With an ARN
+  supplied, no topic is created and none is exported. With neither set the stack
+  still deploys, and `deploy:check` warns — 26 alarms publishing to a topic with
+  no subscribers is monitoring in appearance only (#222).
 - **CloudWatch dashboard** (compendium #29) — **[Decided r2 — not yet built]**.
   There are currently **zero** dashboard resources in the template.
 - **System health in the console** — a single derived **OK / degraded** badge on

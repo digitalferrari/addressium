@@ -53,6 +53,30 @@ cleanup() {
 }
 trap cleanup EXIT
 
+warn() { printf '\033[33m    ! %s\033[0m\n' "$*"; }
+
+# Exposure preflight (#222). Not a data-safety check, so it warns rather than
+# refusing — but a stack that ships 26 alarms into a topic with no subscribers
+# LOOKS monitored, which is worse than one with no alarms at all.
+say "Checking alert routing"
+CFG="infra/cdk/addressium.config.json"
+if [[ -f "$CFG" ]]; then
+  OPS_ARN="$(python3 -c "import json,sys;print(json.load(open('$CFG')).get('opsAlertTopicArn','').strip())" 2>/dev/null || echo "")"
+  OPS_EMAIL="$(python3 -c "import json,sys;print(json.load(open('$CFG')).get('opsAlertEmail','').strip())" 2>/dev/null || echo "")"
+  if [[ -n "$OPS_ARN" ]]; then
+    ok "alarms publish to your topic: ${OPS_ARN}"
+  elif [[ -n "$OPS_EMAIL" ]]; then
+    ok "alarms publish to a created topic subscribed by ${OPS_EMAIL}"
+  else
+    warn "no opsAlertTopicArn and no opsAlertEmail — every CloudWatch alarm will"
+    warn "publish to a topic with NO subscribers. A stuck send queue, a filling"
+    warn "dead-letter queue, or a failing bounce handler will page nobody."
+    warn "Set one of them in ${CFG}."
+  fi
+else
+  warn "no ${CFG} — cannot check alert routing"
+fi
+
 say "Building"
 npm run build >/dev/null
 
@@ -82,12 +106,37 @@ STATEFUL = {
     "AWS::S3::Bucket",
     "AWS::Cognito::UserPool",
     "AWS::KMS::Key",
+    # A replaced queue is a NEW, empty queue: every message still in flight on
+    # the old one is orphaned. On SendQueue that is unsent recipient batches; on
+    # EventsQueue it is bounces that never reach suppression (#231, #218).
+    "AWS::SQS::Queue",
 }
 # Buckets that only ever hold redeployable assets.
 REBUILDABLE_HINTS = ("AdminSite", "PublicSite")
 
 data = json.loads(sys.argv[1])
 changes = data.get("Changes", [])
+
+# Fail CLOSED on a shape we do not recognise (#231). This parser is the only
+# thing standing between an ordinary deploy and a silently emptied table, and
+# its previous failure mode was the worst possible one: a change set whose
+# fields it could not read produced no findings and exited 0 — the guard
+# approving exactly the deploy it exists to block.
+if changes:
+    unreadable = [
+        c for c in changes
+        if not isinstance(c.get("ResourceChange"), dict)
+        or not c["ResourceChange"].get("ResourceType")
+        or not c["ResourceChange"].get("Action")
+    ]
+    if unreadable:
+        print("\n\033[31m    ✗ REFUSING: change set contains entries this check cannot interpret\033[0m\n")
+        print(f"      {len(unreadable)} of {len(changes)} entries lack a readable ResourceChange.")
+        print("      The CloudFormation response shape may have changed. Refusing rather than")
+        print("      passing, because a parser that reads nothing reports nothing.")
+        for c in unreadable[:5]:
+            print(f"      {json.dumps(c)[:200]}")
+        sys.exit(1)
 
 if not changes:
     print("    no resource changes")

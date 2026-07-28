@@ -116,7 +116,7 @@ stack to have left the slot empty.
 | Service | What you will do | What the stack does today |
 |---|---|---|
 | **WAF** | Attach your own WebACL. The stack outputs the API stage ARN and both CloudFront distribution ARNs. | Creates two WebACLs of its own — regional and CloudFront — and associates them to the API stage and both distributions. It emits no ARN outputs to attach against. |
-| **Ops alerting** | Set `opsAlertTopicArn` (an existing SNS topic) and/or `opsAlertEmail`. Alert routing is your infrastructure. | Creates its own SNS topic and points all 24 alarms at it. Neither key is read anywhere in the repo. |
+| **Ops alerting** | Set `opsAlertTopicArn` (an existing SNS topic) or `opsAlertEmail`. Alert routing is your infrastructure. | Consumes yours when set; creates and subscribes a topic when given only an email. Set neither and `deploy:check` warns. |
 
 The same decision calls for a `doctor` command that warns when no WAF
 association or alert target is configured — shipping silently unprotected is

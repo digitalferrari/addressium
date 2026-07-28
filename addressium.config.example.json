@@ -5,5 +5,9 @@
   "adminEmails": [
     "you@example.com"
   ],
-  "adminHostedUiDomainPrefix": "addressium-admin"
+  "adminHostedUiDomainPrefix": "addressium-admin",
+
+  "$comment_alerts": "Where infrastructure alarms go (DLQ depth, queue age, Lambda errors/throttles, DynamoDB throttles). Set opsAlertTopicArn to an SNS topic you already own — alert routing is your infrastructure, not ours. If you have no topic yet, set opsAlertEmail instead and addressium will create one and subscribe that address. Set NEITHER and every alarm fires into a void: `npm run deploy:check` will warn you.",
+  "opsAlertTopicArn": "",
+  "opsAlertEmail": ""
 }

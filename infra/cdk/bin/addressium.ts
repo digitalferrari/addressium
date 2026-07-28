@@ -20,6 +20,18 @@ interface BootstrapConfig {
   region: string;
   adminEmails: string[];
   adminHostedUiDomainPrefix: string;
+  /**
+   * An SNS topic YOU already own, for infrastructure alarms (#222, compendium
+   * #22/#32). Alert routing is account-wide plumbing — addressium should not
+   * take it over, and a topic it creates for you starts with no subscribers,
+   * which means every alarm fires into a void.
+   */
+  opsAlertTopicArn?: string;
+  /**
+   * Convenience alternative: addressium creates a topic and subscribes this
+   * address. Ignored when `opsAlertTopicArn` is set.
+   */
+  opsAlertEmail?: string;
 }
 
 function loadConfig(): BootstrapConfig {
@@ -34,6 +46,8 @@ function loadConfig(): BootstrapConfig {
       region: cfg.region ?? "us-east-1",
       adminEmails: cfg.adminEmails,
       adminHostedUiDomainPrefix: cfg.adminHostedUiDomainPrefix ?? "addressium-admin",
+      opsAlertTopicArn: cfg.opsAlertTopicArn,
+      opsAlertEmail: cfg.opsAlertEmail,
     };
   } catch (err) {
     throw new Error(
@@ -49,6 +63,8 @@ new ControlPlaneStack(app, `addressium-${config.stage}`, {
   stage: config.stage,
   adminEmails: config.adminEmails,
   adminHostedUiDomainPrefix: config.adminHostedUiDomainPrefix,
+  opsAlertTopicArn: config.opsAlertTopicArn,
+  opsAlertEmail: config.opsAlertEmail,
   env: {
     account: process.env.CDK_DEFAULT_ACCOUNT,
     region: config.region,

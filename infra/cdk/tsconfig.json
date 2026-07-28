@@ -6,6 +6,6 @@
     "module": "ES2022",
     "moduleResolution": "Bundler"
   },
-  "include": ["bin/**/*.ts", "lib/**/*.ts"],
+  "include": ["bin/**/*.ts", "lib/**/*.ts", "test/**/*.ts"],
   "references": [{ "path": "../../packages/core" }]
 }

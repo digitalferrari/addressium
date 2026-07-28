@@ -39,7 +39,7 @@ import { HttpApi, HttpMethod, CorsHttpMethod } from "aws-cdk-lib/aws-apigatewayv
 import { HttpLambdaIntegration } from "aws-cdk-lib/aws-apigatewayv2-integrations";
 import { HttpUserPoolAuthorizer } from "aws-cdk-lib/aws-apigatewayv2-authorizers";
 import { Topic } from "aws-cdk-lib/aws-sns";
-import { SqsSubscription } from "aws-cdk-lib/aws-sns-subscriptions";
+import { EmailSubscription, SqsSubscription } from "aws-cdk-lib/aws-sns-subscriptions";
 import { Alarm, ComparisonOperator, TreatMissingData } from "aws-cdk-lib/aws-cloudwatch";
 import { LogGroup, RetentionDays } from "aws-cdk-lib/aws-logs";
 import { SnsAction } from "aws-cdk-lib/aws-cloudwatch-actions";
@@ -79,6 +79,14 @@ export interface ControlPlaneStackProps extends StackProps {
   adminAppUrl?: string;
   /** Public URL of the subscriber/public site. Defaults to its distribution. */
   publicAppUrl?: string;
+  /**
+   * An SNS topic the OPERATOR owns, for infrastructure alarms (#222, compendium
+   * #22/#32/#67). When set, no topic is created here and no ARN is exported —
+   * alert routing is account-wide plumbing addressium does not take over.
+   */
+  opsAlertTopicArn?: string;
+  /** Create a topic and subscribe this address. Ignored when the ARN is set. */
+  opsAlertEmail?: string;
 }
 
 export class ControlPlaneStack extends Stack {
@@ -235,10 +243,25 @@ export class ControlPlaneStack extends Stack {
         conditions: { StringEquals: { "AWS:SourceAccount": Stack.of(this).account } },
       }),
     );
-    // Ops alerts topic (#92): infra-level CloudWatch alarms (DLQ depth, queue
-    // age, Lambda errors/throttles) publish here. Subscribe your ops channel;
-    // this is the same escalation path as the domain-layer deliverability alerts.
-    const opsAlerts = new Topic(this, "OpsAlertsTopic");
+    // Where infra-level CloudWatch alarms go: DLQ depth, queue age, Lambda
+    // errors/throttles, DynamoDB throttles (#92, #222).
+    //
+    // Prefer the operator's own topic (compendium #22/#32). A topic created
+    // here starts with ZERO subscribers, and a stack that silently ships 26
+    // alarms publishing into a void is worse than one with no alarms: it looks
+    // monitored. So we take an ARN when given, create-and-subscribe when given
+    // only an email, and when given neither we still synth — but deploy:check
+    // says so loudly rather than letting it pass for monitoring.
+    const externalOpsTopic = props.opsAlertTopicArn?.trim();
+    const ownedOpsTopic = externalOpsTopic
+      ? undefined
+      : new Topic(this, "OpsAlertsTopic");
+    if (ownedOpsTopic && props.opsAlertEmail?.trim()) {
+      ownedOpsTopic.addSubscription(new EmailSubscription(props.opsAlertEmail.trim()));
+    }
+    const opsAlerts = externalOpsTopic
+      ? Topic.fromTopicArn(this, "OpsAlertsTopicImported", externalOpsTopic)
+      : (ownedOpsTopic as Topic);
 
     // The SPA distributions are created near the end of this stack, but the
     // Cognito callback URLs and the API's CORS origins need them. Lazy defers
@@ -1029,7 +1052,11 @@ export class ControlPlaneStack extends Stack {
     new CfnOutput(this, "HttpApiUrl", { value: api.apiEndpoint });
     new CfnOutput(this, "SendQueueUrl", { value: sendQueue.queueUrl });
     new CfnOutput(this, "SesEventsTopicArn", { value: sesEvents.topicArn });
-    new CfnOutput(this, "OpsAlertsTopicArn", { value: opsAlerts.topicArn });
+    // Only exported when addressium created the topic. Echoing back an ARN the
+    // operator supplied would imply we own something we do not.
+    if (ownedOpsTopic) {
+      new CfnOutput(this, "OpsAlertsTopicArn", { value: ownedOpsTopic.topicArn });
+    }
     new CfnOutput(this, "SendDlqUrl", { value: sendDlq.queueUrl });
     new CfnOutput(this, "AdminSiteUrl", { value: adminSite.distribution.domainName });
     new CfnOutput(this, "AdminSiteBucket", { value: adminSite.bucket.bucketName });
