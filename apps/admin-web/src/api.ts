@@ -216,7 +216,23 @@ export interface DripSequence {
 }
 export type SaveDripSequenceBody = Omit<DripSequence, "orgId"> & { orgId: string };
 
+export interface AlertRule {
+  metric: "complaint_rate" | "bounce_rate" | "send_failures" | "reputation";
+  warnAt: number;
+  haltAt: number;
+  enabled: boolean;
+}
+export interface AlertConfig {
+  orgId: string;
+  snsTopicArn?: string;
+  rules: AlertRule[];
+  notifyTargets: string[];
+}
+
 export const api = {
+  /** null means this org has NO thresholds — render "unprotected", not zeros. */
+  alertConfig: (org: string) => call<AlertConfig | null>("GET", `/orgs/${org}/alerts`),
+  saveAlertConfig: (body: AlertConfig) => call<AlertConfig>("POST", `/orgs/alerts`, body),
   orgMeta: (org: string) => call<OrgMeta>("GET", `/orgs/${org}`),
   campaigns: (org: string) => call<CampaignRow[]>("GET", `/orgs/${org}/campaigns`),
   dripSequences: (org: string) => call<DripSequence[]>("GET", `/orgs/${org}/drip-sequences`),

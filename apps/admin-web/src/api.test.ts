@@ -77,3 +77,33 @@ test("a corrupt token blob does not throw — it self-heals", async () => {
     sessionStorage.removeItem("addressium.tokens");
   }
 });
+
+test("alertConfig() GETs the org's deliverability thresholds", async () => {
+  await api.alertConfig("acme");
+  const { url, init } = lastCall();
+  expect(url).toMatch(/\/orgs\/acme\/alerts$/);
+  expect(init.method).toBe("GET");
+});
+
+test("saveAlertConfig() POSTs the rules", async () => {
+  await api.saveAlertConfig({
+    orgId: "acme",
+    snsTopicArn: "arn:aws:sns:us-east-1:1:ops",
+    rules: [{ metric: "complaint_rate", warnAt: 0.003, haltAt: 0.005, enabled: true }],
+    notifyTargets: [],
+  });
+  const { url, init } = lastCall();
+  expect(url).toMatch(/\/orgs\/alerts$/);
+  expect(init.method).toBe("POST");
+  const body = JSON.parse(String(init.body));
+  expect(body.orgId).toBe("acme");
+  expect(body.rules[0].haltAt).toBe(0.005);
+});
+
+test("saveAlertConfig() omits an empty topic rather than sending a blank string", async () => {
+  // A blank ARN would be stored and then used as a publish target. Absent means
+  // "halt quietly", which is a real supported mode (#217).
+  await api.saveAlertConfig({ orgId: "acme", rules: [], notifyTargets: [] });
+  const body = JSON.parse(String(lastCall().init.body));
+  expect(body.snsTopicArn).toBeUndefined();
+});
