@@ -13,7 +13,7 @@
 import {
   DynamoStores,
   SnsAlertPublisher,
-  unwrap,
+  unwrapRecords,
   normalize,
   type Notification,
   type SesNotification,
@@ -94,18 +94,25 @@ async function apply(notif: Notification) {
 }
 
 export async function handler(event: unknown) {
-  const payloads = unwrap(event);
+  const records = unwrapRecords(event);
   let processed = 0;
   let unresolved = 0;
   const errors: string[] = [];
+  // Partial batch failure (#218): only the records that actually failed are
+  // reported, so SQS redelivers those and deletes the rest. Throwing instead
+  // would fail all ten of a batch's peers for one poison event — the same
+  // defect #177 fixed on the send path.
+  const batchItemFailures: { itemIdentifier: string }[] = [];
 
-  for (const p of payloads) {
-    const notif = normalize(p);
+  for (const { messageId, payload } of records) {
+    const notif = normalize(payload);
     if (!notif) {
       // Never silently drop: an unresolved event means bounces aren't reaching
       // suppression, which is exactly the failure this handler used to have.
+      // Not a batch failure though — a retry cannot make it resolvable, so it
+      // is acknowledged and logged rather than cycled to the DLQ.
       unresolved++;
-      const t = (p as SesNotification)?.eventType ?? (p as SesNotification)?.notificationType;
+      const t = (payload as SesNotification)?.eventType ?? (payload as SesNotification)?.notificationType;
       console.warn("events: unresolved notification", { eventType: t });
       continue;
     }
@@ -113,13 +120,20 @@ export async function handler(event: unknown) {
       await apply(notif);
       processed++;
     } catch (e) {
-      errors.push(`${notif.eventType}/${notif.campaignId}: ${(e as Error).message}`);
+      const msg = `${notif.eventType}/${notif.campaignId}: ${(e as Error).message}`;
+      errors.push(msg);
+      console.error("events: record failed", { messageId, error: msg });
+      if (messageId) batchItemFailures.push({ itemIdentifier: messageId });
     }
   }
 
   if (unresolved > 0) console.warn("events: unresolved count", { unresolved });
-  // Surface failures so the delivery is retried and the error alarm fires,
-  // instead of the old unconditional `{ok:true}` that hid everything.
-  if (errors.length > 0) throw new Error(`events: ${errors.length} failed — ${errors.join("; ")}`);
-  return { ok: true, processed, unresolved };
+
+  // A direct invoke (tests, manual replay) carries no SQS receipts, so there is
+  // no partial-failure protocol to speak — surface the error instead of
+  // returning a success the caller would believe.
+  if (errors.length > 0 && batchItemFailures.length === 0) {
+    throw new Error(`events: ${errors.length} failed — ${errors.join("; ")}`);
+  }
+  return { ok: errors.length === 0, processed, unresolved, batchItemFailures };
 }

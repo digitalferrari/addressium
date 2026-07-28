@@ -39,7 +39,7 @@ import { HttpApi, HttpMethod, CorsHttpMethod } from "aws-cdk-lib/aws-apigatewayv
 import { HttpLambdaIntegration } from "aws-cdk-lib/aws-apigatewayv2-integrations";
 import { HttpUserPoolAuthorizer } from "aws-cdk-lib/aws-apigatewayv2-authorizers";
 import { Topic } from "aws-cdk-lib/aws-sns";
-import { LambdaSubscription } from "aws-cdk-lib/aws-sns-subscriptions";
+import { SqsSubscription } from "aws-cdk-lib/aws-sns-subscriptions";
 import { Alarm, ComparisonOperator, TreatMissingData } from "aws-cdk-lib/aws-cloudwatch";
 import { LogGroup, RetentionDays } from "aws-cdk-lib/aws-logs";
 import { SnsAction } from "aws-cdk-lib/aws-cloudwatch-actions";
@@ -207,6 +207,20 @@ export class ControlPlaneStack extends Stack {
     const sendQueue = new Queue(this, "SendQueue", {
       visibilityTimeout: Duration.minutes(5),
       deadLetterQueue: { queue: sendDlq, maxReceiveCount: 5 },
+    });
+    // Engagement-event buffer (#218, compendium #20/#44). SES → SNS → SQS →
+    // Lambda, NOT SNS → Lambda. An SNS→Lambda subscription is an ASYNCHRONOUS
+    // invocation: AWS retries twice and then discards the event permanently. A
+    // discarded bounce is an address that is never suppressed and keeps being
+    // mailed, so the damage compounds silently and is invisible until
+    // deliverability is already gone. The queue makes delivery durable and the
+    // DLQ makes a failure inspectable and replayable.
+    const eventsDlq = new Queue(this, "EventsDlq", { retentionPeriod: Duration.days(14) });
+    const eventsQueue = new Queue(this, "EventsQueue", {
+      // Comfortably above the handler's own timeout so a slow batch is not
+      // redelivered while it is still being processed.
+      visibilityTimeout: Duration.minutes(5),
+      deadLetterQueue: { queue: eventsDlq, maxReceiveCount: 5 },
     });
     const sesEvents = new Topic(this, "SesEventsTopic");
     // SES publishes engagement events here via each org's configuration-set
@@ -838,6 +852,25 @@ export class ControlPlaneStack extends Stack {
       treatMissingData: TreatMissingData.NOT_BREACHING,
       alarmDescription: "addressium: send queue backing up (oldest message > 15m)",
     }));
+    // The event plane gets the same pair as the send pipeline (#218). Without
+    // these, a DLQ filling with undeliverable bounces is invisible — and a
+    // bounce that never reaches suppression is an address we keep mailing.
+    alarm("EventsDlqNotEmptyAlarm", new Alarm(this, "EventsDlqNotEmptyAlarm", {
+      metric: eventsDlq.metricApproximateNumberOfMessagesVisible({ period: Duration.minutes(1) }),
+      threshold: 0,
+      comparisonOperator: ComparisonOperator.GREATER_THAN_THRESHOLD,
+      evaluationPeriods: 1,
+      treatMissingData: TreatMissingData.NOT_BREACHING,
+      alarmDescription: "addressium: messages in the engagement-event dead-letter queue",
+    }));
+    alarm("EventsQueueAgeAlarm", new Alarm(this, "EventsQueueAgeAlarm", {
+      metric: eventsQueue.metricApproximateAgeOfOldestMessage({ period: Duration.minutes(5) }),
+      threshold: Duration.minutes(15).toSeconds(),
+      comparisonOperator: ComparisonOperator.GREATER_THAN_THRESHOLD,
+      evaluationPeriods: 1,
+      treatMissingData: TreatMissingData.NOT_BREACHING,
+      alarmDescription: "addressium: event queue backing up (oldest message > 15m)",
+    }));
     // Lambda errors + throttles across the critical send path AND the public
     // surface. Previously only the three send-path functions were alarmed, so a
     // failing signup, confirm, unsubscribe, webhook, or SES-event handler was
@@ -889,7 +922,20 @@ export class ControlPlaneStack extends Stack {
       treatMissingData: TreatMissingData.NOT_BREACHING,
       alarmDescription: "addressium: DynamoDB system errors",
     }));
-    sesEvents.addSubscription(new LambdaSubscription(eventsFn));
+    // Raw message delivery: the queue body is the SES notification itself
+    // rather than an SNS envelope wrapping it. `unwrapRecords` peels the
+    // envelope defensively anyway, so flipping this cannot silently break
+    // resolution — but raw keeps the payload one parse shallower.
+    sesEvents.addSubscription(new SqsSubscription(eventsQueue, { rawMessageDelivery: true }));
+    eventsFn.addEventSource(
+      new SqsEventSource(eventsQueue, {
+        batchSize: 10,
+        // The handler returns `batchItemFailures`, so a poison event fails on
+        // its own instead of taking its nine batch peers down with it (#218,
+        // same defect #177 fixed on the send path).
+        reportBatchItemFailures: true,
+      }),
+    );
 
     // ---- WAF (managed rule sets + per-IP rate limit + signup CAPTCHA, §5, #20) ----
     // REGIONAL ACL on the HTTP API stage; CLOUDFRONT ACL on the SPA distributions.

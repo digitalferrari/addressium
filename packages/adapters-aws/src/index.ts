@@ -12,7 +12,14 @@
  */
 export { DynamoStores } from "./dynamo.js";
 export { SesEmailSender, SES_TAG, encodeTag, decodeTag } from "./ses.js";
-export { unwrap, normalize, type Notification, type SesNotification } from "./ses-events.js";
+export {
+  unwrap,
+  unwrapRecords,
+  normalize,
+  type Notification,
+  type SesNotification,
+  type UnwrappedRecord,
+} from "./ses-events.js";
 export { KmsMagicLinkSigner, type KmsMagicLinkSignerConfig } from "./kms.js";
 export { SqsSendQueue } from "./sqs.js";
 export { EventBridgeScheduler, type EventBridgeSchedulerConfig } from "./scheduler.js";

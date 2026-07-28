@@ -55,24 +55,61 @@ export interface SesNotification {
   delivery?: { timestamp?: string };
 }
 
+/** One envelope-peeled payload, with the SQS receipt it arrived on (if any). */
+export interface UnwrappedRecord {
+  /** SQS messageId — the identifier a partial-batch failure must report (#218). */
+  messageId?: string;
+  payload: unknown;
+}
+
 /**
- * Peel the SNS (or SQS) envelope. Returns the inner payloads; a record whose
+ * An SNS envelope delivered *inside* something else. With raw message delivery
+ * the queue body is the SES notification directly; without it, the body is this
+ * wrapper and the notification is one `JSON.parse` further down. We subscribe
+ * with raw delivery on, but peel this defensively: flipping that flag on the
+ * subscription would otherwise silently stop every event resolving.
+ */
+function peelSnsEnvelope(value: unknown): unknown {
+  const v = value as { Type?: string; Message?: string };
+  if (v && typeof v === "object" && v.Type === "Notification" && typeof v.Message === "string") {
+    try {
+      return JSON.parse(v.Message);
+    } catch {
+      return value;
+    }
+  }
+  return value;
+}
+
+/**
+ * Peel the SNS (or SQS) envelope, keeping each payload paired with its SQS
+ * messageId so one poison event can be failed on its own (#218). A record whose
  * body isn't JSON is skipped rather than failing its batch peers.
  */
-export function unwrap(event: unknown): unknown[] {
-  const e = event as { Records?: Array<{ Sns?: { Message?: string }; body?: string }> };
-  if (!Array.isArray(e?.Records)) return [event];
-  const out: unknown[] = [];
+export function unwrapRecords(event: unknown): UnwrappedRecord[] {
+  const e = event as {
+    Records?: Array<{ Sns?: { Message?: string }; body?: string; messageId?: string }>;
+  };
+  if (!Array.isArray(e?.Records)) return [{ payload: event }];
+  const out: UnwrappedRecord[] = [];
   for (const r of e.Records) {
     const raw = r?.Sns?.Message ?? r?.body;
     if (typeof raw !== "string") continue;
     try {
-      out.push(JSON.parse(raw));
+      out.push({ messageId: r.messageId, payload: peelSnsEnvelope(JSON.parse(raw)) });
     } catch {
+      // Unparseable bodies are dropped deliberately: retrying cannot fix
+      // malformed JSON, so failing the record would just cycle it to the DLQ
+      // while blocking its peers.
       console.error("events: record body was not JSON", { sample: raw.slice(0, 120) });
     }
   }
   return out;
+}
+
+/** Payload-only view, kept for direct-invoke callers and tests. */
+export function unwrap(event: unknown): unknown[] {
+  return unwrapRecords(event).map((r) => r.payload);
 }
 
 /** SES event type -> the internal type we act on. Others are acknowledged. */
