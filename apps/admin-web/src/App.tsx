@@ -161,7 +161,7 @@ function Console() {
         {view === "segments" && <Segments org={org} />}
         {view === "importmap" && <ImportMapper org={org} />}
         {view === "import" && <ImportSubscribers org={org} />}
-        {view === "privacy" && <Privacy org={org} />}
+        {view === "privacy" && (<><BulkExport org={org} /><Privacy org={org} /></>)}
         {view === "drips" && <Drips org={org} />}
         {view === "branding" && <BrandingEditor org={org} />}
         {view === "presentation" && <PresentationEditor org={org} />}
@@ -1269,6 +1269,67 @@ function ImportSubscribers({ org }: { org: string }) {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * Bulk export (#224) — the "you can leave" half of the promise.
+ *
+ * Distinct from the per-subject DSAR below: this is the whole org, in the shape
+ * the import mapper can read back, so leaving is a round trip rather than a
+ * download nobody can use.
+ */
+function BulkExport({ org }: { org: string }) {
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState("");
+  const [includeUnsubscribed, setIncludeUnsubscribed] = useState(true);
+
+  const download = async (format: "csv" | "jsonl") => {
+    setBusy(true);
+    setMsg("");
+    try {
+      const text = await api.exportData(org, format, includeUnsubscribed);
+      const blob = new Blob([text], { type: format === "csv" ? "text/csv" : "application/x-ndjson" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `addressium-${org}-${new Date().toISOString().slice(0, 10)}.${format}`;
+      a.click();
+      URL.revokeObjectURL(url);
+      setMsg("Downloaded.");
+    } catch (e) {
+      setMsg((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="card">
+      <h3>Export everything</h3>
+      <p className="muted">
+        Subscribers, subscriptions, suppression state and consent provenance. The CSV imports back
+        through the field mapper, so this is a way out, not just a file.
+      </p>
+      <label>
+        <input
+          type="checkbox"
+          checked={includeUnsubscribed}
+          onChange={(e) => setIncludeUnsubscribed(e.target.checked)}
+        />{" "}
+        Include unsubscribed rows
+        <div className="muted">
+          Leave on when migrating: an opt-out you fail to carry across is one you will mail again.
+        </div>
+      </label>
+      <div style={{ marginTop: 8 }}>
+        <button className="btn" disabled={busy} onClick={() => download("csv")}>Export CSV</button>
+        <button className="btn ghost" disabled={busy} style={{ marginLeft: 8 }} onClick={() => download("jsonl")}>
+          Export JSONL
+        </button>
+        {msg && <span style={{ marginLeft: 12 }}>{msg}</span>}
+      </div>
     </div>
   );
 }

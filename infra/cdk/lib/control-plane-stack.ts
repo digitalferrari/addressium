@@ -782,6 +782,8 @@ export class ControlPlaneStack extends Stack {
     adminRoute("UnsuppressFn", "subscriberUnsuppressHandler", HttpMethod.POST, "/subscribers/unsuppress");
     // Subscriber migration (#100) + GDPR/CCPA data-subject requests (#101).
     adminRoute("ImportFn", "importHandler", HttpMethod.POST, "/orgs/{org}/import");
+    // Bulk portability (#224) — the whole org, re-importable.
+    adminRoute("ExportFn", "exportHandler", HttpMethod.GET, "/orgs/{org}/export");
     // Field mapper (#216): preview writes nothing; mapped runs the import.
     adminRoute("ImportPreviewFn", "importPreviewHandler", HttpMethod.POST, "/orgs/{org}/import/preview");
     adminRoute("ImportMappedFn", "importMappedHandler", HttpMethod.POST, "/orgs/{org}/import/mapped");

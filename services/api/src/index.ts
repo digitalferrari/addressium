@@ -33,6 +33,8 @@ import {
   provisionSubscriberAccount,
   manualSuppress,
   liftSuppression,
+  exportCsv,
+  exportJsonl,
   importCsvSubscribers,
   importWithMapping,
   previewCsv,
@@ -656,6 +658,39 @@ export async function subscriberUnsuppressHandler(event: HttpEvent): Promise<Htt
  * caller sets status; suppressed addresses are skipped by the domain importer.
  */
 /**
+ * GET /orgs/{org}/export?format=csv|jsonl — bulk portability (#224).
+ *
+ * Distinct from `POST /privacy` (one subject, GDPR DSAR). This is the whole
+ * org, and it is deliberately the shape the mapper (#216) can re-import, so
+ * "you can leave" is a round trip rather than a download.
+ */
+export async function exportHandler(event: HttpEvent): Promise<HttpResult> {
+  try {
+    const orgId = event.pathParameters?.org ?? "";
+    // Taking the entire subscriber base out of the system is a privileged act,
+    // so it sits behind the destructive-tier capability rather than read-only.
+    requireGrant(event, "subscribers:delete", orgId);
+    const format = event.queryStringParameters?.format === "jsonl" ? "jsonl" : "csv";
+    const listId = event.queryStringParameters?.listId;
+    const includeUnsubscribed = event.queryStringParameters?.includeUnsubscribed === "true";
+    const opts = { orgId, ...(listId ? { listId } : {}), ...(includeUnsubscribed ? { includeUnsubscribed } : {}) };
+
+    const body = format === "jsonl" ? await exportJsonl(stores(), opts) : await exportCsv(stores(), opts);
+    const stamp = clock.now().toISOString().slice(0, 10);
+    return {
+      statusCode: 200,
+      headers: {
+        "content-type": format === "jsonl" ? "application/x-ndjson" : "text/csv",
+        "content-disposition": `attachment; filename="addressium-${orgId}-${stamp}.${format}"`,
+      },
+      body,
+    };
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+/**
  * POST /orgs/{org}/import/preview — headers, sample rows and a suggested
  * mapping (#216). Writes NOTHING: the console renders this so the operator can
  * see what the file actually contains before committing to it.
@@ -1003,6 +1038,7 @@ const ADMIN_ROUTES: Record<string, RouteHandler> = {
   "POST /subscribers/unsubscribe": subscriberUnsubscribeHandler,
   "POST /subscribers/unsuppress": subscriberUnsuppressHandler,
   "POST /orgs/{org}/import": importHandler,
+  "GET /orgs/{org}/export": exportHandler,
   "POST /orgs/{org}/import/preview": importPreviewHandler,
   "POST /orgs/{org}/import/mapped": importMappedHandler,
   "POST /privacy": privacyHandler,

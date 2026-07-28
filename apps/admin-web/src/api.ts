@@ -272,6 +272,20 @@ export interface NewListDefaults {
 }
 
 export const api = {
+  /**
+   * Bulk export (#224). Fetched rather than linked: the route is authorized, and
+   * a plain <a href> carries no Authorization header, so navigating to it would
+   * simply 403. The caller turns the text into a download.
+   */
+  exportData: async (orgId: string, format: "csv" | "jsonl", includeUnsubscribed: boolean): Promise<string> => {
+    const tokens = getTokens();
+    const qs = `format=${format}${includeUnsubscribed ? "&includeUnsubscribed=true" : ""}`;
+    const res = await fetch(`${BASE}/orgs/${orgId}/export?${qs}`, {
+      headers: { ...(tokens ? { authorization: `Bearer ${tokens.idToken}` } : {}) },
+    });
+    if (!res.ok) throw new Error(`export failed: ${res.status} ${await res.text()}`);
+    return res.text();
+  },
   importPreview: (orgId: string, csv: string, consentBasis?: "explicit" | "implicit") =>
     call<ImportPreview>("POST", `/orgs/${orgId}/import/preview`, { csv, consentBasis }),
   importMapped: (orgId: string, body: {

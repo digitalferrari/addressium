@@ -149,3 +149,23 @@ test("importMapped() carries newListDefaults when the plan creates a list", asyn
   const body = JSON.parse(String(lastCall().init.body));
   expect(body.newListDefaults.physicalAddress).toBe("p");
 });
+
+test("exportData() sends the auth header — a plain link would 403", async () => {
+  // A signed-in operator. Without this the header is correctly absent, which is
+  // exactly why a bare <a href> to the export route cannot work.
+  sessionStorage.setItem("addressium.tokens", JSON.stringify({ idToken: "id-token-abc" }));
+  fetchMock.mockResolvedValueOnce({ ok: true, text: async () => "email\na@x.com\n" });
+  const text = await api.exportData("acme", "csv", true);
+  const { url, init } = lastCall();
+  expect(url).toMatch(/\/orgs\/acme\/export\?format=csv&includeUnsubscribed=true$/);
+  // The route is authorized; navigating to it in a browser carries no header.
+  expect((init.headers as Record<string, string>).authorization).toBeDefined();
+  expect((init.headers as Record<string, string>).authorization).toContain("id-token-abc");
+  expect(text).toContain("a@x.com");
+  sessionStorage.removeItem("addressium.tokens");
+});
+
+test("exportData() surfaces a failed export instead of downloading an error page", async () => {
+  fetchMock.mockResolvedValueOnce({ ok: false, status: 403, text: async () => "forbidden" });
+  await expect(api.exportData("acme", "jsonl", false)).rejects.toThrow(/403/);
+});

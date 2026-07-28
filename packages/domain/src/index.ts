@@ -18,6 +18,7 @@ export * from "./scheduling.js";
 export * from "./schedule-state.js";
 export * from "./transactional.js";
 export * from "./privacy.js";
+export * from "./export.js";
 export * from "./importer.js";
 export * from "./import-mapping.js";
 export * from "./import-run.js";
