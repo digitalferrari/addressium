@@ -46,6 +46,14 @@ export interface MappedImportOptions {
   csv: string;
   plan: MappingPlan;
   /**
+   * Identifies this run, stamped on every subscription it writes (#223). An
+   * operator who discovers a bad file needs to find its rows again; without a
+   * batch id the only handle is "everything imported around then".
+   */
+  batchId?: string;
+  /** The uploaded file's name, recorded alongside the batch for the same reason. */
+  sourceFile?: string;
+  /**
    * Status for subscriptions created from a `subscribed` column. Defaults to
    * `pending` (#192) — silently confirming an uploaded list bypasses double
    * opt-in and records no consent.
@@ -83,6 +91,24 @@ const emptyReport = (): MappedImportReport => ({
   discardedCells: 0,
   errors: [],
 });
+
+/**
+ * The subscription status a basis permits (#223, compendium item 60).
+ *
+ * `implicit` means an existing relationship, not proof of opt-in, so it can only
+ * ever produce `pending` — the subscriber still has to confirm. Previously the
+ * pending default was unconditional and unrelated to the basis, so a caller
+ * could pass `status: "confirmed"` alongside an implicit basis and mail a list
+ * that had never opted in. `explicit` means the file carries double opt-in
+ * evidence, so the caller's choice is honoured.
+ */
+export function statusFor(
+  basis: ConsentBasis | undefined,
+  requested: Extract<SubscriptionStatus, "confirmed" | "pending"> | undefined,
+): Extract<SubscriptionStatus, "confirmed" | "pending"> {
+  if (basis !== "explicit") return "pending";
+  return requested ?? "pending";
+}
 
 /** Deterministic id so re-running an import does not create a second copy of the same list. */
 const listIdFor = (name: string): string =>
@@ -251,8 +277,27 @@ async function writeSubscriptions(
   now: string,
   report: MappedImportReport,
 ): Promise<void> {
-  const write = async (listId: string, status: SubscriptionStatus): Promise<void> => {
-    const subscription: Subscription = { orgId: opts.orgId, subscriberId, listId, status, updatedAt: now };
+  const write = async (
+    listId: string,
+    status: SubscriptionStatus,
+    basis?: ConsentBasis,
+  ): Promise<void> => {
+    const subscription: Subscription = {
+      orgId: opts.orgId,
+      subscriberId,
+      listId,
+      status,
+      updatedAt: now,
+      // The same field a double-opt-in signup writes (#220), so one lookup
+      // answers "what proves we may mail this person about this list" whether
+      // they signed up or arrived in a file.
+      consent: {
+        requestedAt: now,
+        ...(basis ? { basis } : {}),
+        ...(opts.batchId ? { importBatchId: opts.batchId } : {}),
+        ...(opts.sourceFile ? { sourceUrl: opts.sourceFile } : {}),
+      },
+    };
     await stores.subscriptions.put(subscription);
   };
 
@@ -262,9 +307,8 @@ async function writeSubscriptions(
     for (const a of mapped.audiences) {
       const listId = listIdOf(a.list, byName);
       if (!listId) continue;
-      await write(listId, opts.status ?? "pending");
+      await write(listId, statusFor(a.consentBasis, opts.status), a.consentBasis);
       report.subscriptionsCreated++;
-      void (a.consentBasis satisfies ConsentBasis); // recorded on the subscription once the field exists
     }
   }
 

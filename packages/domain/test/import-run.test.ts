@@ -10,7 +10,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { previewCsv, suggestMapping, type MappingPlan } from "../src/import-mapping.js";
-import { importWithMapping, type NewListDefaults } from "../src/import-run.js";
+import { importWithMapping, statusFor, type NewListDefaults } from "../src/import-run.js";
 import { memStores } from "../src/memory.js";
 import type { Clock } from "../src/ports.js";
 
@@ -255,4 +255,70 @@ test("duplicate addresses within one file are counted once", async () => {
 
   assert.equal(report.created, 1);
   assert.equal(report.duplicates, 1);
+});
+
+test("an implicit basis can only ever produce pending, even when confirmed is requested", async () => {
+  const stores = memStores();
+  const plan = suggestMapping(previewCsv(csv()), { consentBasis: "implicit" });
+  await importWithMapping(stores, clock, {
+    orgId: ORG,
+    csv: csv(),
+    plan,
+    newListDefaults: DEFAULTS,
+    status: "confirmed", // an operator asking to skip double opt-in
+  });
+
+  const alex = await stores.subscribers.findByEmail(ORG, "alex.rivera@example.com");
+  const subs = await stores.subscriptions.listBySubscriber(ORG, alex!.sub);
+  // An existing relationship is not proof of opt-in. Honouring `confirmed` here
+  // would mail a list that never opted in (#223).
+  assert.equal(subs.filter((s) => s.status === "confirmed").length, 0);
+  assert.ok(subs.some((s) => s.status === "pending"));
+});
+
+test("an explicit basis honours the caller's requested status", async () => {
+  const stores = memStores();
+  const plan = suggestMapping(previewCsv(csv()), { consentBasis: "explicit" });
+  await importWithMapping(stores, clock, {
+    orgId: ORG,
+    csv: csv(),
+    plan,
+    newListDefaults: DEFAULTS,
+    status: "confirmed",
+  });
+
+  const alex = await stores.subscribers.findByEmail(ORG, "alex.rivera@example.com");
+  const subs = await stores.subscriptions.listBySubscriber(ORG, alex!.sub);
+  assert.ok(subs.some((s) => s.status === "confirmed"), "the file carries double opt-in evidence");
+});
+
+test("every imported subscription records its basis and batch", async () => {
+  const stores = memStores();
+  await importWithMapping(stores, clock, {
+    orgId: ORG,
+    csv: csv(),
+    plan: suggestMapping(previewCsv(csv()), { consentBasis: "implicit" }),
+    newListDefaults: DEFAULTS,
+    batchId: "batch-2026-07-28-a",
+    sourceFile: "pinpoint-export.csv",
+  });
+
+  const alex = await stores.subscribers.findByEmail(ORG, "alex.rivera@example.com");
+  const subs = await stores.subscriptions.listBySubscriber(ORG, alex!.sub);
+  const subscribed = subs.find((s) => s.status === "pending");
+
+  // The same field a double-opt-in signup writes (#220), so one lookup answers
+  // provenance whether the row came from a form or a file.
+  assert.equal(subscribed?.consent?.basis, "implicit");
+  assert.equal(subscribed?.consent?.importBatchId, "batch-2026-07-28-a");
+  assert.equal(subscribed?.consent?.sourceUrl, "pinpoint-export.csv");
+  assert.ok(subscribed?.consent?.requestedAt);
+  assert.equal(subscribed?.consent?.confirmedAt, undefined, "an import proves nothing about confirmation");
+});
+
+test("statusFor is the whole rule, and it fails closed on an unknown basis", () => {
+  assert.equal(statusFor("explicit", "confirmed"), "confirmed");
+  assert.equal(statusFor("explicit", undefined), "pending");
+  assert.equal(statusFor("implicit", "confirmed"), "pending");
+  assert.equal(statusFor(undefined, "confirmed"), "pending", "no declared basis is not explicit");
 });

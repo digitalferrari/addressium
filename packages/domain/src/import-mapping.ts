@@ -18,19 +18,21 @@
  * Nothing here writes. `applyMapping` is pure so the console can preview a file
  * honestly before the operator commits to it.
  */
+import type { SubscriptionConsent } from "@addressium/core";
 import { parseCsv } from "./importer.js";
 
 /**
- * Why we believe this person agreed to be mailed (#60). *explicit* is double
- * opt-in evidence; *implicit* is an existing relationship. It is declared per
- * mapped column rather than per file, because one export routinely mixes both —
- * a paid-subscriber column and a scraped-interest column are not the same
- * promise.
+ * Why we believe this person agreed to be mailed (#60, #223). *explicit* is
+ * double opt-in evidence; *implicit* is an existing relationship. It is declared
+ * per mapped column rather than per file, because one export routinely mixes
+ * both — a paid-subscriber column and a scraped-interest column are not the
+ * same promise.
  *
- * Declared here rather than in `@addressium/core` until `Subscription` gains the
- * field to persist it; this module is the only current producer.
+ * Re-exported from the shared `SubscriptionConsent` shape (#220) rather than
+ * declared separately, so an imported subscription and a double-opt-in one
+ * carry provenance in the same field and a single lookup answers both.
  */
-export type ConsentBasis = "explicit" | "implicit";
+export type ConsentBasis = NonNullable<SubscriptionConsent["basis"]>;
 
 /** What a source column becomes. `discard` is explicit so a dropped column is counted, never silent. */
 export type ColumnMapping =
