@@ -28,6 +28,7 @@ export { KmsJwksProvider, spkiDerToJwk, type Jwk } from "./jwks.js";
 export { SnsAlertPublisher } from "./sns.js";
 export { AwsProvisioningProviders } from "./provisioning.js";
 export { S3AuditLog } from "./s3audit.js";
+export { S3ExportWriter, type ExportUpload } from "./s3export.js";
 export { OpenSearchBulkWriter } from "./opensearch.js";
 export {
   HttpLlmAdvisor,

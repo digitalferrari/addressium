@@ -66,6 +66,13 @@ export interface SubscriberStore {
   /** Enumerate every subscriber for an org — batch sweeps (re-engagement, reporting). */
   list(orgId: string): Promise<Subscriber[]>;
   /**
+   * The same enumeration, one page at a time (#224, #182). Bulk export is the
+   * one caller for which `list` is wrong: an org's entire subscriber base in a
+   * single array is exactly the Lambda OOM #182 is about, and it is the largest
+   * org — the one most likely to be leaving — that hits it first.
+   */
+  stream(orgId: string): AsyncIterable<Subscriber>;
+  /**
    * Advance `lastEngagedAt` to `at` if it's newer (monotonic). Called on a CLICK
    * only — opens don't count. No-op if the subscriber is unknown. O(1) update.
    */

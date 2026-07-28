@@ -175,3 +175,32 @@ test("the analytics tier is absent unless explicitly enabled", () => {
     );
   }
 });
+
+test("the export bucket expires its objects and is not versioned (#224)", () => {
+  // An export object is an org's entire subscriber base in one file, and the
+  // presigned URL handed out for it cannot be revoked — so the object's own
+  // lifetime is the backstop. A version would be a second full copy of that PII
+  // that plain expiry would not reach.
+  const buckets = Object.values(template().findResources("AWS::S3::Bucket"));
+  const exportBuckets = buckets.filter((b) =>
+    (b.Properties?.LifecycleConfiguration?.Rules ?? []).some(
+      (r: { Id?: string }) => r.Id === "expire-exports",
+    ),
+  );
+  assert.equal(exportBuckets.length, 1, "exactly one export bucket");
+  const props = exportBuckets[0]!.Properties as Record<string, unknown>;
+  const rule = (props.LifecycleConfiguration as { Rules: Record<string, unknown>[] }).Rules.find(
+    (r) => r.Id === "expire-exports",
+  )!;
+
+  assert.equal(rule.Status, "Enabled");
+  assert.equal((rule.ExpirationInDays as number) <= 7, true, "exports must not linger");
+  assert.ok(rule.AbortIncompleteMultipartUpload, "an interrupted export must not bill forever");
+  assert.equal(props.VersioningConfiguration, undefined, "a version is a second copy of the PII");
+  assert.deepEqual(props.PublicAccessBlockConfiguration, {
+    BlockPublicAcls: true,
+    BlockPublicPolicy: true,
+    IgnorePublicAcls: true,
+    RestrictPublicBuckets: true,
+  });
+});

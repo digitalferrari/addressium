@@ -121,6 +121,20 @@ export class DynamoStores implements Stores {
     return (res.Item as Item<T> | undefined)?.data;
   }
 
+  /**
+   * The same pagination as `queryAll`, yielding each item as it arrives rather
+   * than accumulating them (#224). One page — at most ~1MB — is resident at a
+   * time, so an export's memory ceiling is the page size instead of the org.
+   */
+  private async *queryPages<T>(params: QueryCommandInput): AsyncGenerator<T> {
+    let ExclusiveStartKey: Record<string, unknown> | undefined;
+    do {
+      const res = await this.doc.send(new QueryCommand({ ...params, ExclusiveStartKey }));
+      for (const it of res.Items ?? []) yield (it as Item<T>).data;
+      ExclusiveStartKey = res.LastEvaluatedKey as Record<string, unknown> | undefined;
+    } while (ExclusiveStartKey);
+  }
+
   /** Query following LastEvaluatedKey so large result sets aren't truncated. */
   private async queryAll<T>(params: QueryCommandInput): Promise<T[]> {
     const items: T[] = [];
@@ -193,6 +207,12 @@ export class DynamoStores implements Stores {
     // prefix so #META / LIST# / SEGMENT# siblings are excluded. Paginated.
     list: (orgId) =>
       this.queryAll<Subscriber>({
+        TableName: this.tableName,
+        KeyConditionExpression: "pk = :pk AND begins_with(sk, :s)",
+        ExpressionAttributeValues: { ":pk": org(orgId), ":s": "SUBSCRIBER#" },
+      }),
+    stream: (orgId) =>
+      this.queryPages<Subscriber>({
         TableName: this.tableName,
         KeyConditionExpression: "pk = :pk AND begins_with(sk, :s)",
         ExpressionAttributeValues: { ":pk": org(orgId), ":s": "SUBSCRIBER#" },

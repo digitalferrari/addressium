@@ -150,18 +150,29 @@ test("importMapped() carries newListDefaults when the plan creates a list", asyn
   expect(body.newListDefaults.physicalAddress).toBe("p");
 });
 
-test("exportData() sends the auth header — a plain link would 403", async () => {
-  // A signed-in operator. Without this the header is correctly absent, which is
-  // exactly why a bare <a href> to the export route cannot work.
+test("exportData() returns a presigned link, not the file (#224)", async () => {
+  // The export streams to S3 and the response is a pointer: an API Gateway
+  // response is capped at 6MB, so returning the file failed for exactly the org
+  // large enough to want one. The CALL is still authorized — hence the header —
+  // while the URL it hands back is pre-authorized and carries none.
   sessionStorage.setItem("addressium.tokens", JSON.stringify({ idToken: "id-token-abc" }));
-  fetchMock.mockResolvedValueOnce({ ok: true, text: async () => "email\na@x.com\n" });
-  const text = await api.exportData("acme", "csv", true);
+  fetchMock.mockResolvedValueOnce({
+    ok: true,
+    json: async () => ({
+      format: "csv",
+      bytes: 4096,
+      url: "https://s3.example/exports/acme/x.csv?X-Amz-Signature=abc",
+      expiresAt: "2026-07-28T12:05:00.000Z",
+    }),
+  });
+  const link = await api.exportData("acme", "csv", true);
   const { url, init } = lastCall();
   expect(url).toMatch(/\/orgs\/acme\/export\?format=csv&includeUnsubscribed=true$/);
-  // The route is authorized; navigating to it in a browser carries no header.
-  expect((init.headers as Record<string, string>).authorization).toBeDefined();
   expect((init.headers as Record<string, string>).authorization).toContain("id-token-abc");
-  expect(text).toContain("a@x.com");
+  expect(link.url).toContain("X-Amz-Signature");
+  // The expiry is surfaced because the URL is a bearer credential for the whole
+  // subscriber base and cannot be revoked once handed out.
+  expect(link.expiresAt).toBe("2026-07-28T12:05:00.000Z");
   sessionStorage.removeItem("addressium.tokens");
 });
 

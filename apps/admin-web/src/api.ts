@@ -293,6 +293,16 @@ export interface ImportBatchDetail {
   batch: ImportBatch;
   rows: { subscriberId: string; listId: string }[];
 }
+/**
+ * A presigned download (#224). `url` is a bearer credential for the whole
+ * export — anyone holding it can fetch the file until `expiresAt`.
+ */
+export interface ExportLink {
+  format: "csv" | "jsonl";
+  bytes: number;
+  url: string;
+  expiresAt: string;
+}
 export interface NewListDefaults {
   fromAddress: string;
   complianceFooter: string;
@@ -345,19 +355,19 @@ export const api = {
   setMemberEnabled: (orgId: string, username: string, enabled: boolean) =>
     call<{ ok: boolean }>("POST", `/team`, { orgId, action: enabled ? "enable" : "disable", username }),
   /**
-   * Bulk export (#224). Fetched rather than linked: the route is authorized, and
-   * a plain <a href> carries no Authorization header, so navigating to it would
-   * simply 403. The caller turns the text into a download.
+   * Bulk export (#224). The route streams the file to S3 and returns a
+   * short-lived presigned URL, so the response is a pointer rather than the
+   * export — an API Gateway response is capped at 6MB, which the org most likely
+   * to be leaving would blow straight through.
+   *
+   * The call itself is still authorized (hence fetch, not a link); the URL it
+   * returns is pre-authorized and needs no header.
    */
-  exportData: async (orgId: string, format: "csv" | "jsonl", includeUnsubscribed: boolean): Promise<string> => {
-    const tokens = getTokens();
-    const qs = `format=${format}${includeUnsubscribed ? "&includeUnsubscribed=true" : ""}`;
-    const res = await fetch(`${BASE}/orgs/${orgId}/export?${qs}`, {
-      headers: { ...(tokens ? { authorization: `Bearer ${tokens.idToken}` } : {}) },
-    });
-    if (!res.ok) throw new Error(`export failed: ${res.status} ${await res.text()}`);
-    return res.text();
-  },
+  exportData: (orgId: string, format: "csv" | "jsonl", includeUnsubscribed: boolean) =>
+    call<ExportLink>(
+      "GET",
+      `/orgs/${orgId}/export?format=${format}${includeUnsubscribed ? "&includeUnsubscribed=true" : ""}`,
+    ),
   saveMapping: (orgId: string, name: string, fingerprint: string, plan: MappingPlan) =>
     call<SavedMapping>("POST", `/orgs/${orgId}/import/mappings`, { name, fingerprint, plan }),
   importPreview: (orgId: string, csv: string, consentBasis?: "explicit" | "implicit") =>

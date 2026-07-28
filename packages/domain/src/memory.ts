@@ -95,6 +95,11 @@ export class MemSubscribers implements SubscriberStore {
   async list(orgId: string) {
     return [...this.byId.values()].filter((s) => s.orgId === orgId);
   }
+  async *stream(orgId: string) {
+    // A fake cannot demonstrate bounded memory, but it must expose the same
+    // shape so export code paths are exercised by the unit suite.
+    for (const s of this.byId.values()) if (s.orgId === orgId) yield s;
+  }
   async markEngaged(orgId: string, sub: string, at: string) {
     const s = this.byId.get(subKey(orgId, sub));
     if (s && (!s.lastEngagedAt || s.lastEngagedAt < at)) {

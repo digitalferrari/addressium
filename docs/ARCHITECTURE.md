@@ -830,18 +830,31 @@ per §9.2 — the external ops topic and the CloudWatch dashboard, both
   to is anonymized — but the honest description is "the profile is anonymized and
   the address is tombstoned", not "the person's data is gone". Erasure reaching
   S3 is **[Decided r2 — not yet built]** (#164).
-- **Bulk export / portability** (compendium #58)
-  **Now built** (#224): CSV **and** JSONL, including consent
-  provenance, round-trip importable through §4.7, because *users must be able to
-  leave*. Nothing of this
-  exists yet: there is no export route, no export writer, and no CSV or JSONL
-  emitter anywhere in the codebase. The only thing called "export" today is the
-  single-subject DSAR above, which returns JSON in an HTTP response. Until this
-  lands, the project's core promise — "your data never leaves your account, and
-  you can export it at any time" — is only half true.
-- **Consent provenance** (timestamp / IP / source URL) is captured on signup and
+- **Bulk export / portability** (compendium #58, #224). CSV **and** JSONL,
+  including consent provenance, round-trip importable through §4.7 — because
+  *users must be able to leave*, and an export nobody can read back is a file
+  rather than portability. `GET /orgs/{org}/export` sits behind the destructive
+  -tier capability, not the read-only one: taking an entire subscriber base out
+  of the system is a privileged act, and it is audited (§4.19).
+
+  **The response is a pointer, not the payload.** The file streams to a
+  dedicated S3 bucket as it is produced and the caller gets a presigned URL
+  valid for five minutes. Two reasons, both of which bite the largest org first
+  — the one most likely to be leaving. An API Gateway response is capped at
+  **6MB**, so returning the file inline failed for exactly that org; and holding
+  the whole export in Lambda memory to return it is the OOM #182 is about.
+  Subscribers are read one Dynamo page at a time (`SubscriberStore.stream`), and
+  CSV takes a deliberate second pass to learn the attribute columns rather than
+  buffering every row to discover them — the key set is bounded by the org's
+  schema, the row set by nothing.
+
+  The presigned URL is a **bearer credential for the whole subscriber base** and
+  cannot be revoked, so its short lifetime is the control; object keys carry a
+  random segment so one org's URL reveals nothing about another's, and the
+  bucket expires every object after seven days regardless.
+- **Consent provenance** (timestamp / IP / source URL) is captured on signup
+  (#220) and on import as the same `SubscriptionConsent` shape (#223);
   configurable **event retention** (e.g. 13 / 25 months) supports compliance.
-  Imported subscribers are the exception and carry none (§4.7).
 - **Audit log:** every privileged admin action (sends, closes, deletes, key
   rotations, org provisioning, manual unsubscribes) is recorded **immutably**
   with member + org + timestamp, into a dedicated S3 bucket under **Object

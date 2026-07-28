@@ -8,6 +8,7 @@
 import {
   CloudWatchHealth,
   S3AuditLog,
+  S3ExportWriter,
   CognitoAdminDirectory,
   CognitoSubscriberAccounts,
   DynamoStores,
@@ -37,8 +38,8 @@ import {
   manualSuppress,
   liftSuppression,
   capabilitiesOf,
-  exportCsv,
-  exportJsonl,
+  exportCsvChunks,
+  exportJsonlChunks,
   importCsvSubscribers,
   inviteMember,
   listTeam,
@@ -128,6 +129,9 @@ async function confirmSigner(): Promise<HmacConfirmationSigner> {
   }
   return _confirmSigner;
 }
+
+let _exportWriter: S3ExportWriter | undefined;
+const exportWriter = () => (_exportWriter ??= new S3ExportWriter(env("EXPORT_BUCKET")));
 
 let _scheduler: EventBridgeScheduler | undefined;
 const scheduler = () =>
@@ -811,19 +815,31 @@ export async function exportHandler(event: HttpEvent): Promise<HttpResult> {
     const includeUnsubscribed = event.queryStringParameters?.includeUnsubscribed === "true";
     const opts = { orgId, ...(listId ? { listId } : {}), ...(includeUnsubscribed ? { includeUnsubscribed } : {}) };
 
-    const body = format === "jsonl" ? await exportJsonl(stores(), opts) : await exportCsv(stores(), opts);
+    // Streamed to S3, never returned inline (#224, #182). API Gateway caps a
+    // response at 6MB, so returning the file made the export fail for precisely
+    // the org large enough to want one — and it had to be whole in Lambda memory
+    // to be returned at all. The response is a pointer now.
+    const chunks =
+      format === "jsonl" ? exportJsonlChunks(stores(), opts) : exportCsvChunks(stores(), opts);
+    const upload = await exportWriter().write(orgId, format, chunks, clock.now());
+
     // Taking an entire subscriber base out of the system is the single most
-    // sensitive read this product offers.
-    await audit(event, orgId, "subscribers.export", `${format}${listId ? ` list=${listId}` : ""}`);
-    const stamp = clock.now().toISOString().slice(0, 10);
-    return {
-      statusCode: 200,
-      headers: {
-        "content-type": format === "jsonl" ? "application/x-ndjson" : "text/csv",
-        "content-disposition": `attachment; filename="addressium-${orgId}-${stamp}.${format}"`,
-      },
-      body,
-    };
+    // sensitive read this product offers. Audited AFTER the write so the entry
+    // names the object that actually exists.
+    await audit(
+      event,
+      orgId,
+      "subscribers.export",
+      `${format}${listId ? ` list=${listId}` : ""} key=${upload.key} bytes=${upload.bytes}`,
+    );
+    return json(200, {
+      format,
+      bytes: upload.bytes,
+      // A bearer credential for the whole file. Short-lived by design, and the
+      // object behind it is expired by the bucket regardless.
+      url: upload.url,
+      expiresAt: upload.expiresAt,
+    });
   } catch (e) {
     return fail(e);
   }

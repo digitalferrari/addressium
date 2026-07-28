@@ -84,8 +84,7 @@ export interface ExportOptions {
  * writer can consume this without materialising the export.
  */
 export async function* exportRows(stores: Stores, opts: ExportOptions): AsyncGenerator<ExportRow> {
-  const subscribers = await stores.subscribers.list(opts.orgId);
-  for (const s of subscribers) {
+  for await (const s of stores.subscribers.stream(opts.orgId)) {
     const subs = await stores.subscriptions.listBySubscriber(opts.orgId, s.sub);
     const entries: SuppressionEntry[] = await stores.suppression.entriesFor(opts.orgId, s.email);
     const suppressed = entries.length > 0;
@@ -120,30 +119,56 @@ export async function* exportRows(stores: Stores, opts: ExportOptions): AsyncGen
  * a single JSON blob in one cell would round-trip as an opaque string rather
  * than as attributes.
  */
-export async function exportCsv(stores: Stores, opts: ExportOptions): Promise<string> {
-  const rows: ExportRow[] = [];
+export async function* exportCsvChunks(
+  stores: Stores,
+  opts: ExportOptions,
+): AsyncGenerator<string> {
+  // Two passes, deliberately. A CSV header must name every attribute column
+  // before the first data row, and attribute keys vary per subscriber — so the
+  // choice is between holding every ROW in memory to learn the key set, or
+  // reading the subscribers twice and holding only the KEYS. The key set is
+  // bounded by the org's schema; the row set is bounded by nothing. Double
+  // Dynamo reads are the cheaper half of that trade, and this is the path that
+  // has to survive the largest org in the deployment.
   const attrKeys = new Set<string>();
   for await (const r of exportRows(stores, opts)) {
-    rows.push(r);
     for (const k of Object.keys(r.attributes)) attrKeys.add(k);
   }
   const attrCols = [...attrKeys].sort();
-  const header = [...FIXED_COLUMNS, ...attrCols.map((k) => `attr.${k}`)];
+  yield [...FIXED_COLUMNS, ...attrCols.map((k) => `attr.${k}`)].join(",") + "\n";
 
-  const lines = [header.join(",")];
-  for (const r of rows) {
+  for await (const r of exportRows(stores, opts)) {
     const fixed = FIXED_COLUMNS.map((c) => csvCell(r[c]));
     const attrs = attrCols.map((k) => csvCell(r.attributes[k]));
-    lines.push([...fixed, ...attrs].join(","));
+    yield [...fixed, ...attrs].join(",") + "\n";
   }
-  return lines.join("\n") + "\n";
 }
 
-/** JSON Lines — lossless, one row per line, streamable. */
+/** Buffered CSV. Fine for a console preview; use the chunk form for a real export. */
+export async function exportCsv(stores: Stores, opts: ExportOptions): Promise<string> {
+  return collect(exportCsvChunks(stores, opts));
+}
+
+/**
+ * JSON Lines — lossless, one row per line. Genuinely single-pass: there is no
+ * header to declare, so a row can be emitted the moment it is read.
+ */
+export async function* exportJsonlChunks(
+  stores: Stores,
+  opts: ExportOptions,
+): AsyncGenerator<string> {
+  for await (const r of exportRows(stores, opts)) yield JSON.stringify(r) + "\n";
+}
+
+/** Buffered JSONL. Same caveat as `exportCsv`. */
 export async function exportJsonl(stores: Stores, opts: ExportOptions): Promise<string> {
+  return collect(exportJsonlChunks(stores, opts));
+}
+
+async function collect(chunks: AsyncIterable<string>): Promise<string> {
   const out: string[] = [];
-  for await (const r of exportRows(stores, opts)) out.push(JSON.stringify(r));
-  return out.join("\n") + (out.length > 0 ? "\n" : "");
+  for await (const c of chunks) out.push(c);
+  return out.join("");
 }
 
 /**

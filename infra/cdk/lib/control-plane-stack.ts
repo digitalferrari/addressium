@@ -196,6 +196,26 @@ export class ControlPlaneStack extends Stack {
         },
       ],
     });
+    // Bulk export staging (#224). Short-lived by construction: an export object
+    // is the entire subscriber base of an org in one file, and the presigned URL
+    // handed out for it cannot be revoked — so the object's own lifetime is the
+    // backstop. Seven days, not "forever", and incomplete multipart uploads are
+    // swept so an interrupted export is not billed indefinitely.
+    //
+    // Not versioned, unlike the archive and analytics buckets: a version here is
+    // a second full copy of the same PII, and expiry would then have to chase
+    // noncurrent versions to actually delete anything.
+    const exportBucket = new Bucket(this, "ExportBucket", {
+      blockPublicAccess: BlockPublicAccess.BLOCK_ALL,
+      enforceSSL: true,
+      lifecycleRules: [
+        {
+          id: "expire-exports",
+          expiration: Duration.days(7),
+          abortIncompleteMultipartUploadAfter: Duration.days(1),
+        },
+      ],
+    });
     // Audit log backed by S3 Object Lock (WORM) — history can't be rewritten
     // even by an admin (§4.19, docs/SECURITY.md §4.3, #29).
     //
@@ -427,6 +447,7 @@ export class ControlPlaneStack extends Stack {
       CONFIRM_SECRET_ARN: confirmSecret.secretArn,
       WEBHOOK_SECRET_ARN: webhookSecret.secretArn,
       AUDIT_BUCKET: auditBucket.bucketName, // WORM audit sink (#29)
+      EXPORT_BUCKET: exportBucket.bucketName, // bulk export staging (#224)
     };
     const signupFn = fn("SignupFn", apiEntry, "signupHandler", {
       ...apiEnv,
@@ -714,6 +735,12 @@ export class ControlPlaneStack extends Stack {
     // team changes, erasure, bulk export, alert thresholds. grantPut only — an
     // audit log its own writer can delete from is not an audit log.
     auditBucket.grantPut(adminApiFn);
+    // Write the export, then presign a GET of it. Read is needed because a
+    // presigned URL can only carry permissions the signer itself holds — a
+    // write-only role would sign a URL that 403s. Scoped to this bucket, whose
+    // lifecycle deletes everything in it after seven days (#224).
+    exportBucket.grantPut(adminApiFn);
+    exportBucket.grantRead(adminApiFn);
     adminApiFn.addToRolePolicy(
       new PolicyStatement({
         effect: Effect.ALLOW,

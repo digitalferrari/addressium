@@ -12,7 +12,9 @@ import {
   HmacConfirmationSigner,
   confirmOptIn,
   exportCsv,
+  exportCsvChunks,
   exportJsonl,
+  exportJsonlChunks,
   exportRows,
   importWithMapping,
   memStores,
@@ -204,4 +206,59 @@ test("listId narrows the export to one list", async () => {
   for await (const r of exportRows(stores, { orgId: ORG, listId: "weekly" })) rows.push(r);
   assert.equal(rows.length, 1);
   assert.equal(rows[0]?.listId, "weekly");
+});
+
+/**
+ * Streaming (#224, #182).
+ *
+ * The buffered forms are now conveniences over the chunk generators, and it is
+ * the generators the export route uses. Two things must hold: the chunked and
+ * buffered forms produce byte-identical output, and neither reads the whole
+ * subscriber base into an array on the way.
+ */
+async function drain(chunks: AsyncIterable<string>): Promise<string[]> {
+  const out: string[] = [];
+  for await (const c of chunks) out.push(c);
+  return out;
+}
+
+test("chunked and buffered CSV are byte-identical", async () => {
+  const stores = await seeded();
+  const chunks = await drain(exportCsvChunks(stores, { orgId: ORG }));
+  assert.equal(chunks.join(""), await exportCsv(stores, { orgId: ORG }));
+  // One chunk per line, header first — so a writer can upload as it goes rather
+  // than waiting for the whole file.
+  assert.ok(chunks.length > 1);
+  assert.ok(chunks[0]?.startsWith("email,"));
+  assert.ok(chunks.every((c) => c.endsWith("\n")));
+});
+
+test("chunked and buffered JSONL are byte-identical", async () => {
+  const stores = await seeded();
+  const chunks = await drain(exportJsonlChunks(stores, { orgId: ORG }));
+  assert.equal(chunks.join(""), await exportJsonl(stores, { orgId: ORG }));
+  for (const c of chunks) JSON.parse(c); // every chunk is one complete record
+});
+
+test("the export never materializes the subscriber base", async () => {
+  // `subscribers.list` returns one array of every subscriber in the org — the
+  // Lambda OOM #182 is about, hit first by the largest org, which is the one
+  // most likely to be leaving. The export path must use `stream` instead.
+  const stores = await seeded();
+  stores.subscribers.list = async () => {
+    throw new Error("bulk export must not call subscribers.list");
+  };
+  const csvOut = await exportCsv(stores, { orgId: ORG });
+  assert.ok(csvOut.includes("@"));
+  assert.ok((await exportJsonl(stores, { orgId: ORG })).includes("@"));
+});
+
+test("an empty org exports a header and nothing else", async () => {
+  // A zero-row export must still be a valid file — a re-import of it should be
+  // a no-op, not a parse error.
+  const stores = memStores();
+  const chunks = await drain(exportCsvChunks(stores, { orgId: "nobody" }));
+  assert.equal(chunks.length, 1);
+  assert.ok(chunks[0]?.startsWith("email,"));
+  assert.deepEqual(await drain(exportJsonlChunks(stores, { orgId: "nobody" })), []);
 });

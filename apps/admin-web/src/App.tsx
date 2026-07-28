@@ -1410,15 +1410,20 @@ function BulkExport({ org }: { org: string }) {
     setBusy(true);
     setMsg("");
     try {
-      const text = await api.exportData(org, format, includeUnsubscribed);
-      const blob = new Blob([text], { type: format === "csv" ? "text/csv" : "application/x-ndjson" });
-      const url = URL.createObjectURL(blob);
+      const link = await api.exportData(org, format, includeUnsubscribed);
+      // The file is already in S3; this URL is pre-authorized, so a plain
+      // navigation works and the bytes never pass through the browser's memory
+      // the way a blob would.
       const a = document.createElement("a");
-      a.href = url;
+      a.href = link.url;
       a.download = `addressium-${org}-${new Date().toISOString().slice(0, 10)}.${format}`;
       a.click();
-      URL.revokeObjectURL(url);
-      setMsg("Downloaded.");
+      const kb = Math.max(1, Math.round(link.bytes / 1024));
+      setMsg(
+        `Exported ${kb.toLocaleString()} KB. The download link expires at ` +
+          `${new Date(link.expiresAt).toLocaleTimeString()} — it grants the whole file to anyone ` +
+          `holding it, so don't paste it anywhere.`,
+      );
     } catch (e) {
       setMsg((e as Error).message);
     } finally {
