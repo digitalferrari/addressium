@@ -17,7 +17,7 @@
     "@addressium/segment": "0.1.0",
     "@aws-crypto/sha256-js": "^5.2.0",
     "@aws-sdk/client-cloudwatch": "^3.1096.0",
-    "@aws-sdk/client-cognito-identity-provider": "^3.1091.0",
+    "@aws-sdk/client-cognito-identity-provider": "^3.1096.0",
     "@aws-sdk/client-dynamodb": "^3.600.0",
     "@aws-sdk/client-kms": "^3.1091.0",
     "@aws-sdk/client-s3": "^3.600.0",
