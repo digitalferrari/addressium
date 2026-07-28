@@ -1,0 +1,294 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  addressium bootstrap — creates the deploy identity, permissions boundary and
+  cost guardrail for an account that will host addressium. Run ONCE per account
+  and region, by the account owner. Nothing here holds application data, so it
+  can be updated or deleted independently of the application stack.
+
+Metadata:
+  # Why a CloudFormation template rather than a shell script: this is state that
+  # needs to be UPDATED over time as the app's required permissions change. A
+  # script can create, but it cannot diff, roll back, or cleanly uninstall.
+  # A stack can do all three, and needs no local tooling — the launch URL in
+  # scripts/README.md opens it in the console.
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label: { default: "Identity" }
+        Parameters: [AdminEmail, DeployPrincipalType, TrustedPrincipalArn]
+      - Label: { default: "Guardrails" }
+        Parameters: [MonthlyBudgetUsd, CdkQualifier]
+      - Label: { default: "Naming" }
+        Parameters: [Stage]
+    ParameterLabels:
+      AdminEmail: { default: "Admin email (console login + budget alerts)" }
+      DeployPrincipalType: { default: "Deploy identity type" }
+      TrustedPrincipalArn: { default: "ARN allowed to assume the deploy role" }
+
+Parameters:
+  Stage:
+    Type: String
+    Default: dev
+    AllowedPattern: "^[a-z0-9-]{1,20}$"
+    Description: Deployment stage. Must match addressium.config.json.
+
+  AdminEmail:
+    Type: String
+    AllowedPattern: "^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$"
+    Description: Receives budget alerts and becomes the seeded console admin.
+
+  DeployPrincipalType:
+    Type: String
+    Default: Role
+    AllowedValues: [Role, User]
+    Description: >-
+      Role (recommended) issues short-lived STS credentials that expire.
+      User issues long-lived access keys — only pick this if the consumer
+      genuinely cannot assume a role.
+
+  TrustedPrincipalArn:
+    Type: String
+    Default: ""
+    Description: >-
+      Who may assume the deploy role. Leave blank to trust the account root
+      (any IAM principal in this account with sts:AssumeRole). Ignored when
+      DeployPrincipalType is User.
+
+  MonthlyBudgetUsd:
+    Type: Number
+    Default: 10
+    MinValue: 1
+    Description: Alerts at 80% of this. addressium costs ~$2/mo at test volume.
+
+  CdkQualifier:
+    Type: String
+    Default: hnb659fds
+    AllowedPattern: "^[a-z0-9]{1,10}$"
+    Description: >-
+      Must match the qualifier used by `cdk bootstrap`. Only change this if you
+      also set @aws-cdk/core:bootstrapQualifier in infra/cdk/cdk.json.
+
+Conditions:
+  UseRole: !Equals [!Ref DeployPrincipalType, "Role"]
+  UseUser: !Equals [!Ref DeployPrincipalType, "User"]
+  HasTrustedPrincipal: !Not [!Equals [!Ref TrustedPrincipalArn, ""]]
+
+Resources:
+  # --------------------------------------------------------------------------
+  # Permissions boundary.
+  #
+  # This is the load-bearing control. Anything that can `cdk deploy` this stack
+  # can create IAM roles, and creating IAM roles is escalation to administrator
+  # unless something caps it. Without this, a "scoped" deploy identity is
+  # theatre. Every role the deployment creates inherits this boundary.
+  # --------------------------------------------------------------------------
+  DeploymentBoundary:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub "addressium-${Stage}-boundary"
+      Description: Caps what any addressium-deployed role can ever do.
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: ServicesTheApplicationNeeds
+            Effect: Allow
+            Action:
+              - dynamodb:*
+              - s3:*
+              - sqs:*
+              - sns:*
+              - ses:*
+              - kms:*
+              - cognito-idp:*
+              - lambda:*
+              - logs:*
+              - cloudwatch:*
+              - states:*
+              - scheduler:*
+              - secretsmanager:*
+              - apigateway:*
+              - execute-api:*
+              - firehose:*
+              - kinesis:*
+              - athena:*
+              - glue:*
+              - aoss:*
+              - wafv2:*
+              - cloudfront:*
+              - xray:*
+              - iam:PassRole
+            Resource: "*"
+          - Sid: NoPrivilegeEscalation
+            Effect: Deny
+            Action:
+              - iam:CreateUser
+              - iam:CreateAccessKey
+              - iam:AttachUserPolicy
+              - iam:PutUserPolicy
+              - iam:UpdateAssumeRolePolicy
+              - iam:DeleteRolePermissionsBoundary
+              - iam:PutRolePermissionsBoundary
+              - organizations:*
+              - account:*
+              - aws-portal:*
+            Resource: "*"
+
+  # --------------------------------------------------------------------------
+  # Deploy identity.
+  #
+  # Deliberately tiny. It does NOT get the union of what the app needs — it only
+  # gets permission to assume the roles that `cdk bootstrap` created, and those
+  # only act on stacks carrying the CDK qualifier. CDK already solved this; a
+  # hand-written mega-policy here would be strictly worse and would rot.
+  # --------------------------------------------------------------------------
+  DeployPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub "addressium-${Stage}-deploy"
+      Description: Deploy and observe addressium. Cannot touch anything else.
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AssumeCdkRolesOnly
+            Effect: Allow
+            Action: sts:AssumeRole
+            Resource:
+              - !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/cdk-${CdkQualifier}-deploy-role-${AWS::AccountId}-${AWS::Region}"
+              - !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/cdk-${CdkQualifier}-file-publishing-role-${AWS::AccountId}-${AWS::Region}"
+              - !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/cdk-${CdkQualifier}-image-publishing-role-${AWS::AccountId}-${AWS::Region}"
+              - !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/cdk-${CdkQualifier}-lookup-role-${AWS::AccountId}-${AWS::Region}"
+          - Sid: ReadBootstrapVersion
+            Effect: Allow
+            Action: ssm:GetParameter
+            Resource: !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/cdk-bootstrap/${CdkQualifier}/version"
+          - Sid: ObserveOwnDeployments
+            Effect: Allow
+            Action:
+              - cloudformation:DescribeStacks
+              - cloudformation:DescribeStackEvents
+              - cloudformation:DescribeStackResources
+              - cloudformation:GetTemplate
+              - cloudformation:ListStacks
+            Resource: "*"
+          - Sid: OperateAndSmokeTest
+            # Read-only plus the narrow writes an end-to-end test needs. Notably
+            # absent: any ability to create IAM principals or read secrets.
+            Effect: Allow
+            Action:
+              - s3:GetObject
+              - s3:ListBucket
+              - s3:DeleteObject
+              - dynamodb:Query
+              - dynamodb:GetItem
+              - dynamodb:Scan
+              - ses:GetAccount
+              - ses:ListEmailIdentities
+              - ses:GetEmailIdentity
+              - logs:FilterLogEvents
+              - logs:GetLogEvents
+              - logs:DescribeLogGroups
+              - lambda:InvokeFunction
+              - lambda:GetFunction
+            Resource: "*"
+
+  DeployRole:
+    Type: AWS::IAM::Role
+    Condition: UseRole
+    Properties:
+      RoleName: !Sub "addressium-${Stage}-deployer"
+      Description: Assume this to deploy addressium. Credentials expire.
+      MaxSessionDuration: 3600
+      PermissionsBoundary: !Ref DeploymentBoundary
+      ManagedPolicyArns: [!Ref DeployPolicy]
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: !If
+                - HasTrustedPrincipal
+                - !Ref TrustedPrincipalArn
+                - !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:root"
+            Action: sts:AssumeRole
+
+  DeployUser:
+    Type: AWS::IAM::User
+    Condition: UseUser
+    Properties:
+      UserName: !Sub "addressium-${Stage}-deployer"
+      PermissionsBoundary: !Ref DeploymentBoundary
+      ManagedPolicyArns: [!Ref DeployPolicy]
+
+  # Access keys are emitted only on request, and the secret is returned via
+  # GetAtt so it lands in the stack outputs rather than anywhere persistent.
+  # Prefer DeployPrincipalType=Role and avoid static keys entirely.
+  DeployUserKey:
+    Type: AWS::IAM::AccessKey
+    Condition: UseUser
+    Properties:
+      UserName: !Ref DeployUser
+
+  # --------------------------------------------------------------------------
+  # Cost guardrail. Created here rather than in the app stack so it survives
+  # `cdk destroy` and covers the account even when nothing is deployed.
+  # --------------------------------------------------------------------------
+  CostBudget:
+    Type: AWS::Budgets::Budget
+    Properties:
+      Budget:
+        BudgetName: !Sub "addressium-${Stage}"
+        BudgetType: COST
+        TimeUnit: MONTHLY
+        BudgetLimit:
+          Amount: !Ref MonthlyBudgetUsd
+          Unit: USD
+      NotificationsWithSubscribers:
+        - Notification:
+            NotificationType: ACTUAL
+            ComparisonOperator: GREATER_THAN
+            Threshold: 80
+            ThresholdType: PERCENTAGE
+          Subscribers:
+            - SubscriptionType: EMAIL
+              Address: !Ref AdminEmail
+        - Notification:
+            NotificationType: FORECASTED
+            ComparisonOperator: GREATER_THAN
+            Threshold: 100
+            ThresholdType: PERCENTAGE
+          Subscribers:
+            - SubscriptionType: EMAIL
+              Address: !Ref AdminEmail
+
+Outputs:
+  BoundaryArn:
+    Description: Pass to `cdk bootstrap --custom-permissions-boundary`
+    Value: !Sub "addressium-${Stage}-boundary"
+    Export: { Name: !Sub "addressium-${Stage}-boundary-name" }
+
+  NextStep:
+    Description: Run this once, as the account owner, to finish setup
+    Value: !Sub >-
+      npx cdk bootstrap aws://${AWS::AccountId}/${AWS::Region}
+      --qualifier ${CdkQualifier}
+      --custom-permissions-boundary addressium-${Stage}-boundary
+
+  DeployRoleArn:
+    Condition: UseRole
+    Description: Assume this to deploy. Hand the ARN over, not credentials.
+    Value: !GetAtt DeployRole.Arn
+
+  AssumeCommand:
+    Condition: UseRole
+    Description: How the deployer obtains temporary credentials
+    Value: !Sub "aws sts assume-role --role-arn ${DeployRole.Arn} --role-session-name addressium --duration-seconds 3600"
+
+  DeployUserAccessKeyId:
+    Condition: UseUser
+    Value: !Ref DeployUserKey
+
+  DeployUserSecretKey:
+    Condition: UseUser
+    Description: >-
+      Copy once, store as an environment variable, never commit. Rotate by
+      updating this stack. Prefer DeployPrincipalType=Role instead.
+    Value: !GetAtt DeployUserKey.SecretAccessKey

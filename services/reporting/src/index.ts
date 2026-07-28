@@ -25,6 +25,7 @@ export interface ReportEvent {
   pathParameters?: { org?: string; campaign?: string } | null;
   orgId?: string;
   campaignId?: string;
+  requestContext?: { authorizer?: { jwt?: { claims?: Record<string, string> } } };
 }
 
 export async function handler(event: ReportEvent) {
@@ -32,6 +33,15 @@ export async function handler(event: ReportEvent) {
   const campaignId = event.pathParameters?.campaign ?? event.campaignId;
   if (!orgId || !campaignId) {
     return { statusCode: 400, headers: {}, body: JSON.stringify({ error: "org and campaign required" }) };
+  }
+  // Org-scoped RBAC. The route sits behind the JWT authorizer, but authentication
+  // is not authorization: without this, ANY admin-pool user could read ANY org's
+  // counters, rates and click map by changing the path. Mirrors usageHandler.
+  try {
+    authorize(grantFromClaims(event.requestContext?.authorizer?.jwt?.claims ?? {}), "reports:view", orgId);
+  } catch (e) {
+    const msg = (e as Error).message;
+    return { statusCode: msg.startsWith("Forbidden") ? 403 : 400, headers: {}, body: JSON.stringify({ error: msg }) };
   }
   const s = stores();
   const report = await buildCampaignReport(s, orgId, campaignId);

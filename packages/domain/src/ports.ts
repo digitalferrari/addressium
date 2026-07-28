@@ -22,6 +22,7 @@ import type {
   SuppressionEntry,
   SuppressionScope,
   UsageRecord,
+  DeployedVersion,
 } from "@addressium/core";
 import type { EmailTemplate } from "./render.js";
 
@@ -116,10 +117,26 @@ export interface EntitlementStore {
   latest(orgId: string, subscriberId: string): Promise<EntitlementSync | undefined>;
 }
 
+/**
+ * The deployed-version marker (#213). A singleton item, not org-scoped: it
+ * describes the installation, and the migration runner reads it to decide which
+ * migrations are pending.
+ */
+export interface VersionStore {
+  get(): Promise<DeployedVersion | undefined>;
+  put(v: DeployedVersion): Promise<void>;
+}
+
 /** Idempotency guard: claim a campaign send exactly once (SQS is at-least-once). */
 export interface SendClaimStore {
   /** True if newly claimed (dispatch it); false if already dispatched. */
   claim(orgId: string, campaignId: string): Promise<boolean>;
+  /**
+   * Give a claim back when the dispatch it guarded did NOT happen, so a retry
+   * can try that recipient again. Without this a failed send burns the claim and
+   * the recipient is silently never emailed (#163). Must be idempotent.
+   */
+  release(orgId: string, campaignId: string): Promise<void>;
 }
 
 export interface CampaignStore {
@@ -187,8 +204,18 @@ export interface SentMessage {
   to: string;
   subject: string;
   html: string;
-  /** RFC 8058 one-click unsubscribe header value. */
+  /** Optional plain-text alternative part. Improves deliverability/spam scoring
+   *  and is expected by many clients; the SES adapter emits it as Body.Text. */
+  text?: string;
+  /** RFC 8058 List-Unsubscribe header value, angle-bracketed. An `https` URI
+   *  supports one-click POST; a `mailto:` value does not (see SesEmailSender). */
   listUnsubscribe: string;
+  /**
+   * Correlation ids stamped as SES message tags so the event feed can map a
+   * bounce/complaint/open/click back to a subscriber. Without them SES events
+   * carry no way to identify the recipient and are unprocessable (#184).
+   */
+  tags?: { orgId: string; campaignId: string; subscriberId: string };
 }
 export interface EmailSender {
   send(msg: SentMessage): Promise<void>;
@@ -267,6 +294,7 @@ export interface Stores {
   events: EventStore;
   entitlements: EntitlementStore;
   sendClaims: SendClaimStore;
+  version: VersionStore;
   campaigns: CampaignStore;
   series: CampaignSeriesStore;
   schedules: SendScheduleStore;

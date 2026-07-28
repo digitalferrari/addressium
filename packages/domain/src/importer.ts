@@ -117,7 +117,11 @@ export async function importCsvSubscribers(
       orgId: opts.orgId,
       subscriberId: subscriber.sub,
       listId: opts.listId,
-      status: opts.status ?? "confirmed",
+      // Default to `pending`, NOT `confirmed` (#192). The API handler documents
+      // this default, and silently marking an uploaded list confirmed bypasses
+      // double opt-in and records no consent — a GDPR Art. 7 problem and a
+      // spam-trap risk. Confirming an import must be an explicit caller choice.
+      status: opts.status ?? "pending",
       updatedAt: now,
     };
     await stores.subscriptions.put(subscription);

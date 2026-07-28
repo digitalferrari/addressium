@@ -1,114 +1,307 @@
 # addressium
 
-An open-source, self-hostable replacement for the email capabilities of
-**Amazon Pinpoint**. Deploy it into your own AWS account, verify a sending
-domain, and run email lists, signup forms, broadcasts, and drip automations —
-all serverless, at near-zero idle cost.
+A self-hosted replacement for the **email capabilities of Amazon Pinpoint**,
+which [sunsets on 30 October 2026](https://docs.aws.amazon.com/general/latest/gr/sunset_services.html).
+
+Runs entirely in **your** AWS account. You own the subscriber data (DynamoDB in
+your account) and you own the sending reputation (your own SES identity). Not a
+hosted SaaS — one deployment runs one or many **organizations**, all operated by
+the same owner.
 
 ![addressium admin console](docs/images/screenshot.png)
 
-> **Live demo:** try the click-through UI at **<https://addressium.com/>** (or
-> open [`demo/index.html`](demo/index.html) locally). It's a static, no-backend
-> prototype with sample data, published straight from this repo via GitHub Pages.
+> **Live demo:** the click-through UI at **<https://addressium.com/>** (or
+> [`demo/index.html`](demo/index.html) locally) — a static, no-backend prototype
+> with sample data.
 
-Pinpoint is being retired. addressium gives teams a path to keep running email
-lists on their own infrastructure: **you own the subscriber data** (DynamoDB in
-your account) and **you own the sending reputation** (your own Amazon SES
-identity). It is not a hosted SaaS — a single deployment runs one or many
-**organizations (silos)**, all operated by the same owner, entirely in that
-owner's AWS account.
+> ### ⚠️ Status: pre-1.0, not production-ready
+> This has **never been deployed to a real AWS account**. See
+> [Status](#status) before putting a real list near it.
 
-## Highlights
+---
 
-- **Serverless-first** — DynamoDB on-demand, Lambda, SES, S3/CloudFront. ~$0 at
-  idle; you pay AWS directly (~$0.10 per 1,000 emails via SES).
-- **Multi-organization** — run several publications as isolated silos (per-org
-  subscriber pool, signing key and sending identity) from one deployment.
-- **Dev/test orgs** — mark an org `environment: "dev"` to rehearse real campaigns
-  on the exact same production workflows. A dev org is its own full-domain silo
-  (e.g. `devsummitdaily.com` beside `summitdaily.com`), so a test blast can't
-  reach a live list; the console flags it with a **DEV** badge and its spend is
-  excluded from cost rollups.
-- **Email done well** — signup forms, double opt-in, preference center,
-  broadcasts + ongoing series, and drip automations.
-- **Deliverability built in** — DKIM/SPF/DMARC setup, RFC 8058 one-click
-  unsubscribe, suppression handling, complaint-rate protection, SNS alerts.
-- **Role-based access** — Developer Admin / Editor / Analyst (Sales) / Support,
-  scoped per organization and enforced server-side (Cedar policy engine).
-- **Brandable subscriber site** — per-org logo, theme colors and background,
-  plus per-list presentation toggles (frequency, send time, reader/free-paid
-  counts), applied with no rebuild.
-- **LLM-assisted analytics** — send a campaign's *aggregates only* (never
-  subscriber PII) to Anthropic / OpenAI / Gemini for a performance read and
-  suggestions; the API key stays in Secrets Manager.
-- **Migration-friendly** — first-class importer for Amazon Pinpoint exports and
-  CSV (endpoints, segments, suppression lists).
-- **One-command deploy** — AWS CDK (TypeScript) plus a guided setup wizard.
+## What it does
 
-## Documentation
+| | |
+|---|---|
+| **Lists & subscribers** | Double opt-in with consent provenance (timestamp, IP, source URL) |
+| **Campaigns** | Compose, schedule (now / at / recurring), send, pause, resume — never delete |
+| **RSS → newsletter** | Point it at an XML feed; each edition is built and sent automatically |
+| **Segments** | Dynamic predicates over attributes and engagement |
+| **Drip sequences** | Multi-step journeys with waits measured in days |
+| **Re-engagement & sunset** | Win-back sequence, then a clean unsubscribe for the unreachable |
+| **Reporting** | Opens, clicks, bounces, complaints, unsubscribes, delivery rates, per-link click maps |
+| **Suppression** | Automatic on bounce/complaint. Bounces suppress globally, unsubscribes per-org. |
+| **One-click unsubscribe** | RFC 8058 — required by Gmail and Yahoo for bulk senders |
+| **Deliverability auto-halt** | Stops a campaign mid-flight when bounce/complaint rates breach your thresholds |
+| **Multi-org silos** | Per-org KMS key, SES identity and config set. Dev orgs are fail-closed to an allowlist, so a test blast cannot reach a live list. |
+| **Brandable subscriber site** | Per-org logo, theme, background; per-list presentation toggles, no rebuild |
+| **RBAC** | Developer Admin / Editor / Analyst / Support, org-scoped, enforced server-side via Cedar |
+| **Import & export** | CSV in, CSV/JSONL out — including consent records, so you can leave |
 
-- [Deploying & operating addressium](docs/DEPLOYMENT.md) — from an empty AWS
-  account to a running deployment, provisioning an org, and configuring branding,
-  presentation and LLM analytics.
-- [Architecture & Design](docs/ARCHITECTURE.md) — the canonical system design.
-- [Security Design & Threat Model](docs/SECURITY.md) — STRIDE model, standards
-  mapping, and the hardened magic-link reference verifier.
-- [Security Policy](SECURITY.md) — how to report a vulnerability.
-- [Live demo / UI prototype](demo/index.html) — the admin console + subscriber
-  site design reference (hosted via GitHub Pages at <https://addressium.com/>).
+**Deliberately not included:** SMS, push, voice, in-app, recommender models, A/B
+testing, or an AI layer. Pinpoint's surviving non-email channels moved to AWS End
+User Messaging; this is email only, on purpose.
 
-## Security
+---
 
-addressium is built to public standards — OWASP ASVS (L2) & API Top 10, NIST
-SP 800-63B, RFC 8725 (JWT), CIS AWS Foundations, and SLSA/OpenSSF for the supply
-chain. The most security-sensitive integration point, the magic-link verifier,
-ships as a hardened, copy-paste module: `packages/magiclink-verify`. See
-[docs/SECURITY.md](docs/SECURITY.md).
+## Architecture
+
+```
+                     ┌──────────────┐
+  Operator ─────────▶│ Admin console│──┐
+                     └──────────────┘  │
+                                       ▼
+  Subscriber ───────▶┌─────────────────────────┐
+  Publisher site ───▶│  API Gateway HTTP API   │
+                     │  JWT authorizer PER     │
+                     │  route; public routes   │
+                     │  have none              │
+                     └───────────┬─────────────┘
+                                 │
+              ┌──────────────────┼──────────────────┐
+              ▼                  ▼                  ▼
+        AdminApiFn        Public functions    ProvisioningFn
+     (one router,        (signup, confirm,   (per-org KMS key,
+      27 routes)          unsubscribe, …)     SES identity)
+              │                  │                  │
+              └──────────────────┴─────────┬────────┘
+                                           ▼
+                                   ┌───────────────┐
+   Schedule ─▶ EventBridge ─▶ LaunchFn ─▶│  DynamoDB   │
+                                   │  single table │
+   Send ─────▶ SQS ─▶ SenderFn ─▶ SES ──▶│  RETAIN +   │
+                                   │  deletion     │
+   Results ◀─ EventsFn ◀─ SQS ◀─ SNS ◀───│  protection │
+                        (SES event dest) └───────────────┘
+```
+
+**21 Lambda functions, 252 CloudFormation resources.** One function serves all 27
+authenticated routes; the unauthenticated functions stay separate because they
+hold genuinely different privileges — merging them would give one
+internet-facing function the union of "can create Cognito users", "can send
+mail", and "holds the webhook signing secret".
+
+### Why each service
+
+| Service | Why this one |
+|---|---|
+| **DynamoDB** | Single-digit-ms reads at any list size, no capacity planning, no idle cost. A relational DB needs an always-on instance. |
+| **SES** | The mail transport. Per-org configuration sets isolate deliverability reputation between tenants. |
+| **SQS** | Decouples "schedule a campaign" from "send 500,000 emails" — retries, backpressure, partial-batch failure reporting. |
+| **SNS → SQS → Lambda** for events | SNS alone invokes Lambda *asynchronously*: two retries, then the event is **discarded**. A dropped bounce is an address you keep mailing. SQS in the middle gives durability and a dead-letter queue. |
+| **EventBridge Scheduler** | Timezone-aware recurring sends that track DST correctly. Plain cron does not. |
+| **Step Functions** | Drip steps wait days. Lambda cannot wait; Step Functions can, for fractions of a cent. |
+| **KMS (asymmetric, per org)** | Signs magic-link tokens. Per-org so one key's compromise cannot forge another org's tokens. The public half is published as JWKS, verifiable by any JWT library. |
+| **Cognito** | Operator login, MFA required, self-signup disabled. `custom:role` / `custom:orgs` claims drive server-side RBAC. |
+| **S3** | Rendered-body archive (powers click maps), audit log under Object Lock (GOVERNANCE), analytics archive. |
+| **CloudFront + OAC** | SPA delivery over HTTPS from private buckets. |
+
+### Services addressium does **not** create
+
+Your account probably already runs these. Creating our own would duplicate cost,
+fight your existing rules, or quietly bypass your security posture.
+
+| Service | What you do |
+|---|---|
+| **WAF** | Attach your own WebACL. The stack outputs the API stage ARN and both CloudFront distribution ARNs. |
+| **Ops alerting** | Set `opsAlertTopicArn` (an existing SNS topic) and/or `opsAlertEmail`. Alert routing is your infrastructure. |
+
+`doctor` warns when no WAF association or alert target is configured — shipping
+silently unprotected is worse than shipping without them.
+
+---
+
+## Install
+
+**Once, by the account owner, with admin credentials:**
+
+```bash
+aws cloudformation deploy \
+  --template-file infra/bootstrap/addressium-bootstrap.yaml \
+  --stack-name addressium-dev-bootstrap \
+  --capabilities CAPABILITY_NAMED_IAM \
+  --parameter-overrides AdminEmail=you@example.com Stage=dev
+
+npx cdk bootstrap aws://<account>/<region> \
+  --custom-permissions-boundary addressium-dev-boundary
+```
+
+This creates a deploy identity that can deploy and operate addressium **and
+nothing else**, constrained by a permissions boundary. Admin credentials never
+have to be handed to a pipeline, a teammate, or an agent.
+
+**Then, as the deployer:**
+
+```bash
+npm install
+npm run build
+npm run deploy          # deploy:check runs first and cannot be skipped
+```
+
+Details: [`scripts/README.md`](scripts/README.md) ·
+[`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md)
+
+---
+
+## Upgrades
+
+```bash
+npm test                # 255 tests
+npm run deploy:check    # dry run — refuses anything that would destroy data
+npm run deploy          # in place; CloudFormation rolls back on failure
+curl $API/version       # confirm the new version is live
+```
+
+`deploy:check` creates a CloudFormation **change set** without executing it, and
+fails if any data-holding resource would be replaced or removed:
+
+```
+✗ REFUSING: this change would destroy or replace data-holding resources
+  Modify  replace=True  AWS::DynamoDB::Table  TableCD117FA1
+     cause: Properties.KeySchema (RequiresRecreation=Always)
+```
+
+**Why this exists:** `RemovalPolicy.RETAIN` only prevents deletion when a *stack*
+is torn down. It does **not** prevent *replacement*. Change a partition key and
+CloudFormation creates a new, empty table and orphans the old one — nothing is
+"deleted", so RETAIN is satisfied, and every subscriber disappears from the
+application's view. Only a pre-flight check catches that.
+
+Merging to `main` does not deploy. Deploying a mail system is a deliberate act.
+
+### Schema changes
+
+The data model is frozen by the problem domain — `EventType` is
+`sent | delivered | open | click | bounce | complaint | unsubscribe`, because SES
+emits a fixed set and you cannot invent a new measurement of an email. So this is
+a rule, not a framework:
+
+- new fields are **optional and additive** — never required, never renamed
+- reads **tolerate absence** and fall back
+- a genuine backfill gets a one-off script for that release
+
+---
+
+## Cost
+
+Modelled in `packages/domain/src/cost.ts`, unit-tested, and driving the **Cost
+estimator** page in the admin console — so these numbers and the ones on screen
+cannot drift. us-east-1 on-demand list prices.
+
+### One send to 40,000 subscribers — **$5.29**
+
+| Line | Cost | Basis |
+|---|---:|---|
+| SES — outbound messages | $4.00 | 40,000 × $0.10/1,000 |
+| KMS — magic-link signing | $0.60 | one asymmetric Sign per recipient |
+| DynamoDB — engagement event writes | $0.29 | 58,800 events × 4 WRU |
+| DynamoDB — send-path writes | $0.25 | 5 WRU/recipient |
+| SQS + SNS — event transport | $0.10 | 3 SQS requests + 1 SNS publish per event |
+| Lambda — events handler | $0.02 | 58,800 invocations |
+| DynamoDB — send-path reads | $0.02 | 2 RRU/recipient |
+| Lambda — sender | $0.01 | 20 invocations over 2,000-recipient slices |
+
+One send generates **58,800 engagement events** (one delivery per recipient, plus
+opens, clicks and bounces at 40% / 5% / 2%). Everything downstream of SES is ~24%
+of the total.
+
+### Fixed — **$4.20/month**, whether or not you send
+
+24 CloudWatch alarms ($2.40) · 1 KMS key per org ($1.00) · 2 secrets ($0.80)
+
+### Annual, 40,000 subscribers
+
+| Cadence | Sends | Annual |
+|---|---:|---:|
+| Once | $5.29 | **$55.72** |
+| Weekly | $275.12 | **$326.80** |
+| Daily | $1,931.11 | **$1,990.50** |
+
+Daily sending is **$0.136 per 1,000 emails** all-in — 36% above SES's raw $0.10,
+for the whole platform around it. A hosted ESP at 40,000 contacts sending daily
+is commonly $400–600/month.
+
+Excludes any WAF you attach, data transfer, and the free tiers most accounts
+still have — treat it as an upper bound.
+
+---
 
 ## Repository layout
 
 ```
-apps/        admin-web · subscriber-web · public-web   (React SPAs)
-packages/    core (domain types + zod) · rbac · segment
-services/    api · sender · events · automations · reporting · tokens ·
-             provisioning · feeds · privacy · importer   (Lambda handlers)
-infra/cdk/   CDK app — shared control-plane stack + per-org provisioning
-docs/        ARCHITECTURE.md · SECURITY.md · DEPLOYMENT.md · images/
-demo/        self-contained static UI demo (addressium.com/demo)
+packages/core             entity types, zod schemas, version marker
+packages/domain           business logic — pure, no AWS imports
+packages/adapters-aws     DynamoDB / SES / KMS / SQS implementations of the ports
+packages/rbac             Cedar-backed authorization
+packages/segment          segment predicate evaluation
+packages/magiclink-verify hardened reference verifier for publisher sites
+services/*                Lambda entry points — thin wiring over the domain
+apps/admin-web            operator console
+apps/subscriber-web       preference centre
+apps/public-web           public list pages
+infra/bootstrap           one-time account bootstrap (CloudFormation)
+infra/cdk                 the application stack
+demo/                     static UI prototype (addressium.com)
 ```
+
+The domain layer imports no AWS SDK. It runs against in-memory adapters in tests
+and DynamoDB in production, with no rewrite.
 
 ## Development
 
-Requires Node 20+. This is an npm-workspaces monorepo.
+Node 20+, npm workspaces.
 
 ```bash
-npm install       # install all workspaces
-npm run build     # tsc --build across packages/services
-npm run deploy    # cdk deploy (from infra/cdk) — needs AWS creds
+npm install
+npm run build
+npm test          # 255 tests: in-memory + real DynamoDB API via dynalite
+npm run test:web  # component tests
 ```
 
-### Vertical slice (implemented + tested)
+Integration tests run the full journey — signup → double opt-in → send →
+open/click → click map — against a **real DynamoDB API** (dynalite, no
+Java/Docker).
 
-`packages/domain` implements the end-to-end flow — **signup → double opt-in →
-send → open/click → click map**, plus **entitlement sync**, **unsubscribe**, and
-**bounce/complaint auto-suppression** — as pure functions behind ports, so it runs
-with no AWS. The security controls are proven by tests (magic-link ES256
-verification and algorithm-confusion rejection, KMS-style DER→JOSE signing, token
-redaction, webhook signatures, suppression, and the SSRF guard).
+## Security
 
-The AWS adapters (`packages/adapters-aws`: DynamoDB / SES / KMS / SQS /
-EventBridge Scheduler) satisfy the same ports, and `packages/integration-tests`
-runs the whole journey against a **real DynamoDB API** (via `dynalite` — no
-Java/Docker). The Lambda handlers in `services/*` are thin wrappers that call the
-domain, and `infra/cdk` wires them to an HTTP API, the SQS send queue, the
-SES-events SNS topic, **EventBridge Scheduler** (send-now / one-off / recurring
-sends — no minute-poll), and **S3 + CloudFront** for the admin and public SPAs.
+Built to OWASP ASVS (L2) & API Top 10, NIST SP 800-63B, RFC 8725 (JWT), and CIS
+AWS Foundations. The most security-sensitive integration point — the magic-link
+verifier — ships as a hardened, copy-paste module: `packages/magiclink-verify`.
 
-```bash
-npm install       # all workspaces
-npm test          # build + unit (in-memory) + DynamoDB integration tests
-```
+[Security design & threat model](docs/SECURITY.md) ·
+[Reporting a vulnerability](SECURITY.md)
 
-> **Status:** Initial build complete. The architecture document is the source of
-> truth; the domain, AWS adapters, Lambda services, CDK infra, and the three web
-> apps are implemented and tested (`npm test`).
+## Documentation
+
+- [Design compendium](docs/DESIGN-COMPENDIUM.md) — every service, why it exists, what it costs
+- [Architecture](docs/ARCHITECTURE.md) — canonical system design
+- [Deployment](docs/DEPLOYMENT.md) — empty AWS account to running deployment
+- [Security](docs/SECURITY.md) — STRIDE model and standards mapping
+
+---
+
+## Status
+
+**Honest state, because a README that reads "done" is worse than useless:**
+
+- **Nothing has ever been deployed.** No AWS account has run this.
+- The SES event plane was broken at three independent layers until recently. The
+  fix is verified against the synthesized CloudFormation template, **never
+  against real SES traffic**.
+- `deploy:check` is validated against change-set fixtures, never against real
+  CloudFormation.
+- The version marker is readable, but nothing writes it on deploy yet.
+- GDPR erasure does not yet reach the S3 archive.
+- The importer **cannot read a real Pinpoint export file** — it is CSV-only,
+  while Pinpoint exports gzipped JSON Lines.
+
+**1.0 is gated on** the end-to-end suite passing against a real AWS account, GDPR
+erasure completing, and one install running for 30 days.
+
+Do not migrate a real list onto this yet. A mail system that has never sent an
+email can cost you a sending reputation that takes months to rebuild.
+
+## License
+
+See [LICENSE](LICENSE).

@@ -224,8 +224,15 @@ export function renderHtmlForRecipient(
       }
       const linkId = `l${li++}`;
       const target = `${safeHref(baseUrl(href))}#tok=${magicToken}`;
-      const retagged = openTag.replace(/\bhref\s*=\s*(?:"[^"]*"|'[^']*')/i, `href="${escapeHtml(target)}"`);
-      out += retagged.replace(/>$/, ` data-linkid="${linkId}">`);
+      // Replacer FUNCTIONS, not replacement strings: a replacement string expands
+      // `$&`, `` $` ``, `$'` and `$$`, and escapeHtml does not escape `$`. A merge
+      // value or URL containing `$&` would re-inject raw quotes — corrupting every
+      // link and allowing attribute injection (e.g. onerror=) into the anchor.
+      const retagged = openTag.replace(
+        /\bhref\s*=\s*(?:"[^"]*"|'[^']*')/i,
+        () => `href="${escapeHtml(target)}"`,
+      );
+      out += retagged.replace(/>$/, () => ` data-linkid="${linkId}">`);
     },
   );
   return out;

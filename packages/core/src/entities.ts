@@ -264,6 +264,18 @@ export interface AbTest {
   winnerMetric: "open" | "click";
   decisionWindowMins: number;
   winner?: "A" | "B";
+  /**
+   * The holdout/remainder windows resolved at phase 1, persisted so phase 2
+   * reuses them. Recomputing the split hours later against a changed confirmed
+   * count shifts every offset (#180). Absent on tests started before this
+   * existed, in which case phase 2 falls back to recomputing.
+   */
+  split?: {
+    total: number;
+    holdoutA: { offset: number; limit: number };
+    holdoutB: { offset: number; limit: number };
+    remainder: { offset: number; limit: number };
+  };
 }
 
 export interface Campaign {
@@ -383,6 +395,16 @@ export interface EngagementEvent {
   type: EventType;
   linkId?: string; // for clicks; token already redacted
   at: string;
+  /**
+   * Stable identity for this occurrence, used to make writes idempotent and to
+   * let the analytics lake dedupe (#183).
+   *
+   * Derived from the SOURCE event (SES message id + type + the provider's
+   * timestamp), so two deliveries of the same SNS notification collapse while
+   * two genuine opens stay distinct. Absent for internally-generated events,
+   * which fall back to a random id — those are written once by construction.
+   */
+  eventId?: string;
 }
 
 export interface SuppressionEntry {

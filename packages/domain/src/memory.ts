@@ -19,6 +19,7 @@ import type {
   SuppressionEntry,
   Template,
   UsageRecord,
+  DeployedVersion,
 } from "@addressium/core";
 import type {
   AlertConfigStore,
@@ -46,6 +47,7 @@ import type {
   SubscriptionStore,
   SuppressionStore,
   UsageStore,
+  VersionStore,
 } from "./ports.js";
 
 const subKey = (o: string, s: string) => `${o}#${s}`;
@@ -298,6 +300,12 @@ export class CaptureAlertPublisher implements AlertPublisher {
   }
 }
 
+export class MemVersion implements VersionStore {
+  private v: DeployedVersion | undefined;
+  async get() { return this.v; }
+  async put(v: DeployedVersion) { this.v = v; }
+}
+
 export class MemSendClaims implements SendClaimStore {
   private set = new Set<string>();
   async claim(orgId: string, campaignId: string) {
@@ -305,6 +313,9 @@ export class MemSendClaims implements SendClaimStore {
     if (this.set.has(k)) return false;
     this.set.add(k);
     return true;
+  }
+  async release(orgId: string, campaignId: string) {
+    this.set.delete(`${orgId}#${campaignId}`);
   }
 }
 
@@ -350,6 +361,7 @@ export function memStores(): Stores {
     events: new MemEvents(),
     entitlements: new MemEntitlements(),
     sendClaims: new MemSendClaims(),
+    version: new MemVersion(),
     campaigns: new MemCampaigns(),
     series: new MemCampaignSeries(),
     schedules: new MemSendSchedules(),

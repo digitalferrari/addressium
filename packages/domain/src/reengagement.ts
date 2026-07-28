@@ -126,6 +126,8 @@ export interface ReengagementSweepResult {
   stepped: number;
   graduated: number;
   sunset: number;
+  /** Step sends that did not go out, so the sequence did not advance (#181). */
+  skipped?: number;
 }
 
 /**
@@ -160,7 +162,7 @@ export async function runReengagementSweep(
       case "send": {
         // Each step is its own sub-campaign so its engagement aggregates apart
         // and the idempotency claim is per step.
-        await sendToSubscriber(stores, sender, magic, clock, {
+        const r = await sendToSubscriber(stores, sender, magic, clock, {
           orgId: input.orgId,
           campaignId: reengagementCampaignId(input.listId, decision.step),
           subscriberId: s.sub,
@@ -169,6 +171,14 @@ export async function runReengagementSweep(
           template: input.template,
           throttle: input.throttle,
         });
+        // Only advance the sequence if the message actually went out (#181).
+        // Discarding this result meant a suppressed/already-claimed/unknown
+        // recipient still progressed toward `sunset` — so a subscriber could be
+        // unsubscribed from every list and suppressed WITHOUT ever being emailed.
+        if (!r.sent) {
+          result.skipped = (result.skipped ?? 0) + 1;
+          break;
+        }
         const reengagement =
           decision.step === 1
             ? { enrolledAt: nowIso, stepsSent: 1, lastStepAt: nowIso }

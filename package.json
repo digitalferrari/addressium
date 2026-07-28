@@ -19,7 +19,11 @@
     "clean": "tsc --build --clean",
     "test": "tsc --build && node --test packages/domain/dist/test/*.test.js packages/integration-tests/dist/test/*.test.js",
     "test:web": "vitest run",
-    "deploy": "npm --workspace @addressium/infra-cdk run deploy"
+    "deploy": "npm --workspace @addressium/infra-cdk run deploy",
+    "bootstrap:aws": "./scripts/aws-bootstrap.sh",
+    "teardown:aws": "./scripts/aws-teardown.sh",
+    "deploy:check": "./scripts/deploy-check.sh",
+    "predeploy": "./scripts/deploy-check.sh"
   },
   "devDependencies": {
     "@testing-library/dom": "^10.4.0",

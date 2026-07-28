@@ -15,7 +15,7 @@ import {
   sanitizeEmailHtml,
   upsertSecret,
 } from "@addressium/adapters-aws";
-import { schemas } from "@addressium/core";
+import { schemas, APP_VERSION, EXPECTED_SCHEMA_VERSION } from "@addressium/core";
 import {
   HmacConfirmationSigner,
   SystemClock,
@@ -66,6 +66,8 @@ export interface HttpEvent {
   pathParameters?: Record<string, string | undefined> | null;
   queryStringParameters?: Record<string, string | undefined> | null;
   requestContext?: {
+    /** "METHOD /path" as registered in API Gateway; drives router dispatch. */
+    routeKey?: string;
     http?: { method?: string };
     authorizer?: { jwt?: { claims?: Record<string, string | undefined> } };
   };
@@ -121,8 +123,29 @@ const scheduler = () =>
 /** POST /signup — public, double opt-in (§4.2). */
 export async function signupHandler(event: HttpEvent): Promise<HttpResult> {
   try {
-    const input = JSON.parse(event.body ?? "{}") as unknown;
-    const res = await signup(stores(), await confirmSigner(), clock, input);
+    const raw = JSON.parse(event.body ?? "{}") as Record<string, unknown>;
+
+    // Same abuse protections as /signup/batch, which had them while THIS route —
+    // the primary, most-embedded signup path — had none (#170). An unprotected
+    // signup endpoint is a list-poisoning and confirmation-email-spam vector:
+    // every submission sends real mail to an attacker-chosen address, which
+    // burns sender reputation on the org's own SES identity.
+
+    // Honeypot: a filled hidden field means bot. Accept silently so scrapers
+    // can't distinguish success from rejection — but do nothing.
+    if (isHoneypotTripped(raw)) return json(202, { status: "pending" });
+
+    // reCAPTCHA: verify only if this org configured a secret (opt-in).
+    const orgId = typeof raw.orgId === "string" ? raw.orgId : "";
+    const protectedOrg = orgId ? await stores().organizations.get(orgId) : undefined;
+    const secretArn = protectedOrg?.signupProtection?.recaptchaSecretArn;
+    if (secretArn) {
+      const verifier = new GoogleRecaptchaVerifier(await getSecret(secretArn));
+      const ok = await verifier.verify(typeof raw.recaptchaToken === "string" ? raw.recaptchaToken : "");
+      if (!ok) return json(400, { error: "captcha verification failed" });
+    }
+
+    const res = await signup(stores(), await confirmSigner(), clock, raw);
 
     // Send the double opt-in confirmation email (transactional, §4.2).
     const list = await stores().lists.get(res.subscription.orgId, res.subscription.listId);
@@ -260,7 +283,14 @@ export async function scheduleCampaignHandler(event: HttpEvent): Promise<HttpRes
           name: `series-${body.orgId}-${body.campaignId}`,
           cron: body.when.cron,
           timezone,
-          payload: descriptor,
+          // Must be a RecurringLaunchPayload, not a bare descriptor: the launch
+          // handler's legacy branch hardcodes editionKey "edition", which made
+          // every firing compute the SAME campaign id — so the first edition
+          // claimed it and every later firing was silently skipped (#162).
+          // EventBridge Scheduler substitutes the context attribute below with
+          // this firing's scheduled time, and it is stable across retries of
+          // that firing, so idempotency still holds.
+          payload: { descriptor, editionKey: "<aws.scheduler.scheduled-time>" },
         });
         await markScheduleActive(stores(), clock, {
           orgId: body.orgId,
@@ -362,6 +392,36 @@ export async function orgMetaHandler(event: HttpEvent): Promise<HttpResult> {
       name: org.name,
       environment: org.environment ?? "prod",
       setupComplete: org.setupComplete,
+      // Surface the configured AI provider (vendor + model only) so the console
+      // can reflect saved state; the API key/secret ARN is never echoed (#144).
+      aiConfig: org.aiConfig ? { vendor: org.aiConfig.vendor, model: org.aiConfig.model } : undefined,
+    });
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+/**
+ * GET /version — what is actually deployed.
+ *
+ * Public and unauthenticated by design: it reports only the release and schema
+ * version, never configuration or secrets. An operator needs to answer "did my
+ * upgrade land?" without reading CloudFormation, and the upgrade rehearsal
+ * (#213) asserts on it before and after a deploy.
+ *
+ * `deployed` is the marker last written to the table; `running` is the version
+ * of the code answering this request. They differ mid-deploy, and a persistent
+ * mismatch means the marker write failed — which is worth seeing.
+ */
+export async function versionHandler(): Promise<HttpResult> {
+  try {
+    const deployed = await stores().version.get();
+    return json(200, {
+      running: APP_VERSION,
+      expectedSchemaVersion: EXPECTED_SCHEMA_VERSION,
+      deployed: deployed ?? null,
+      // Surfaces a half-applied upgrade rather than hiding it behind a 200.
+      inSync: deployed?.version === APP_VERSION,
     });
   } catch (e) {
     return fail(e);
@@ -758,3 +818,92 @@ export async function identitySyncHandler(event: HttpEvent): Promise<HttpResult>
     return fail(e);
   }
 }
+
+// ---- routers (#213) -------------------------------------------------------
+//
+// Twenty-seven single-route Lambdas all bundled THIS file and differed only in
+// which exported handler they invoked — 27 copies of one bundle, each with its
+// own cold start, log group and IAM role, for a data model that never changes.
+// These routers collapse them while keeping every route registered in API
+// Gateway individually, which matters: the JWT authorizer is attached per route,
+// so a catch-all would have erased the public/authenticated boundary.
+//
+// Two routers rather than one, deliberately. They bundle the same code, but the
+// dispatch tables are disjoint, so a routing mistake in the public function
+// cannot reach an admin handler — and their IAM roles can differ. The
+// `requireGrant` calls inside each admin handler remain the second layer.
+
+type RouteHandler = (event: HttpEvent) => Promise<HttpResult>;
+
+/** Behind the Cognito JWT authorizer. Every handler also calls requireGrant. */
+const ADMIN_ROUTES: Record<string, RouteHandler> = {
+  "GET /orgs/{org}": orgMetaHandler,
+  "GET /orgs/{org}/setup": setupStateHandler,
+  "GET /orgs/{org}/lists": listsHandler,
+  "POST /lists": listsHandler,
+  "POST /lists/visibility": listVisibilityHandler,
+  "POST /lists/presentation": listPresentationHandler,
+  "GET /orgs/{org}/campaigns": campaignsListHandler,
+  "GET /orgs/{org}/campaigns/{id}": campaignsHandler,
+  "POST /campaigns": campaignsHandler,
+  "GET /orgs/{org}/schedules": schedulesListHandler,
+  "POST /campaigns/lifecycle": scheduleLifecycleHandler,
+  "GET /orgs/{org}/templates": templatesHandler,
+  "GET /orgs/{org}/templates/{id}": templatesHandler,
+  "POST /templates": templatesHandler,
+  "GET /orgs/{org}/segments": segmentsHandler,
+  "POST /segments": segmentsHandler,
+  "GET /orgs/{org}/drip-sequences": dripSequencesHandler,
+  "POST /drip-sequences": dripSequencesHandler,
+  "GET /orgs/{org}/subscribers": subscribersListHandler,
+  "GET /orgs/{org}/suppressions": suppressionsListHandler,
+  "POST /subscribers/suppress": subscriberSuppressHandler,
+  "POST /subscribers/unsubscribe": subscriberUnsubscribeHandler,
+  "POST /subscribers/unsuppress": subscriberUnsuppressHandler,
+  "POST /orgs/{org}/import": importHandler,
+  "POST /privacy": privacyHandler,
+  "POST /orgs/branding": brandingHandler,
+  "POST /orgs/ai-config": aiConfigHandler,
+};
+
+/** Unauthenticated. Deliberately excludes every admin handler. */
+const PUBLIC_ROUTES: Record<string, RouteHandler> = {
+  "POST /signup": signupHandler,
+  "POST /signup/batch": signupBatchHandler,
+  "GET /confirm": confirmHandler,
+  "POST /unsubscribe": unsubscribeHandler,
+  "GET /orgs/{org}/lists/{list}/public": publicListHandler,
+  "GET /version": versionHandler,
+  "POST /webhooks/entitlement": entitlementSyncHandler,
+  "POST /webhooks/identity": identitySyncHandler,
+};
+
+/**
+ * API Gateway supplies `routeKey` ("METHOD /path" with path parameters in their
+ * template form). Falling back to method+rawPath would NOT be equivalent — a
+ * concrete path like `/orgs/acme` doesn't match the `/orgs/{org}` key — so an
+ * absent routeKey is an error rather than something to paper over.
+ */
+async function dispatch(
+  table: Record<string, RouteHandler>,
+  event: HttpEvent,
+): Promise<HttpResult> {
+  const routeKey = event.requestContext?.routeKey;
+  if (!routeKey) return json(500, { error: "no routeKey on request" });
+  const handler = table[routeKey];
+  // A 404 here means CDK registered a route this router doesn't know about.
+  // The route-parity test exists so that mismatch is caught at build time.
+  if (!handler) return json(404, { error: `no handler for ${routeKey}` });
+  return handler(event);
+}
+
+export const adminRouter = (event: HttpEvent): Promise<HttpResult> =>
+  dispatch(ADMIN_ROUTES, event);
+export const publicRouter = (event: HttpEvent): Promise<HttpResult> =>
+  dispatch(PUBLIC_ROUTES, event);
+
+/** Exported so the route-parity test can assert against the CDK route list. */
+export const ROUTE_KEYS = {
+  admin: Object.keys(ADMIN_ROUTES),
+  public: Object.keys(PUBLIC_ROUTES),
+};

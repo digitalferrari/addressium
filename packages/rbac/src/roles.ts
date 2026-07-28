@@ -77,15 +77,28 @@ const ROLE_NAMES = new Set<RoleName>(["developer_admin", "editor", "analyst", "s
  * list of orgIds). Throws if the role claim is missing/invalid.
  */
 export function grantFromClaims(claims: Record<string, string | undefined>): Grant {
+  // Token-type confusion guard. Cognito ID tokens carry `custom:*` attributes;
+  // access tokens do not. We standardize on the ID token (#161), so reject an
+  // access token presented in its place. Checked only when the claim is present
+  // so non-Cognito fixtures/tests remain usable — real tokens always carry it.
+  const tokenUse = claims["token_use"];
+  if (tokenUse !== undefined && tokenUse !== "id") {
+    throw new ForbiddenError("reports:view", "*");
+  }
   const role = claims["custom:role"];
   if (!role || !ROLE_NAMES.has(role as RoleName)) {
     throw new ForbiddenError("reports:view", "*");
   }
   const orgsRaw = (claims["custom:orgs"] ?? "").trim();
   // Empty ⇒ no orgs (deny by default); "*" ⇒ all orgs.
-  const orgs: string[] | "*" =
-    orgsRaw === "*" ? "*" : orgsRaw.split(",").map((o) => o.trim()).filter(Boolean);
-  return { role: role as RoleName, orgs };
+  if (orgsRaw === "*") return { role: role as RoleName, orgs: "*" };
+  const parts = orgsRaw.split(",").map((o) => o.trim()).filter(Boolean);
+  // "*" is a wildcard ONLY as the entire claim. A list containing it (e.g.
+  // "orgA,*") must never widen scope: Cedar's set membership would have matched
+  // the smuggled element and granted every org, diverging from inScope() — which
+  // denies — so the two authorization paths disagreed. Reject outright.
+  if (parts.includes("*")) throw new ForbiddenError("reports:view", "*");
+  return { role: role as RoleName, orgs: parts };
 }
 
 export function can(role: RoleName, capability: Capability): boolean {

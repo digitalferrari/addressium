@@ -17,6 +17,7 @@ import {
   UpdateCommand,
   type QueryCommandInput,
 } from "@aws-sdk/lib-dynamodb";
+import { VERSION_ITEM } from "@addressium/core";
 import type {
   AlertConfig,
   Campaign,
@@ -34,6 +35,7 @@ import type {
   SuppressionEntry,
   Template,
   UsageRecord,
+  DeployedVersion,
 } from "@addressium/core";
 import type {
   AlertConfigStore,
@@ -54,6 +56,7 @@ import type {
   SubscriptionStore,
   SuppressionStore,
   UsageStore,
+  VersionStore,
 } from "@addressium/domain";
 import { randomUUID } from "node:crypto";
 
@@ -300,10 +303,15 @@ export class DynamoStores implements Stores {
   };
 
   events: EventStore = {
+    // The sort key carries the event's stable id, so re-writing the same source
+    // event overwrites its own row instead of appending a duplicate. It used to
+    // be a fresh randomUUID() per call, which made every at-least-once
+    // redelivery a permanent phantom open/click/bounce with no way to tell them
+    // apart after the fact (#183).
     append: (e) =>
       this.put({
         pk: `${org(e.orgId)}#CAMPAIGN#${e.campaignId}`,
-        sk: `EVENT#${e.at}#${randomUUID()}`,
+        sk: `EVENT#${e.at}#${e.eventId ?? randomUUID()}`,
         data: e,
       }),
     all: (orgId, campaignId) =>
@@ -391,6 +399,23 @@ export class DynamoStores implements Stores {
       }),
   };
 
+  /**
+   * Deployed-version marker (#213). A singleton item outside any org partition —
+   * it describes the installation, not a tenant. The migration runner reads it
+   * to decide which migrations are pending.
+   */
+  version: VersionStore = {
+    get: async () => {
+      const res = await this.doc.send(
+        new GetCommand({ TableName: this.tableName, Key: VERSION_ITEM }),
+      );
+      return res.Item?.data as DeployedVersion | undefined;
+    },
+    put: async (v) => {
+      await this.put({ ...VERSION_ITEM, data: v });
+    },
+  };
+
   sendClaims: SendClaimStore = {
     claim: async (orgId, campaignId) => {
       try {
@@ -406,6 +431,14 @@ export class DynamoStores implements Stores {
         if ((e as { name?: string }).name === "ConditionalCheckFailedException") return false;
         throw e;
       }
+    },
+    release: async (orgId, campaignId) => {
+      await this.doc.send(
+        new DeleteCommand({
+          TableName: this.tableName,
+          Key: { pk: `${org(orgId)}#CAMPAIGN#${campaignId}`, sk: "SENDCLAIM" },
+        }),
+      );
     },
   };
 }

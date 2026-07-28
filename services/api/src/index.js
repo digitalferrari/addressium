@@ -1,0 +1,774 @@
+/**
+ * addressium service: api — thin HTTP handlers over the domain.
+ *
+ * Handlers validate/authorize, then call pure functions from @addressium/domain
+ * against DynamoDB-backed stores (@addressium/adapters-aws). No business logic
+ * lives here. See docs/ARCHITECTURE.md §4.2–4.3, §4.12.
+ */
+import { CognitoSubscriberAccounts, DynamoStores, EventBridgeScheduler, GoogleRecaptchaVerifier, SesEmailSender, getSecret, sanitizeEmailHtml, upsertSecret, } from "@addressium/adapters-aws";
+import { schemas, APP_VERSION, EXPECTED_SCHEMA_VERSION } from "@addressium/core";
+import { HmacConfirmationSigner, SystemClock, applyEntitlementSync, applyIdentitySync, buildConfirmationEmail, buildBatchConfirmationEmail, confirmOptInAny, effectiveOneOffTime, evaluateSetup, isHoneypotTripped, markScheduleActive, transitionSchedule, provisionSubscriberAccount, manualSuppress, liftSuppression, importCsvSubscribers, exportSubscriber, eraseSubscriber, publicListView, setAiConfig, setBranding, setListPresentation, saveCampaignDraft, saveList, saveSegment, saveDripSequence, saveTemplate, setListVisibility, signup, signupMany, unsubscribeAll, unsubscribeFromList, verifyWebhookSignature, } from "@addressium/domain";
+import { ForbiddenError, authorize, grantFromClaims, } from "@addressium/rbac";
+function env(name) {
+    const v = process.env[name];
+    if (!v)
+        throw new Error(`missing env ${name}`);
+    return v;
+}
+const json = (statusCode, obj) => ({
+    statusCode,
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(obj),
+});
+const fail = (e) => e instanceof ForbiddenError
+    ? json(403, { error: e.message })
+    : json(400, { error: e.message });
+/** Server-side RBAC: derive the caller's grant from JWT claims and check it. */
+function requireGrant(event, capability, orgId) {
+    const claims = event.requestContext?.authorizer?.jwt?.claims ?? {};
+    authorize(grantFromClaims(claims), capability, orgId);
+}
+const clock = new SystemClock();
+let _stores;
+const stores = () => (_stores ??= new DynamoStores(env("TABLE_NAME")));
+let _confirmSigner;
+async function confirmSigner() {
+    if (!_confirmSigner) {
+        _confirmSigner = new HmacConfirmationSigner(await getSecret(env("CONFIRM_SECRET_ARN")));
+    }
+    return _confirmSigner;
+}
+let _scheduler;
+const scheduler = () => (_scheduler ??= new EventBridgeScheduler({
+    roleArn: env("SCHEDULER_ROLE_ARN"),
+    groupName: env("SCHEDULER_GROUP"),
+    queueArn: env("SEND_QUEUE_ARN"),
+    launchArn: env("LAUNCH_FN_ARN"),
+}));
+/** POST /signup — public, double opt-in (§4.2). */
+export async function signupHandler(event) {
+    try {
+        const raw = JSON.parse(event.body ?? "{}");
+        // Same abuse protections as /signup/batch, which had them while THIS route —
+        // the primary, most-embedded signup path — had none (#170). An unprotected
+        // signup endpoint is a list-poisoning and confirmation-email-spam vector:
+        // every submission sends real mail to an attacker-chosen address, which
+        // burns sender reputation on the org's own SES identity.
+        // Honeypot: a filled hidden field means bot. Accept silently so scrapers
+        // can't distinguish success from rejection — but do nothing.
+        if (isHoneypotTripped(raw))
+            return json(202, { status: "pending" });
+        // reCAPTCHA: verify only if this org configured a secret (opt-in).
+        const orgId = typeof raw.orgId === "string" ? raw.orgId : "";
+        const protectedOrg = orgId ? await stores().organizations.get(orgId) : undefined;
+        const secretArn = protectedOrg?.signupProtection?.recaptchaSecretArn;
+        if (secretArn) {
+            const verifier = new GoogleRecaptchaVerifier(await getSecret(secretArn));
+            const ok = await verifier.verify(typeof raw.recaptchaToken === "string" ? raw.recaptchaToken : "");
+            if (!ok)
+                return json(400, { error: "captcha verification failed" });
+        }
+        const res = await signup(stores(), await confirmSigner(), clock, raw);
+        // Send the double opt-in confirmation email (transactional, §4.2).
+        const list = await stores().lists.get(res.subscription.orgId, res.subscription.listId);
+        if (list) {
+            const org = await stores().organizations.get(res.subscription.orgId);
+            const confirmUrl = `${env("CONFIRM_URL_BASE")}?token=${encodeURIComponent(res.confirmationToken)}`;
+            const ses = new SesEmailSender(org?.sesConfigSet);
+            await ses.send(buildConfirmationEmail(list, res.subscriber.email, confirmUrl));
+        }
+        return json(202, { subscriberId: res.subscriber.sub, status: res.subscription.status });
+    }
+    catch (e) {
+        return fail(e);
+    }
+}
+/**
+ * POST /signup/batch — opt into several lists at once (the "All newsletters"
+ * page, #61). Unauthenticated like /signup; one double opt-in email covers all.
+ */
+export async function signupBatchHandler(event) {
+    try {
+        const raw = JSON.parse(event.body ?? "{}");
+        // Honeypot: a filled hidden field means bot. Accept silently so scrapers
+        // can't distinguish success from rejection — but do nothing.
+        if (isHoneypotTripped(raw))
+            return json(202, { status: "pending", lists: [] });
+        // reCAPTCHA: verify only if this org configured a secret (opt-in).
+        const orgId = typeof raw.orgId === "string" ? raw.orgId : "";
+        const org = orgId ? await stores().organizations.get(orgId) : undefined;
+        const secretArn = org?.signupProtection?.recaptchaSecretArn;
+        if (secretArn) {
+            const verifier = new GoogleRecaptchaVerifier(await getSecret(secretArn));
+            const ok = await verifier.verify(typeof raw.recaptchaToken === "string" ? raw.recaptchaToken : "");
+            if (!ok)
+                return json(400, { error: "captcha verification failed" });
+        }
+        const res = await signupMany(stores(), await confirmSigner(), clock, raw);
+        if (res.lists.length > 0) {
+            const org = await stores().organizations.get(res.subscriber.orgId);
+            const confirmUrl = `${env("CONFIRM_URL_BASE")}?token=${encodeURIComponent(res.confirmationToken)}`;
+            const ses = new SesEmailSender(org?.sesConfigSet);
+            await ses.send(buildBatchConfirmationEmail(res.lists, res.subscriber.email, confirmUrl));
+        }
+        return json(202, { subscriberId: res.subscriber.sub, status: "pending", lists: res.lists.map((l) => l.listId) });
+    }
+    catch (e) {
+        return fail(e);
+    }
+}
+/** GET /confirm?token=... — double opt-in landing; confirms every list in the token (§4.2). */
+export async function confirmHandler(event) {
+    try {
+        const token = event.queryStringParameters?.token ?? "";
+        const subs = await confirmOptInAny(stores(), await confirmSigner(), clock, token);
+        // Opt-in (#62): after the double opt-in is verified, provision a subscriber
+        // Cognito account IF this org enabled it. Off by default — addressium
+        // normally never writes to your pool. Best-effort: a provisioning hiccup
+        // must not fail the confirmation the subscriber just completed.
+        const first = subs[0];
+        if (first) {
+            const org = await stores().organizations.get(first.orgId);
+            if (org?.signupProtection?.createAccountsOnConfirm && org.subscriberPoolId) {
+                try {
+                    await provisionSubscriberAccount(stores(), new CognitoSubscriberAccounts(), first.orgId, org.subscriberPoolId, first.subscriberId);
+                }
+                catch {
+                    // swallow — confirmation already succeeded; account sync can be retried
+                }
+            }
+        }
+        return json(200, { status: first?.status ?? "confirmed", confirmed: subs.length });
+    }
+    catch (e) {
+        return fail(e);
+    }
+}
+/** POST /campaigns/schedule — send now, at a time, or recurring (§4.6, §4.16). */
+export async function scheduleCampaignHandler(event) {
+    try {
+        const body = schemas.scheduleCampaignSchema.parse(JSON.parse(event.body ?? "{}"));
+        requireGrant(event, "campaigns:schedule", body.orgId); // admin-only (§4.12)
+        // Body resolution (§4.15): raw HTML is hard-sanitized; MJML our SPA compiled
+        // is trusted as-is (its Outlook conditional comments must survive); block
+        // bodies get their text/ad HTML hard-sanitized too (#94) so blocks mode is no
+        // weaker than raw_html — editorial link urls are already scheme-checked by
+        // the schema and re-checked at render.
+        const template = "html" in body.template ? { html: sanitizeEmailHtml(body.template.html) }
+            : "mjmlHtml" in body.template ? { html: body.template.mjmlHtml }
+                : {
+                    blocks: body.template.blocks.map((b) => b.kind === "text" ? { ...b, html: sanitizeEmailHtml(b.html) }
+                        : b.kind === "ad" ? { ...b, html: sanitizeEmailHtml(b.html) }
+                            : b),
+                };
+        const descriptor = {
+            orgId: body.orgId,
+            campaignId: body.campaignId,
+            listId: body.listId,
+            subject: body.subject,
+            template,
+        };
+        const oneOffName = `camp-${body.orgId}-${body.campaignId}`;
+        switch (body.when.type) {
+            // "now" and "at" both become one-off schedules placed at least 5 minutes
+            // out (§4.6), so the send stays cancellable until it fires.
+            case "now":
+            case "at": {
+                const requested = body.when.type === "at" ? new Date(body.when.at) : undefined;
+                const at = effectiveOneOffTime(clock.now(), requested);
+                await scheduler().scheduleOneOff({ name: oneOffName, at, descriptor });
+                await markScheduleActive(stores(), clock, {
+                    orgId: body.orgId,
+                    scheduleId: body.campaignId,
+                    kind: "one_off",
+                });
+                return json(202, { status: "scheduled", at: at.toISOString(), scheduleId: body.campaignId });
+            }
+            case "recurring": {
+                // Zone: per-campaign override ?? org defaultTimezone (§4.21).
+                let timezone = body.when.timezone;
+                if (!timezone) {
+                    const orgRec = await stores().organizations.get(body.orgId);
+                    timezone = orgRec?.defaultTimezone ?? process.env.DEFAULT_TIMEZONE ?? "UTC";
+                }
+                await scheduler().scheduleRecurring({
+                    name: `series-${body.orgId}-${body.campaignId}`,
+                    cron: body.when.cron,
+                    timezone,
+                    // Must be a RecurringLaunchPayload, not a bare descriptor: the launch
+                    // handler's legacy branch hardcodes editionKey "edition", which made
+                    // every firing compute the SAME campaign id — so the first edition
+                    // claimed it and every later firing was silently skipped (#162).
+                    // EventBridge Scheduler substitutes the context attribute below with
+                    // this firing's scheduled time, and it is stable across retries of
+                    // that firing, so idempotency still holds.
+                    payload: { descriptor, editionKey: "<aws.scheduler.scheduled-time>" },
+                });
+                await markScheduleActive(stores(), clock, {
+                    orgId: body.orgId,
+                    scheduleId: body.campaignId,
+                    kind: "recurring",
+                    cron: body.when.cron,
+                    timezone,
+                });
+                return json(202, { status: "recurring", timezone, scheduleId: body.campaignId });
+            }
+            default:
+                return json(400, { error: "unknown schedule type" });
+        }
+    }
+    catch (e) {
+        return fail(e);
+    }
+}
+/**
+ * POST /campaigns/lifecycle — start (resume), pause, or archive a scheduled send
+ * (§4.6). Never deletes: pause/archive flip the lifecycle record, and the launch
+ * handler (recurring) and sender (one-off) gate on it, so a paused series stops
+ * its next edition and can be resumed later.
+ */
+export async function scheduleLifecycleHandler(event) {
+    try {
+        const { orgId, scheduleId, action } = JSON.parse(event.body ?? "{}");
+        if (!orgId || !scheduleId)
+            return json(400, { error: "orgId and scheduleId required" });
+        if (action !== "start" && action !== "pause" && action !== "archive") {
+            return json(400, { error: "action must be start, pause or archive" });
+        }
+        requireGrant(event, "campaigns:schedule", orgId);
+        const state = await transitionSchedule(stores(), clock, { orgId, scheduleId, action });
+        return json(200, state);
+    }
+    catch (e) {
+        return fail(e);
+    }
+}
+/** GET /orgs/{org}/schedules — lifecycle records for the console's Schedules view. */
+export async function schedulesListHandler(event) {
+    try {
+        const orgId = event.pathParameters?.org ?? "";
+        requireGrant(event, "reports:view", orgId);
+        return json(200, await stores().schedules.list(orgId));
+    }
+    catch (e) {
+        return fail(e);
+    }
+}
+/** POST /unsubscribe?token=... — RFC 8058 one-click, no login (§4.2). */
+export async function unsubscribeHandler(event) {
+    try {
+        const token = event.queryStringParameters?.token ??
+            new URLSearchParams(event.body ?? "").get("token") ??
+            "";
+        const { orgId, sub, listId } = (await confirmSigner()).verify(token);
+        if (!listId)
+            throw new Error("token has no list");
+        await unsubscribeFromList(stores(), clock, { orgId, subscriberId: sub, listId });
+        return json(200, { status: "unsubscribed" });
+    }
+    catch (e) {
+        return fail(e);
+    }
+}
+// ---- Admin CRUD (authenticated, org-scoped, RBAC-gated) — §4.1, §4.12, #18 ----
+/** GET /orgs/{org}/lists — list newsletters. POST — create/edit one. */
+export async function listsHandler(event) {
+    try {
+        const method = event.requestContext?.http?.method ?? (event.body ? "POST" : "GET");
+        if (method === "POST") {
+            const input = schemas.createListSchema.parse(JSON.parse(event.body ?? "{}"));
+            requireGrant(event, "campaigns:manage", input.orgId);
+            return json(200, await saveList(stores(), input));
+        }
+        const orgId = event.pathParameters?.org ?? "";
+        requireGrant(event, "reports:view", orgId);
+        return json(200, await stores().lists.list(orgId));
+    }
+    catch (e) {
+        return fail(e);
+    }
+}
+/** GET /orgs/{org} — lightweight org metadata (name, environment) for the console header. */
+export async function orgMetaHandler(event) {
+    try {
+        const orgId = event.pathParameters?.org ?? "";
+        requireGrant(event, "reports:view", orgId);
+        const org = await stores().organizations.get(orgId);
+        if (!org)
+            return json(404, { error: "not found" });
+        return json(200, {
+            orgId: org.orgId,
+            name: org.name,
+            environment: org.environment ?? "prod",
+            setupComplete: org.setupComplete,
+            // Surface the configured AI provider (vendor + model only) so the console
+            // can reflect saved state; the API key/secret ARN is never echoed (#144).
+            aiConfig: org.aiConfig ? { vendor: org.aiConfig.vendor, model: org.aiConfig.model } : undefined,
+        });
+    }
+    catch (e) {
+        return fail(e);
+    }
+}
+/**
+ * GET /version — what is actually deployed.
+ *
+ * Public and unauthenticated by design: it reports only the release and schema
+ * version, never configuration or secrets. An operator needs to answer "did my
+ * upgrade land?" without reading CloudFormation, and the upgrade rehearsal
+ * (#213) asserts on it before and after a deploy.
+ *
+ * `deployed` is the marker last written to the table; `running` is the version
+ * of the code answering this request. They differ mid-deploy, and a persistent
+ * mismatch means the marker write failed — which is worth seeing.
+ */
+export async function versionHandler() {
+    try {
+        const deployed = await stores().version.get();
+        return json(200, {
+            running: APP_VERSION,
+            expectedSchemaVersion: EXPECTED_SCHEMA_VERSION,
+            deployed: deployed ?? null,
+            // Surfaces a half-applied upgrade rather than hiding it behind a 200.
+            inSync: deployed?.version === APP_VERSION,
+        });
+    }
+    catch (e) {
+        return fail(e);
+    }
+}
+/** GET /orgs/{org}/setup — onboarding checklist state for the setup wizard (§9). */
+export async function setupStateHandler(event) {
+    try {
+        const orgId = event.pathParameters?.org ?? "";
+        requireGrant(event, "reports:view", orgId);
+        return json(200, await evaluateSetup(stores(), orgId));
+    }
+    catch (e) {
+        return fail(e);
+    }
+}
+/** POST /lists/visibility — open (reopen) or close a newsletter (destructive). */
+export async function listVisibilityHandler(event) {
+    try {
+        const { orgId, listId, visibility } = JSON.parse(event.body ?? "{}");
+        if (!orgId || !listId || !visibility)
+            return json(400, { error: "orgId, listId, visibility required" });
+        requireGrant(event, "newsletters:close", orgId);
+        return json(200, await setListVisibility(stores(), orgId, listId, visibility));
+    }
+    catch (e) {
+        return fail(e);
+    }
+}
+/** GET /orgs/{org}/campaigns/{id} — read draft. POST /campaigns — save draft. */
+export async function campaignsHandler(event) {
+    try {
+        const method = event.requestContext?.http?.method ?? (event.body ? "POST" : "GET");
+        if (method === "POST") {
+            const input = schemas.saveCampaignSchema.parse(JSON.parse(event.body ?? "{}"));
+            requireGrant(event, "campaigns:manage", input.orgId);
+            return json(200, await saveCampaignDraft(stores(), input));
+        }
+        const orgId = event.pathParameters?.org ?? "";
+        const campaignId = event.pathParameters?.id ?? "";
+        requireGrant(event, "reports:view", orgId);
+        const campaign = await stores().campaigns.get(orgId, campaignId);
+        return campaign ? json(200, campaign) : json(404, { error: "not found" });
+    }
+    catch (e) {
+        return fail(e);
+    }
+}
+/**
+ * GET /orgs/{org}/campaigns — recent campaigns for the console's report picker
+ * (#103). Returns a lightweight projection (no full template bodies), newest by
+ * campaignId first, so operators don't have to remember raw ids.
+ */
+export async function campaignsListHandler(event) {
+    try {
+        const orgId = event.pathParameters?.org ?? "";
+        requireGrant(event, "reports:view", orgId);
+        const campaigns = await stores().campaigns.list(orgId);
+        const rows = campaigns
+            .map((c) => ({
+            campaignId: c.campaignId,
+            subject: c.subject,
+            status: c.status,
+            type: c.type,
+            listId: c.audience.listId,
+            segmentId: c.audience.segmentId,
+            sent: c.counters.sent,
+            sendAt: c.schedule?.sendAt,
+        }))
+            .sort((a, b) => b.campaignId.localeCompare(a.campaignId));
+        return json(200, rows);
+    }
+    catch (e) {
+        return fail(e);
+    }
+}
+/** GET /orgs/{org}/templates — list. GET …/templates/{id} — one. POST /templates — save. */
+export async function templatesHandler(event) {
+    try {
+        const method = event.requestContext?.http?.method ?? (event.body ? "POST" : "GET");
+        if (method === "POST") {
+            const input = schemas.saveTemplateSchema.parse(JSON.parse(event.body ?? "{}"));
+            requireGrant(event, "campaigns:manage", input.orgId);
+            // Raw-HTML templates are hard-sanitized at save; MJML source is stored as-is.
+            const toSave = input.mode === "raw_html"
+                ? { ...input, source: sanitizeEmailHtml(input.source) }
+                : input;
+            return json(200, await saveTemplate(stores(), toSave));
+        }
+        const orgId = event.pathParameters?.org ?? "";
+        requireGrant(event, "reports:view", orgId);
+        const templateId = event.pathParameters?.id;
+        if (templateId) {
+            const t = await stores().templates.get(orgId, templateId);
+            return t ? json(200, t) : json(404, { error: "not found" });
+        }
+        return json(200, await stores().templates.list(orgId));
+    }
+    catch (e) {
+        return fail(e);
+    }
+}
+/** GET /orgs/{org}/segments — list. POST /segments — create/edit one. */
+export async function segmentsHandler(event) {
+    try {
+        const method = event.requestContext?.http?.method ?? (event.body ? "POST" : "GET");
+        if (method === "POST") {
+            const input = schemas.saveSegmentSchema.parse(JSON.parse(event.body ?? "{}"));
+            requireGrant(event, "segments:manage", input.orgId);
+            return json(200, await saveSegment(stores(), input));
+        }
+        const orgId = event.pathParameters?.org ?? "";
+        requireGrant(event, "reports:view", orgId);
+        return json(200, await stores().segments.list(orgId));
+    }
+    catch (e) {
+        return fail(e);
+    }
+}
+/** GET /orgs/{org}/drip-sequences — list. POST /drip-sequences — create/edit (#104). */
+export async function dripSequencesHandler(event) {
+    try {
+        const method = event.requestContext?.http?.method ?? (event.body ? "POST" : "GET");
+        if (method === "POST") {
+            const input = schemas.saveDripSequenceSchema.parse(JSON.parse(event.body ?? "{}"));
+            requireGrant(event, "campaigns:manage", input.orgId);
+            return json(200, await saveDripSequence(stores(), input));
+        }
+        const orgId = event.pathParameters?.org ?? "";
+        requireGrant(event, "reports:view", orgId);
+        return json(200, await stores().dripSequences.list(orgId));
+    }
+    catch (e) {
+        return fail(e);
+    }
+}
+/** POST /subscribers/suppress — manual suppression (admin). */
+export async function subscriberSuppressHandler(event) {
+    try {
+        const input = schemas.manualSuppressSchema.parse(JSON.parse(event.body ?? "{}"));
+        requireGrant(event, "suppression:manage", input.orgId);
+        return json(200, await manualSuppress(stores(), clock, input));
+    }
+    catch (e) {
+        return fail(e);
+    }
+}
+/**
+ * GET /orgs/{org}/subscribers — subscriber lookup/list for the admin console
+ * (#102). Optional `?q=` filters by email substring. Returns a projection (no
+ * raw attributes bag) so the table stays light. Paginated at the adapter layer.
+ */
+export async function subscribersListHandler(event) {
+    try {
+        const orgId = event.pathParameters?.org ?? "";
+        requireGrant(event, "subscribers:manage", orgId);
+        const q = (event.queryStringParameters?.q ?? "").trim().toLowerCase();
+        const all = await stores().subscribers.list(orgId);
+        const rows = all
+            .filter((s) => (q ? s.email.toLowerCase().includes(q) : true))
+            .map((s) => ({
+            sub: s.sub,
+            email: s.email,
+            status: s.status,
+            entitlement: s.entitlement,
+            lastEngagedAt: s.lastEngagedAt,
+        }));
+        return json(200, rows);
+    }
+    catch (e) {
+        return fail(e);
+    }
+}
+/** GET /orgs/{org}/suppressions — org-scoped suppression list for review (#102). */
+export async function suppressionsListHandler(event) {
+    try {
+        const orgId = event.pathParameters?.org ?? "";
+        requireGrant(event, "suppression:manage", orgId);
+        return json(200, await stores().suppression.list(orgId));
+    }
+    catch (e) {
+        return fail(e);
+    }
+}
+/** POST /subscribers/unsuppress — lift an org suppression + reactivate (#102). */
+export async function subscriberUnsuppressHandler(event) {
+    try {
+        const { orgId, email } = JSON.parse(event.body ?? "{}");
+        if (!orgId || !email)
+            return json(400, { error: "orgId and email required" });
+        requireGrant(event, "suppression:manage", orgId);
+        return json(200, await liftSuppression(stores(), { orgId, email }));
+    }
+    catch (e) {
+        return fail(e);
+    }
+}
+/**
+ * POST /orgs/{org}/import — CSV/Pinpoint subscriber migration (#100). Accepts a
+ * CSV body (header + rows); `dryRun` reports counts without writing. Imported
+ * subscribers default to `pending` (not double-opt-in confirmed) unless the
+ * caller sets status; suppressed addresses are skipped by the domain importer.
+ */
+export async function importHandler(event) {
+    try {
+        const orgId = event.pathParameters?.org ?? "";
+        requireGrant(event, "subscribers:manage", orgId);
+        const body = JSON.parse(event.body ?? "{}");
+        if (!body.listId || typeof body.csv !== "string") {
+            return json(400, { error: "listId and csv required" });
+        }
+        const report = await importCsvSubscribers(stores(), clock, {
+            orgId,
+            listId: body.listId,
+            csv: body.csv,
+            status: body.status,
+            dryRun: body.dryRun,
+        });
+        return json(200, report);
+    }
+    catch (e) {
+        return fail(e);
+    }
+}
+/**
+ * POST /privacy — GDPR/CCPA data-subject request (#101). `export` returns the
+ * person's record (requires subscribers:manage); `erase` anonymizes + suppresses
+ * (requires the stronger subscribers:delete). Sensitive; admin-invoked only.
+ */
+export async function privacyHandler(event) {
+    try {
+        const { action, orgId, email } = JSON.parse(event.body ?? "{}");
+        if (!orgId || !email)
+            return json(400, { error: "orgId and email required" });
+        if (action === "export") {
+            requireGrant(event, "subscribers:manage", orgId);
+            const data = await exportSubscriber(stores(), orgId, email);
+            return json(200, { found: data !== undefined, data });
+        }
+        if (action === "erase") {
+            requireGrant(event, "subscribers:delete", orgId);
+            return json(200, { erased: await eraseSubscriber(stores(), clock, orgId, email) });
+        }
+        return json(400, { error: "action must be export or erase" });
+    }
+    catch (e) {
+        return fail(e);
+    }
+}
+/** POST /subscribers/unsubscribe — admin-initiated unsubscribe (one list or all). */
+export async function subscriberUnsubscribeHandler(event) {
+    try {
+        const { orgId, subscriberId, listId, email } = JSON.parse(event.body ?? "{}");
+        if (!orgId || !subscriberId)
+            return json(400, { error: "orgId and subscriberId required" });
+        requireGrant(event, "subscribers:manage", orgId);
+        if (listId) {
+            await unsubscribeFromList(stores(), clock, { orgId, subscriberId, listId });
+            return json(200, { status: "unsubscribed", scope: "list" });
+        }
+        if (!email)
+            return json(400, { error: "email required for unsubscribe-all" });
+        const n = await unsubscribeAll(stores(), clock, { orgId, subscriberId, email });
+        return json(200, { status: "unsubscribed", scope: "all", lists: n });
+    }
+    catch (e) {
+        return fail(e);
+    }
+}
+/** POST /orgs/branding — set subscriber-site branding/theme (#31). GET is public. */
+export async function brandingHandler(event) {
+    try {
+        const method = event.requestContext?.http?.method ?? (event.body ? "POST" : "GET");
+        if (method === "GET") {
+            // Public: the subscriber site reads branding to theme itself.
+            const orgId = event.pathParameters?.org ?? "";
+            const org = await stores().organizations.get(orgId);
+            return json(200, org?.branding ?? null);
+        }
+        const { orgId, branding } = JSON.parse(event.body ?? "{}");
+        if (!orgId || !branding)
+            return json(400, { error: "orgId and branding required" });
+        requireGrant(event, "branding:manage", orgId);
+        const org = await setBranding(stores(), orgId, branding);
+        return json(200, org.branding);
+    }
+    catch (e) {
+        return fail(e);
+    }
+}
+/** POST /lists/presentation — set a list's subscriber-site toggles (#33). */
+export async function listPresentationHandler(event) {
+    try {
+        const { orgId, listId, presentation } = JSON.parse(event.body ?? "{}");
+        if (!orgId || !listId || !presentation)
+            return json(400, { error: "orgId, listId, presentation required" });
+        requireGrant(event, "branding:manage", orgId);
+        return json(200, await setListPresentation(stores(), orgId, listId, presentation));
+    }
+    catch (e) {
+        return fail(e);
+    }
+}
+/** GET /orgs/{org}/lists/{list}/public — public list view honoring toggles (#33). */
+export async function publicListHandler(event) {
+    try {
+        const orgId = event.pathParameters?.org ?? "";
+        const listId = event.pathParameters?.list ?? "";
+        if (!orgId || !listId)
+            return json(400, { error: "org and list required" });
+        const view = await publicListView(stores(), orgId, listId);
+        return view ? json(200, view) : json(404, { error: "not found" });
+    }
+    catch (e) {
+        return fail(e);
+    }
+}
+/**
+ * POST /orgs/ai-config — set the org's LLM analytics provider (#32). The
+ * plaintext API key is written to Secrets Manager here; only the ARN + vendor/
+ * model are persisted on the org. Gated by identity:manage.
+ */
+export async function aiConfigHandler(event) {
+    try {
+        const { orgId, vendor, model, apiKey } = JSON.parse(event.body ?? "{}");
+        if (!orgId || !vendor || !model || !apiKey) {
+            return json(400, { error: "orgId, vendor, model, apiKey required" });
+        }
+        requireGrant(event, "identity:manage", orgId);
+        const apiKeySecretArn = await upsertSecret(`addressium/${orgId}/ai-provider`, apiKey);
+        const org = await setAiConfig(stores(), orgId, { vendor, model, apiKeySecretArn });
+        // Never echo the key back.
+        return json(200, { orgId: org.orgId, aiConfig: { vendor, model, apiKeySecretArn } });
+    }
+    catch (e) {
+        return fail(e);
+    }
+}
+/** POST /webhooks/entitlement — signed webhook from the billing SoR (§4.3). */
+export async function entitlementSyncHandler(event) {
+    try {
+        const raw = event.body ?? "";
+        const sig = event.headers?.["x-addressium-signature"] ?? "";
+        const secret = await getSecret(env("WEBHOOK_SECRET_ARN"));
+        if (!verifyWebhookSignature(secret, raw, sig)) {
+            return json(401, { error: "bad signature" });
+        }
+        const updated = await applyEntitlementSync(stores(), clock, JSON.parse(raw));
+        return json(200, { entitlement: updated.entitlement });
+    }
+    catch (e) {
+        return fail(e);
+    }
+}
+/**
+ * POST /webhooks/identity — signed webhook from the main user pool / SoR (§4.3).
+ * Applies add / email-change / delete keyed by the immutable Cognito `sub`.
+ * One-directional: addressium never writes back to the pool.
+ */
+export async function identitySyncHandler(event) {
+    try {
+        const raw = event.body ?? "";
+        const sig = event.headers?.["x-addressium-signature"] ?? "";
+        const secret = await getSecret(env("WEBHOOK_SECRET_ARN"));
+        if (!verifyWebhookSignature(secret, raw, sig)) {
+            return json(401, { error: "bad signature" });
+        }
+        const result = await applyIdentitySync(stores(), clock, JSON.parse(raw));
+        return json(200, result);
+    }
+    catch (e) {
+        return fail(e);
+    }
+}
+/** Behind the Cognito JWT authorizer. Every handler also calls requireGrant. */
+const ADMIN_ROUTES = {
+    "GET /orgs/{org}": orgMetaHandler,
+    "GET /orgs/{org}/setup": setupStateHandler,
+    "GET /orgs/{org}/lists": listsHandler,
+    "POST /lists": listsHandler,
+    "POST /lists/visibility": listVisibilityHandler,
+    "POST /lists/presentation": listPresentationHandler,
+    "GET /orgs/{org}/campaigns": campaignsListHandler,
+    "GET /orgs/{org}/campaigns/{id}": campaignsHandler,
+    "POST /campaigns": campaignsHandler,
+    "GET /orgs/{org}/schedules": schedulesListHandler,
+    "POST /campaigns/lifecycle": scheduleLifecycleHandler,
+    "GET /orgs/{org}/templates": templatesHandler,
+    "GET /orgs/{org}/templates/{id}": templatesHandler,
+    "POST /templates": templatesHandler,
+    "GET /orgs/{org}/segments": segmentsHandler,
+    "POST /segments": segmentsHandler,
+    "GET /orgs/{org}/drip-sequences": dripSequencesHandler,
+    "POST /drip-sequences": dripSequencesHandler,
+    "GET /orgs/{org}/subscribers": subscribersListHandler,
+    "GET /orgs/{org}/suppressions": suppressionsListHandler,
+    "POST /subscribers/suppress": subscriberSuppressHandler,
+    "POST /subscribers/unsubscribe": subscriberUnsubscribeHandler,
+    "POST /subscribers/unsuppress": subscriberUnsuppressHandler,
+    "POST /orgs/{org}/import": importHandler,
+    "POST /privacy": privacyHandler,
+    "POST /orgs/branding": brandingHandler,
+    "POST /orgs/ai-config": aiConfigHandler,
+};
+/** Unauthenticated. Deliberately excludes every admin handler. */
+const PUBLIC_ROUTES = {
+    "POST /signup": signupHandler,
+    "POST /signup/batch": signupBatchHandler,
+    "GET /confirm": confirmHandler,
+    "POST /unsubscribe": unsubscribeHandler,
+    "GET /orgs/{org}/lists/{list}/public": publicListHandler,
+    "GET /version": versionHandler,
+    "POST /webhooks/entitlement": entitlementSyncHandler,
+    "POST /webhooks/identity": identitySyncHandler,
+};
+/**
+ * API Gateway supplies `routeKey` ("METHOD /path" with path parameters in their
+ * template form). Falling back to method+rawPath would NOT be equivalent — a
+ * concrete path like `/orgs/acme` doesn't match the `/orgs/{org}` key — so an
+ * absent routeKey is an error rather than something to paper over.
+ */
+async function dispatch(table, event) {
+    const routeKey = event.requestContext?.routeKey;
+    if (!routeKey)
+        return json(500, { error: "no routeKey on request" });
+    const handler = table[routeKey];
+    // A 404 here means CDK registered a route this router doesn't know about.
+    // The route-parity test exists so that mismatch is caught at build time.
+    if (!handler)
+        return json(404, { error: `no handler for ${routeKey}` });
+    return handler(event);
+}
+export const adminRouter = (event) => dispatch(ADMIN_ROUTES, event);
+export const publicRouter = (event) => dispatch(PUBLIC_ROUTES, event);
+/** Exported so the route-parity test can assert against the CDK route list. */
+export const ROUTE_KEYS = {
+    admin: Object.keys(ADMIN_ROUTES),
+    public: Object.keys(PUBLIC_ROUTES),
+};
+//# sourceMappingURL=index.js.map

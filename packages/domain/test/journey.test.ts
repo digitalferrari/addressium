@@ -108,7 +108,11 @@ test("signup → double opt-in → send, and the magic-link token verifies", asy
   assert.equal(msg.to, "jordan@example.com");
   assert.match(msg.html, /Good morning, Jordan\./); // merge tag applied
   assert.match(msg.html, /li\.example\/c\.png/); // ad slot verbatim
-  assert.ok(msg.listUnsubscribe.startsWith("<https://unsub."), "RFC 8058 header");
+  // With no link builder injected, the header degrades to mailto rather than
+  // advertising an https one-click URL nothing can honor (#178). SesEmailSender
+  // only stamps List-Unsubscribe-Post for an https URI, so this correctly stops
+  // claiming one-click support.
+  assert.ok(msg.listUnsubscribe.startsWith("<mailto:"), "RFC 2369 fallback header");
 
   const claims = await verifyMagicLinkToken(tokenFrom(msg.html), {
     issuer: ISS,
@@ -223,4 +227,37 @@ test("SSRF guard blocks internal targets and allows public ones", async () => {
   await assert.rejects(() => assertPublicHttpsUrl("https://127.0.0.1/feed"), SsrfBlockedError);
   const ok = await assertPublicHttpsUrl("https://1.1.1.1/feed"); // literal public IP, no DNS
   assert.equal(ok.pinnedAddress, "1.1.1.1");
+});
+
+test("an injected link builder produces a signed one-click unsubscribe URL (#178)", async () => {
+  const h = await harness();
+  await signup(h.stores, h.confirmSigner, h.clock, { orgId: ORG, email: "a@x.example", listId: LIST });
+  const s = await h.stores.subscribers.findByEmail(ORG, "a@x.example");
+  await h.stores.subscriptions.put({
+    orgId: ORG, subscriberId: s!.sub, listId: LIST, status: "confirmed",
+    updatedAt: h.clock.now().toISOString(),
+  });
+
+  const out = await sendCampaign(h.stores, h.sender, h.magic, h.clock, {
+    orgId: ORG, campaignId: "unsub-test", listId: LIST, subject: "Hi",
+    template: { blocks: [{ kind: "text", html: "<p>hi</p>" }] },
+  }, {
+    unsubscribeLink: {
+      build: async ({ orgId, subscriberId, listId }) =>
+        `https://api.example.test/unsubscribe?token=${h.confirmSigner.sign({
+          orgId, sub: subscriberId, listId, exp: 2_000_000_000,
+        })}`,
+    },
+  });
+  assert.equal(out.sent, 1);
+
+  const msg = h.sender.sent.at(-1)!;
+  assert.ok(msg.listUnsubscribe.startsWith("<https://api.example.test/unsubscribe?token="));
+  // The token must actually verify — the old header carried bare ?sub=&list=
+  // params that unsubscribeHandler rejects outright.
+  const token = decodeURIComponent(msg.listUnsubscribe.match(/token=([^>]+)/)![1]!);
+  const claims = h.confirmSigner.verify(token);
+  assert.equal(claims.orgId, ORG);
+  assert.equal(claims.listId, LIST);
+  assert.equal(claims.sub, s!.sub);
 });

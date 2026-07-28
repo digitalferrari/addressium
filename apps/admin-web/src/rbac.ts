@@ -21,11 +21,19 @@ const ROLES: Record<Role, Capability[]> = {
 
 export interface Grant { role: Role; orgs: string[] | "*"; }
 
+const ROLE_NAMES = new Set<Role>(["developer_admin", "editor", "analyst", "support"]);
+
 export function grantFromClaims(claims: Record<string, string>): Grant | null {
   const role = claims["custom:role"] as Role | undefined;
-  if (!role || !(role in ROLES)) return null;
+  // A Set, not `role in ROLES`: `in` walks the prototype chain, so a claim of
+  // "toString" passed the check and then ROLES["toString"].includes threw,
+  // white-screening the console. The server already uses a Set — mirror it.
+  if (!role || !ROLE_NAMES.has(role)) return null;
   const raw = (claims["custom:orgs"] ?? "").trim();
-  const orgs = raw === "*" ? "*" : raw.split(",").map((o) => o.trim()).filter(Boolean);
+  if (raw === "*") return { role, orgs: "*" };
+  const orgs = raw.split(",").map((o) => o.trim()).filter(Boolean);
+  // Mirror the server: "*" is a wildcard only as the whole claim (#168).
+  if (orgs.includes("*")) return null;
   return { role, orgs };
 }
 

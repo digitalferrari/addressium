@@ -48,3 +48,32 @@ test("privacy() erase POSTs the action", async () => {
   expect(url).toMatch(/\/privacy$/);
   expect(JSON.parse(init.body as string)).toMatchObject({ action: "erase", email: "x@y.com" });
 });
+
+test("sends the ID token as Bearer, not the access token (#161)", async () => {
+  // Cognito access tokens never carry custom:* attributes, so sending one made
+  // server-side RBAC 403 on every call.
+  sessionStorage.setItem(
+    "addressium.tokens",
+    JSON.stringify({ idToken: "ID.TOKEN.VALUE", accessToken: "ACCESS.TOKEN.VALUE" }),
+  );
+  try {
+    await api.campaigns("acme");
+    const headers = lastCall().init.headers as Record<string, string>;
+    expect(headers.authorization).toBe("Bearer ID.TOKEN.VALUE");
+    expect(headers.authorization).not.toContain("ACCESS");
+  } finally {
+    sessionStorage.removeItem("addressium.tokens");
+  }
+});
+
+test("a corrupt token blob does not throw — it self-heals", async () => {
+  sessionStorage.setItem("addressium.tokens", "{not json");
+  try {
+    await expect(api.campaigns("acme")).resolves.toBeDefined();
+    const headers = lastCall().init.headers as Record<string, string>;
+    expect(headers.authorization).toBeUndefined();
+    expect(sessionStorage.getItem("addressium.tokens")).toBeNull();
+  } finally {
+    sessionStorage.removeItem("addressium.tokens");
+  }
+});

@@ -15,26 +15,36 @@
  */
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
-import { Stack, type StackProps, RemovalPolicy, Duration, CfnOutput } from "aws-cdk-lib";
+import { Stack, type StackProps, RemovalPolicy, Duration, CfnOutput, Lazy, ArnFormat } from "aws-cdk-lib";
 import type { Construct } from "constructs";
 import { AttributeType, BillingMode, StreamViewType, Table } from "aws-cdk-lib/aws-dynamodb";
-import { Bucket, BlockPublicAccess, ObjectLockRetention } from "aws-cdk-lib/aws-s3";
+import { Bucket, BlockPublicAccess, ObjectLockRetention, StorageClass } from "aws-cdk-lib/aws-s3";
 import { Queue } from "aws-cdk-lib/aws-sqs";
-import { Mfa, UserPool, UserPoolClient, CfnUserPoolUser } from "aws-cdk-lib/aws-cognito";
+import {
+  Mfa,
+  UserPool,
+  UserPoolClient,
+  CfnUserPoolUser,
+  StringAttribute,
+  OAuthScope,
+  ClientAttributes,
+  AccountRecovery,
+} from "aws-cdk-lib/aws-cognito";
 import { Runtime } from "aws-cdk-lib/aws-lambda";
 import { NodejsFunction } from "aws-cdk-lib/aws-lambda-nodejs";
 import { SqsEventSource, DynamoEventSource } from "aws-cdk-lib/aws-lambda-event-sources";
 import { StartingPosition } from "aws-cdk-lib/aws-lambda";
 import { CfnCollection, CfnSecurityPolicy, CfnAccessPolicy } from "aws-cdk-lib/aws-opensearchserverless";
-import { HttpApi, HttpMethod } from "aws-cdk-lib/aws-apigatewayv2";
+import { HttpApi, HttpMethod, CorsHttpMethod } from "aws-cdk-lib/aws-apigatewayv2";
 import { HttpLambdaIntegration } from "aws-cdk-lib/aws-apigatewayv2-integrations";
 import { HttpUserPoolAuthorizer } from "aws-cdk-lib/aws-apigatewayv2-authorizers";
 import { Topic } from "aws-cdk-lib/aws-sns";
 import { LambdaSubscription } from "aws-cdk-lib/aws-sns-subscriptions";
 import { Alarm, ComparisonOperator, TreatMissingData } from "aws-cdk-lib/aws-cloudwatch";
+import { LogGroup, RetentionDays } from "aws-cdk-lib/aws-logs";
 import { SnsAction } from "aws-cdk-lib/aws-cloudwatch-actions";
 import { Secret } from "aws-cdk-lib/aws-secretsmanager";
-import { Role, ServicePrincipal, PolicyStatement } from "aws-cdk-lib/aws-iam";
+import { Role, ServicePrincipal, PolicyStatement, Effect } from "aws-cdk-lib/aws-iam";
 import { CfnScheduleGroup } from "aws-cdk-lib/aws-scheduler";
 import {
   Choice,
@@ -61,6 +71,14 @@ export interface ControlPlaneStackProps extends StackProps {
   stage: string;
   adminEmails: string[];
   adminHostedUiDomainPrefix: string;
+  /**
+   * Public URL of the admin console, used for the Cognito callback/logout URLs
+   * and API CORS. Defaults to this stack's own CloudFront distribution; set it
+   * when the console is served from a custom domain.
+   */
+  adminAppUrl?: string;
+  /** Public URL of the subscriber/public site. Defaults to its distribution. */
+  publicAppUrl?: string;
 }
 
 export class ControlPlaneStack extends Stack {
@@ -89,7 +107,17 @@ export class ControlPlaneStack extends Stack {
       pointInTimeRecovery: true,
       stream: enableOpenSearchMirror ? StreamViewType.NEW_AND_OLD_IMAGES : undefined,
       kinesisStream: analyticsStream,
-      removalPolicy: props.stage === "prod" ? RemovalPolicy.RETAIN : RemovalPolicy.DESTROY,
+      // NEVER destroy subscriber, consent, or analytics data — in ANY stage.
+      // This previously read `stage === "prod" ? RETAIN : DESTROY`, so every
+      // non-prod deployment carried DeletionPolicy: Delete on the one table
+      // holding every subscriber and every engagement event (#190). A typo in
+      // the stage name had the same effect, since the comparison is a string
+      // equality against a free-form value.
+      removalPolicy: RemovalPolicy.RETAIN,
+      // Belt and braces: DynamoDB refuses the delete itself, so even a
+      // hand-rolled API call or a CloudFormation rollback cannot drop the table.
+      // Turning this off is a deliberate, separate action.
+      deletionProtection: true,
     });
     table.addGlobalSecondaryIndex({
       indexName: "gsi1", // email lookup
@@ -110,6 +138,39 @@ export class ControlPlaneStack extends Stack {
     const analyticsBucket = new Bucket(this, "AnalyticsBucket", {
       blockPublicAccess: BlockPublicAccess.BLOCK_ALL,
       enforceSSL: true,
+      // Versioned like ArchiveBucket: the Firehose and export roles hold
+      // s3:DeleteObject*, so without this the fact tier is unrecoverable.
+      versioned: true,
+      // Nothing expired anything here, while a FULL-table export ran nightly
+      // into entities/ forever — unbounded cost, and every pre-erasure snapshot
+      // kept a GDPR-erased subscriber's PII alive indefinitely (#185, #164).
+      lifecycleRules: [
+        {
+          id: "expire-athena-results",
+          prefix: "athena-results/",
+          expiration: Duration.days(14),
+          abortIncompleteMultipartUploadAfter: Duration.days(3),
+        },
+        {
+          id: "expire-entity-snapshots",
+          prefix: "entities/",
+          expiration: Duration.days(30),
+          noncurrentVersionExpiration: Duration.days(7),
+        },
+        {
+          id: "expire-transform-errors",
+          prefix: "events-errors/",
+          expiration: Duration.days(30),
+        },
+        {
+          id: "archive-events",
+          prefix: "events/",
+          transitions: [
+            { storageClass: StorageClass.GLACIER_INSTANT_RETRIEVAL, transitionAfter: Duration.days(90) },
+          ],
+          noncurrentVersionExpiration: Duration.days(30),
+        },
+      ],
     });
     // Audit log backed by S3 Object Lock (WORM) — history can't be rewritten
     // even by an admin (§4.19, docs/SECURITY.md §4.3, #29). COMPLIANCE mode +
@@ -135,10 +196,46 @@ export class ControlPlaneStack extends Stack {
       deadLetterQueue: { queue: sendDlq, maxReceiveCount: 5 },
     });
     const sesEvents = new Topic(this, "SesEventsTopic");
+    // SES publishes engagement events here via each org's configuration-set
+    // event destination. Without this policy SES is denied and the event plane
+    // stays dead even once the destination exists (#208). SourceAccount stops
+    // another account's SES pointing at this topic.
+    sesEvents.addToResourcePolicy(
+      new PolicyStatement({
+        principals: [new ServicePrincipal("ses.amazonaws.com")],
+        actions: ["SNS:Publish"],
+        resources: [sesEvents.topicArn],
+        conditions: { StringEquals: { "AWS:SourceAccount": Stack.of(this).account } },
+      }),
+    );
     // Ops alerts topic (#92): infra-level CloudWatch alarms (DLQ depth, queue
     // age, Lambda errors/throttles) publish here. Subscribe your ops channel;
     // this is the same escalation path as the domain-layer deliverability alerts.
     const opsAlerts = new Topic(this, "OpsAlertsTopic");
+
+    // The SPA distributions are created near the end of this stack, but the
+    // Cognito callback URLs and the API's CORS origins need them. Lazy defers
+    // resolution to synth, after the whole constructor has run, so we keep a
+    // single source of truth instead of hardcoding a URL.
+    let adminSite: StaticSite | undefined;
+    let publicSite: StaticSite | undefined;
+    // Origins carry NO trailing slash — browsers send `Origin: https://host`, so
+    // a stored "https://host/" would never match and CORS would silently fail.
+    // The OAuth callback does need the trailing slash (the SPA's redirect_uri is
+    // `window.location.origin + "/"`), so it is appended separately below.
+    const siteOrigin = (get: () => StaticSite | undefined, what: string) =>
+      Lazy.string({
+        produce: () => {
+          const site = get();
+          if (!site) throw new Error(`${what} was never created`);
+          return `https://${site.distribution.domainName}`;
+        },
+      });
+    const stripSlash = (u: string) => u.replace(/\/+$/, "");
+    const adminOrigin = props.adminAppUrl ? stripSlash(props.adminAppUrl) : siteOrigin(() => adminSite, "AdminSite");
+    const publicOrigin = props.publicAppUrl ? stripSlash(props.publicAppUrl) : siteOrigin(() => publicSite, "PublicSite");
+    // Token-safe concatenation: this resolves to an Fn::Join at synth.
+    const adminCallbackUrl = `${adminOrigin}/`;
 
     // ---- admin pool (control plane, seeded so first login works — §9.1) ----
     const adminPool = new UserPool(this, "AdminPool", {
@@ -146,7 +243,17 @@ export class ControlPlaneStack extends Stack {
       mfa: Mfa.REQUIRED,
       mfaSecondFactor: { otp: true, sms: false },
       signInAliases: { email: true },
-      removalPolicy: props.stage === "prod" ? RemovalPolicy.RETAIN : RemovalPolicy.DESTROY,
+      accountRecovery: AccountRecovery.EMAIL_ONLY,
+      // Server-side RBAC derives the caller's grant from these claims. Without
+      // them declared they cannot be set on a user at all, so grantFromClaims
+      // threw and EVERY RBAC-gated endpoint returned 403 (#161).
+      customAttributes: {
+        role: new StringAttribute({ mutable: true }),
+        orgs: new StringAttribute({ mutable: true }),
+      },
+      // Operator identities + MFA enrollments. Losing these locks every admin out
+      // of the console, so retain in every stage (#190).
+      removalPolicy: RemovalPolicy.RETAIN,
     });
     adminPool.addDomain("AdminHostedUi", {
       cognitoDomain: { domainPrefix: `${props.adminHostedUiDomainPrefix}-${props.stage}` },
@@ -155,6 +262,22 @@ export class ControlPlaneStack extends Stack {
       userPool: adminPool,
       generateSecret: false,
       authFlows: { userSrp: true },
+      // Don't leak whether an admin address exists.
+      preventUserExistenceErrors: true,
+      // Omitting `oAuth` takes CDK's defaults: callbackUrls ["https://example.com"]
+      // (so Hosted-UI login fails with redirect_mismatch), the IMPLICIT grant
+      // enabled (tokens in the URL fragment, bypassing PKCE), and the
+      // aws.cognito.signin.user.admin scope. All three are wrong here (#160).
+      oAuth: {
+        flows: { authorizationCodeGrant: true, implicitCodeGrant: false },
+        scopes: [OAuthScope.OPENID, OAuthScope.EMAIL, OAuthScope.PROFILE],
+        callbackUrls: [adminCallbackUrl],
+        logoutUrls: [adminCallbackUrl],
+      },
+      // role/orgs must NEVER be client-writable, or a token could self-promote
+      // via UpdateUserAttributes. readAttributes stays at the default so the
+      // claims still appear in the ID token.
+      writeAttributes: new ClientAttributes().withStandardAttributes({ email: true }),
     });
     props.adminEmails.forEach((email, i) => {
       new CfnUserPoolUser(this, `AdminSeed${i}`, {
@@ -164,6 +287,10 @@ export class ControlPlaneStack extends Stack {
         userAttributes: [
           { name: "email", value: email },
           { name: "email_verified", value: "true" },
+          // Bootstrap admins need a grant or they authenticate successfully and
+          // then 403 on everything — grantFromClaims requires both claims (#161).
+          { name: "custom:role", value: "developer_admin" },
+          { name: "custom:orgs", value: "*" },
         ],
       });
     });
@@ -182,6 +309,12 @@ export class ControlPlaneStack extends Stack {
         timeout: Duration.seconds(30),
         environment: { ...baseEnv, ...extraEnv },
         bundling: { format: "esm" as never, target: "node20" },
+        // Lambda's default log retention is NEVER EXPIRE. With ~40 functions
+        // that is unbounded CloudWatch cost forever (#187).
+        logGroup: new LogGroup(this, `${id}Logs`, {
+          retention: props.stage === "prod" ? RetentionDays.THREE_MONTHS : RetentionDays.ONE_WEEK,
+          removalPolicy: RemovalPolicy.DESTROY,
+        }),
       });
 
     // ses:SendEmail scoped to *this account's* SES identities + configuration
@@ -190,6 +323,30 @@ export class ControlPlaneStack extends Stack {
     // this account/region's `identity/*` and `configuration-set/*` is a real
     // tightening from `resources: ["*"]` (blocks sending as any other account's
     // verified identity). A fresh statement per caller keeps roles independent.
+    /**
+     * Per-org secrets are created at runtime under `addressium/{orgId}/…`, so
+     * exact ARNs can't be enumerated at synth — but scoping to that name prefix
+     * in this account/region stops these handlers from reading EVERY secret in
+     * the account, which is what `resources: ["*"]` allowed (#166). Reachable
+     * unauthenticated via /signup, so the blast radius mattered. Secrets Manager
+     * appends a 6-character suffix to the ARN, hence the trailing `*`.
+     *
+     * Stack-created secrets (confirm, webhook) are granted precisely via
+     * `grantRead` elsewhere and deliberately do NOT rely on this.
+     */
+    const orgSecretsScoped = () =>
+      new PolicyStatement({
+        actions: ["secretsmanager:GetSecretValue"],
+        resources: [
+          Stack.of(this).formatArn({
+            service: "secretsmanager",
+            resource: "secret",
+            resourceName: "addressium/*",
+            arnFormat: ArnFormat.COLON_RESOURCE_NAME,
+          }),
+        ],
+      });
+
     const sesSendScoped = () =>
       new PolicyStatement({
         actions: ["ses:SendEmail"],
@@ -214,6 +371,8 @@ export class ControlPlaneStack extends Stack {
     signupFn.addToRolePolicy(
       sesSendScoped(),
     );
+    // /signup now verifies the org's reCAPTCHA secret too (#170).
+    signupFn.addToRolePolicy(orgSecretsScoped());
     const signupBatchFn = fn("SignupBatchFn", apiEntry, "signupBatchHandler", {
       ...apiEnv,
       CONFIRM_URL_BASE:
@@ -224,15 +383,29 @@ export class ControlPlaneStack extends Stack {
       sesSendScoped(),
     );
     // The embed widget's reCAPTCHA secret is org-configured at runtime (#62).
-    signupBatchFn.addToRolePolicy(
-      new PolicyStatement({ actions: ["secretsmanager:GetSecretValue"], resources: ["*"] }),
-    );
+    signupBatchFn.addToRolePolicy(orgSecretsScoped());
     const confirmFn = fn("ConfirmFn", apiEntry, "confirmHandler", apiEnv);
     // Opt-in post-verify subscriber-account provisioning (#62). Per-org pools are
     // created at runtime, so we can't enumerate ARNs; the handler only calls this
     // when the org explicitly enables createAccountsOnConfirm.
     confirmFn.addToRolePolicy(
-      new PolicyStatement({ actions: ["cognito-idp:AdminCreateUser", "cognito-idp:AdminGetUser"], resources: ["*"] }),
+      new PolicyStatement({
+        actions: ["cognito-idp:AdminCreateUser", "cognito-idp:AdminGetUser"],
+        resources: [
+          Stack.of(this).formatArn({ service: "cognito-idp", resource: "userpool", resourceName: "*" }),
+        ],
+      }),
+    );
+    // The scoping above still leaves every pool in THIS account in range —
+    // including the admin pool. An explicit Deny (which always wins in IAM)
+    // closes the actual escalation: a publicly reachable /confirm handler being
+    // able to AdminCreateUser its way into the control plane (#167).
+    confirmFn.addToRolePolicy(
+      new PolicyStatement({
+        effect: Effect.DENY,
+        actions: ["cognito-idp:*"],
+        resources: [adminPool.userPoolArn],
+      }),
     );
     const unsubscribeFn = fn("UnsubscribeFn", apiEntry, "unsubscribeHandler", apiEnv);
     const entitlementFn = fn("EntitlementFn", apiEntry, "entitlementSyncHandler", apiEnv);
@@ -240,7 +413,17 @@ export class ControlPlaneStack extends Stack {
 
     // The sender resolves each org's KMS key + SES config from the org record at
     // send time (§4.11), so no per-org env here.
-    const senderFn = fn("SenderFn", svc("services/sender/src/index.ts"), "handler");
+    // The sender re-enqueues fan-out slices onto the same queue, so it needs the
+    // queue URL (services/sender reads SEND_QUEUE_URL at module scope and calls
+    // it on the first, unsliced message of every campaign) and send permission.
+    const senderFn = fn("SenderFn", svc("services/sender/src/index.ts"), "handler", {
+      SEND_QUEUE_URL: sendQueue.queueUrl,
+      // RFC 8058 one-click unsubscribe: the header must point at the real route
+      // and carry a signed token, so the sender needs both the API base and the
+      // confirm secret (#178). Without them it degrades to a mailto header.
+      UNSUBSCRIBE_URL_BASE: Lazy.string({ produce: () => `${api.apiEndpoint}/unsubscribe` }),
+      CONFIRM_SECRET_ARN: confirmSecret.secretArn,
+    });
     // Per-org signing keys are created by provisioning at runtime, so we can't
     // enumerate their ARNs here; scope by an addressium key-tag condition + SES.
     senderFn.addToRolePolicy(
@@ -251,12 +434,14 @@ export class ControlPlaneStack extends Stack {
       }),
     );
     senderFn.addToRolePolicy(sesSendScoped());
+    sendQueue.grantSendMessages(senderFn); // fan-out slices back onto the queue
     const eventsFn = fn("EventsFn", svc("services/events/src/index.ts"), "handler");
 
     // Launch handler for recurring series (EventBridge Scheduler target, §4.16).
     const launchFn = fn("LaunchFn", svc("services/automations/src/index.ts"), "handler", {
       SEND_QUEUE_URL: sendQueue.queueUrl,
     });
+    sendQueue.grantSendMessages(launchFn); // each firing enqueues an edition
 
     // ---- drip automations state machine (§4.6, #23) ----
     // Each step: Wait(waitSeconds) → Task(dripStepHandler) → Choice(done?) loop.
@@ -264,6 +449,7 @@ export class ControlPlaneStack extends Stack {
     const dripStepFn = fn("DripStepFn", svc("services/automations/src/index.ts"), "dripStepHandler", {
       SEND_QUEUE_URL: sendQueue.queueUrl,
     });
+    sendQueue.grantSendMessages(dripStepFn);
     dripStepFn.addToRolePolicy(
       new PolicyStatement({
         actions: ["kms:Sign"],
@@ -353,6 +539,7 @@ export class ControlPlaneStack extends Stack {
     confirmSecret.grantRead(signupBatchFn);
     confirmSecret.grantRead(confirmFn);
     confirmSecret.grantRead(unsubscribeFn);
+    confirmSecret.grantRead(senderFn); // signs the List-Unsubscribe token (#178)
     webhookSecret.grantRead(entitlementFn);
     webhookSecret.grantRead(identityFn);
     archiveBucket.grantReadWrite(senderFn);
@@ -362,7 +549,18 @@ export class ControlPlaneStack extends Stack {
     // condition covers them without enumerating ARNs here (§4.11).
 
     // ---- wiring ----
-    const api = new HttpApi(this, "HttpApi");
+    // The SPAs are served from their own CloudFront origins, so every call is
+    // cross-origin. Without this, the admin console's authorization +
+    // content-type headers force a preflight that fails and NO browser request
+    // to this API succeeds (#189).
+    const api = new HttpApi(this, "HttpApi", {
+      corsPreflight: {
+        allowOrigins: [adminOrigin, publicOrigin],
+        allowHeaders: ["authorization", "content-type"],
+        allowMethods: [CorsHttpMethod.GET, CorsHttpMethod.POST],
+        maxAge: Duration.hours(1),
+      },
+    });
     api.addRoutes({
       path: "/signup",
       methods: [HttpMethod.POST],
@@ -373,6 +571,17 @@ export class ControlPlaneStack extends Stack {
       methods: [HttpMethod.POST],
       integration: new HttpLambdaIntegration("SignupBatchInt", signupBatchFn),
     });
+    // Public, unauthenticated: reports only release + schema version, never
+    // config or secrets. Lets an operator confirm an upgrade landed without
+    // reading CloudFormation, and the upgrade rehearsal asserts on it (#213).
+    const versionFn = fn("VersionFn", apiEntry, "versionHandler", apiEnv);
+    table.grantReadData(versionFn);
+    api.addRoutes({
+      path: "/version",
+      methods: [HttpMethod.GET],
+      integration: new HttpLambdaIntegration("VersionInt", versionFn),
+    });
+
     api.addRoutes({
       path: "/confirm",
       methods: [HttpMethod.GET],
@@ -408,17 +617,92 @@ export class ControlPlaneStack extends Stack {
     // ---- admin CRUD + branding + presentation + AI config (§4.1, #18/#31/#32/#33) ----
     // Each handler is a small Lambda; admin routes sit behind the JWT authorizer,
     // then the handler enforces role + org scope from the claims.
-    const adminRoute = (id: string, handler: string, method: HttpMethod, path: string, env = apiEnv) => {
-      const f = fn(id, apiEntry, handler, env);
-      table.grantReadWriteData(f);
+    // ONE function serves every authenticated route, dispatching internally on
+    // API Gateway's routeKey. Previously each of these 27 routes got its own
+    // Lambda — 27 copies of the same bundle, each with a cold start, a log
+    // group and an IAM role, for a data model that never changes (#213).
+    //
+    // Routes stay registered INDIVIDUALLY rather than as a catch-all: the JWT
+    // authorizer attaches per route, so a `$default` would have erased the
+    // public/authenticated boundary. This keeps the boundary and drops the
+    // duplication.
+    const adminApiFn = fn("AdminApiFn", apiEntry, "adminRouter", apiEnv);
+    table.grantReadWriteData(adminApiFn);
+    const adminApiInt = new HttpLambdaIntegration("AdminApiInt", adminApiFn);
+    const adminRoute = (_id: string, _handler: string, method: HttpMethod, path: string) => {
       api.addRoutes({
         path,
         methods: [method],
-        integration: new HttpLambdaIntegration(`${id}Int`, f),
+        integration: adminApiInt,
         authorizer: adminAuth,
       });
-      return f;
+      return adminApiFn;
     };
+    // ---- provisioning + tokens (#198) ----
+    // Both services existed in the repo but were NEVER deployed: no Lambda, no
+    // route, no IAM. That made "Add organization" impossible (so no org could
+    // have a KMS key, SES identity or config set) and left publishers with no
+    // JWKS endpoint to verify magic-link tokens against.
+    const provisioningFn = fn("ProvisioningFn", svc("services/provisioning/src/index.ts"), "handler", {
+      ...apiEnv,
+      // Lets provisioning attach the SES event destination (#208) — without it
+      // a new org's config set publishes nothing and the event plane is dead.
+      SES_EVENTS_TOPIC_ARN: sesEvents.topicArn,
+    });
+    table.grantReadWriteData(provisioningFn);
+    provisioningFn.addToRolePolicy(
+      new PolicyStatement({
+        // Per-org resources are created at runtime, so their ARNs cannot be
+        // enumerated here; these are creation calls, which are inherently
+        // account-scoped. The KMS key is tagged app=addressium so downstream
+        // grants can scope to it.
+        actions: [
+          "kms:CreateKey",
+          "kms:CreateAlias",
+          "kms:TagResource",
+          "ses:CreateConfigurationSet",
+          "ses:CreateConfigurationSetEventDestination",
+          "ses:UpdateConfigurationSetEventDestination",
+          "ses:CreateEmailIdentity",
+          "ses:GetEmailIdentity",
+          "ses:TagResource",
+          "cognito-idp:CreateUserPool",
+          "cognito-idp:DescribeUserPool",
+        ],
+        resources: ["*"],
+      }),
+    );
+    // Same reasoning as ConfirmFn (#167): creation APIs need a broad resource,
+    // so deny the control-plane pool explicitly rather than trusting scope.
+    provisioningFn.addToRolePolicy(
+      new PolicyStatement({
+        effect: Effect.DENY,
+        actions: ["cognito-idp:*"],
+        resources: [adminPool.userPoolArn],
+      }),
+    );
+    api.addRoutes({
+      path: "/orgs",
+      methods: [HttpMethod.POST],
+      integration: new HttpLambdaIntegration("ProvisioningInt", provisioningFn),
+      authorizer: adminAuth, // handler additionally requires identity:manage
+    });
+
+    // Public JWKS so publisher sites can verify magic-link tokens (§4.10).
+    const tokensFn = fn("TokensFn", svc("services/tokens/src/index.ts"), "handler", apiEnv);
+    table.grantReadData(tokensFn);
+    tokensFn.addToRolePolicy(
+      new PolicyStatement({
+        actions: ["kms:GetPublicKey"],
+        resources: [Stack.of(this).formatArn({ service: "kms", resource: "key", resourceName: "*" })],
+      }),
+    );
+    api.addRoutes({
+      path: "/orgs/{org}/.well-known/jwks.json",
+      methods: [HttpMethod.GET],
+      integration: new HttpLambdaIntegration("TokensInt", tokensFn),
+    });
+
     adminRoute("OrgMetaFn", "orgMetaHandler", HttpMethod.GET, "/orgs/{org}");
     adminRoute("SetupStateFn", "setupStateHandler", HttpMethod.GET, "/orgs/{org}/setup");
     adminRoute("ListsGetFn", "listsHandler", HttpMethod.GET, "/orgs/{org}/lists");
@@ -495,9 +779,7 @@ export class ControlPlaneStack extends Stack {
 
     const analyzeFn = fn("AnalyzeFn", reportingEntry, "analyzeHandler", apiEnv);
     table.grantReadData(analyzeFn);
-    analyzeFn.addToRolePolicy(
-      new PolicyStatement({ actions: ["secretsmanager:GetSecretValue"], resources: ["*"] }),
-    );
+    analyzeFn.addToRolePolicy(orgSecretsScoped());
     api.addRoutes({
       path: "/reports/analyze",
       methods: [HttpMethod.POST],
@@ -505,7 +787,19 @@ export class ControlPlaneStack extends Stack {
       authorizer: adminAuth,
     });
 
-    senderFn.addEventSource(new SqsEventSource(sendQueue));
+    // reportBatchItemFailures is required for the handler's `batchItemFailures`
+    // return value to mean anything. Without it one throw failed the WHOLE batch
+    // and redelivered the other 9 messages — re-sending already-delivered mail,
+    // up to maxReceiveCount times (#177). maxConcurrency bounds the aggregate
+    // SES rate: the TokenBucket is per-invocation, so N concurrent senders
+    // otherwise multiply the configured rate by N (#176).
+    senderFn.addEventSource(
+      new SqsEventSource(sendQueue, {
+        batchSize: 10,
+        reportBatchItemFailures: true,
+        maxConcurrency: 5,
+      }),
+    );
 
     // ---- infra alarms (#92) — page ops on a stuck/failing send pipeline ----
     const alarmAction = new SnsAction(opsAlerts);
@@ -531,8 +825,22 @@ export class ControlPlaneStack extends Stack {
       treatMissingData: TreatMissingData.NOT_BREACHING,
       alarmDescription: "addressium: send queue backing up (oldest message > 15m)",
     }));
-    // Lambda errors + throttles across the critical send path.
-    for (const [label, f] of [["Sender", senderFn], ["Launch", launchFn], ["DripStep", dripStepFn]] as const) {
+    // Lambda errors + throttles across the critical send path AND the public
+    // surface. Previously only the three send-path functions were alarmed, so a
+    // failing signup, confirm, unsubscribe, webhook, or SES-event handler was
+    // completely silent — including bounce/complaint processing (#187).
+    for (const [label, f] of [
+      ["Sender", senderFn],
+      ["Launch", launchFn],
+      ["DripStep", dripStepFn],
+      ["Events", eventsFn],
+      ["Signup", signupFn],
+      ["SignupBatch", signupBatchFn],
+      ["Confirm", confirmFn],
+      ["Unsubscribe", unsubscribeFn],
+      ["EntitlementWebhook", entitlementFn],
+      ["IdentityWebhook", identityFn],
+    ] as const) {
       alarm(`${label}ErrorsAlarm`, new Alarm(this, `${label}ErrorsAlarm`, {
         metric: f.metricErrors({ period: Duration.minutes(5) }),
         threshold: 0,
@@ -550,6 +858,24 @@ export class ControlPlaneStack extends Stack {
         alarmDescription: `addressium: ${label} Lambda throttles`,
       }));
     }
+    // DynamoDB pressure — throttles here surface as failed sends and 5xx well
+    // before anything else notices.
+    alarm("TableThrottleAlarm", new Alarm(this, "TableThrottleAlarm", {
+      metric: table.metric("ThrottledRequests", { period: Duration.minutes(5), statistic: "Sum" }),
+      threshold: 0,
+      comparisonOperator: ComparisonOperator.GREATER_THAN_THRESHOLD,
+      evaluationPeriods: 1,
+      treatMissingData: TreatMissingData.NOT_BREACHING,
+      alarmDescription: "addressium: DynamoDB throttled requests",
+    }));
+    alarm("TableSystemErrorsAlarm", new Alarm(this, "TableSystemErrorsAlarm", {
+      metric: table.metric("SystemErrors", { period: Duration.minutes(5), statistic: "Sum" }),
+      threshold: 0,
+      comparisonOperator: ComparisonOperator.GREATER_THAN_THRESHOLD,
+      evaluationPeriods: 1,
+      treatMissingData: TreatMissingData.NOT_BREACHING,
+      alarmDescription: "addressium: DynamoDB system errors",
+    }));
     sesEvents.addSubscription(new LambdaSubscription(eventsFn));
 
     // ---- WAF (managed rule sets + per-IP rate limit + signup CAPTCHA, §5, #20) ----
@@ -634,8 +960,9 @@ export class ControlPlaneStack extends Stack {
 
     // ---- frontends (static SPAs on S3 + CloudFront, §4.1–4.2) ----
     const prod = props.stage === "prod";
-    const adminSite = new StaticSite(this, "AdminSite", { prod, webAclId: cfWebAcl.attrArn }); // apps/admin-web
-    const publicSite = new StaticSite(this, "PublicSite", { prod, webAclId: cfWebAcl.attrArn }); // apps/subscriber-web + public-web
+    // Assign the hoisted bindings the Cognito callback URLs and CORS resolve from.
+    adminSite = new StaticSite(this, "AdminSite", { prod, webAclId: cfWebAcl.attrArn }); // apps/admin-web
+    publicSite = new StaticSite(this, "PublicSite", { prod, webAclId: cfWebAcl.attrArn }); // apps/subscriber-web + public-web
 
     // ---- outputs ----
     new CfnOutput(this, "AdminPoolId", { value: adminPool.userPoolId });

@@ -22,9 +22,23 @@ import { scheduleActive } from "./schedule-state.js";
 /** Alias kept for readability; a campaign send takes a SendDescriptor. */
 export type SendCampaignInput = SendDescriptor;
 
+/**
+ * Mints the RFC 8058 one-click unsubscribe URL for one recipient.
+ *
+ * Injected rather than built inline because the URL needs a deployment-specific
+ * base AND a signed token — `unsubscribeHandler` verifies a signed token, while
+ * the header used to carry bare `?sub=&list=` params at a `.example` host, so
+ * one-click was doubly broken (#178).
+ */
+export interface UnsubscribeLinkBuilder {
+  build(input: { orgId: string; subscriberId: string; listId: string }): Promise<string>;
+}
+
 export interface SendOptions {
   /** Paces per-recipient sends to the SES rate (§4.4). */
   throttle?: SendThrottle;
+  /** When absent, the header degrades to `mailto:` (see listUnsubscribeHeader). */
+  unsubscribeLink?: UnsubscribeLinkBuilder;
 }
 
 export interface SendResult {
@@ -32,13 +46,31 @@ export interface SendResult {
   suppressed: number;
   /** Recipients dropped by a dev org's send allowlist (§4.11). */
   devBlocked?: number;
-  /** True if this campaign (or slice) was already dispatched and was skipped. */
+  /** Recipients already claimed by an earlier delivery of this campaign. */
+  alreadySent?: number;
+  /** True if this campaign (or slice) had nothing new to dispatch. */
   skipped?: boolean;
+  /** True if a deliverability halt stopped this send (§4.13). */
+  halted?: boolean;
 }
 
-/** Idempotency claim key — per-slice when fanned out, else whole-campaign. */
-function claimKey(input: SendDescriptor): string {
-  return input.slice ? `${input.campaignId}#${input.slice.offset}` : input.campaignId;
+/** How often the halt flag is re-read mid-loop (in recipients). */
+const HALT_CHECK_EVERY = 100;
+
+/**
+ * Per-recipient idempotency key.
+ *
+ * The claim used to be taken ONCE for the whole campaign/slice *before* the
+ * loop and never released — so a crash at recipient 500 of 2000 left the claim
+ * held, and the SQS redelivery returned `skipped` and ACKed the message. The
+ * remaining 1500 were never sent and nothing reported it (#163). Claiming per
+ * recipient instead makes a send resumable: a retry re-sends nobody and
+ * delivers exactly the remainder. It also removes the duplicate-whole-list
+ * window at the fan-out chunk boundary (#172), since slice and non-slice paths
+ * now share one key space.
+ */
+function recipientClaimKey(campaignId: string, subscriberId: string): string {
+  return `${campaignId}#${subscriberId}`;
 }
 
 /** Split a confirmed-recipient count into offset/limit windows of `chunkSize`. */
@@ -99,9 +131,27 @@ export function recipientAllowedForDev(
   return false;
 }
 
-function listUnsubscribeHeader(list: List, sub: string): string {
-  // RFC 8058 one-click unsubscribe (docs/ARCHITECTURE.md §6).
-  return `<https://unsub.${list.orgId}.example/u?sub=${sub}&list=${list.listId}>`;
+/**
+ * RFC 8058 / RFC 2369 List-Unsubscribe value (docs/ARCHITECTURE.md §6).
+ *
+ * With a link builder this is a signed https URL the API can actually honor.
+ * WITHOUT one it degrades to `mailto:` rather than advertising an https
+ * endpoint that 404s — SesEmailSender only stamps `List-Unsubscribe-Post` for
+ * an https URI, so the mailto form correctly stops claiming one-click support.
+ * The old value pointed at `unsub.<org>.example`, a reserved domain that cannot
+ * resolve, and carried bare `?sub=&list=` params that `unsubscribeHandler`
+ * rejects anyway — so every one-click attempt failed (#178).
+ */
+async function listUnsubscribeHeader(
+  list: List,
+  sub: string,
+  builder?: UnsubscribeLinkBuilder,
+): Promise<string> {
+  if (builder) {
+    const url = await builder.build({ orgId: list.orgId, subscriberId: sub, listId: list.listId });
+    return `<${url}>`;
+  }
+  return `<mailto:${list.fromAddress}?subject=unsubscribe>`;
 }
 
 export interface SendOneInput {
@@ -114,6 +164,8 @@ export interface SendOneInput {
   template: EmailTemplate;
   /** Optional pacing — acquired only for an actual send (skips don't burn tokens). */
   throttle?: SendThrottle;
+  /** See SendOptions.unsubscribeLink — same contract for per-recipient sends. */
+  unsubscribeLink?: UnsubscribeLinkBuilder;
 }
 
 export interface SendOneResult {
@@ -138,30 +190,47 @@ export async function sendToSubscriber(
   if (!(await stores.sendClaims.claim(input.orgId, `${input.campaignId}#${input.subscriberId}`))) {
     return { sent: false, reason: "already-sent" };
   }
+  const claimKey = `${input.campaignId}#${input.subscriberId}`;
+  // Any exit that does NOT dispatch must give the claim back, or a transient
+  // failure permanently prevents this subscriber from ever receiving the step —
+  // which, in the re-engagement sweep, then sunsets them unread (#163, #181).
+  const release = () => stores.sendClaims.release(input.orgId, claimKey);
+
   const subscriber = await stores.subscribers.get(input.orgId, input.subscriberId);
-  if (!subscriber) return { sent: false, reason: "unknown-subscriber" };
+  if (!subscriber) {
+    await release();
+    return { sent: false, reason: "unknown-subscriber" };
+  }
   if (await stores.suppression.isSuppressed(input.orgId, subscriber.email)) {
+    await release();
     return { sent: false, reason: "suppressed" };
   }
   // Dev allowlist: a test org can only reach addresses on its list (§4.11).
   const org = await stores.organizations.get(input.orgId);
   if (!recipientAllowedForDev(org, subscriber.email)) {
+    await release();
     return { sent: false, reason: "dev-allowlist" };
   }
   if (input.throttle) await input.throttle.acquire();
-  const token = await magic.mint({
-    orgId: subscriber.orgId,
-    sub: subscriber.sub,
-    entitlement: subscriber.entitlement,
-    entitlementAsof: subscriber.entitlementAsof,
-  });
-  await sender.send({
-    from: list.fromAddress,
-    to: subscriber.email,
-    subject: input.subject,
-    html: renderForRecipient(input.template, subscriber.attributes, token),
-    listUnsubscribe: listUnsubscribeHeader(list, subscriber.sub),
-  });
+  try {
+    const token = await magic.mint({
+      orgId: subscriber.orgId,
+      sub: subscriber.sub,
+      entitlement: subscriber.entitlement,
+      entitlementAsof: subscriber.entitlementAsof,
+    });
+    await sender.send({
+      from: list.fromAddress,
+      to: subscriber.email,
+      subject: input.subject,
+      html: renderForRecipient(input.template, subscriber.attributes, token),
+      listUnsubscribe: await listUnsubscribeHeader(list, subscriber.sub, input.unsubscribeLink),
+      tags: { orgId: input.orgId, campaignId: input.campaignId, subscriberId: subscriber.sub },
+    });
+  } catch (e) {
+    await release();
+    throw e;
+  }
   await stores.events.append({
     orgId: input.orgId,
     subscriberId: subscriber.sub,
@@ -170,6 +239,18 @@ export async function sendToSubscriber(
     at: clock.now().toISOString(),
   });
   return { sent: true };
+}
+
+/**
+ * A template with no content renders to an empty body. Sending that to a whole
+ * list is worse than failing — the send is claimed on the campaign id, so the
+ * edition can never be corrected and re-sent (#174). Fail loudly instead.
+ */
+export function templateIsEmpty(t: EmailTemplate): boolean {
+  // `EmailTemplate` uses optional, mutually-exclusive fields (see render.ts), so
+  // check for presence the same way buildLinkMap does rather than via `in`.
+  if (t.html != null) return t.html.trim() === "";
+  return (t.blocks ?? []).length === 0;
 }
 
 export async function sendCampaign(
@@ -182,6 +263,9 @@ export async function sendCampaign(
 ): Promise<SendResult> {
   const list = await stores.lists.get(input.orgId, input.listId);
   if (!list) throw new Error("unknown list");
+  if (templateIsEmpty(input.template)) {
+    throw new Error(`refusing to send empty template for campaign ${input.campaignId}`);
+  }
 
   // Lifecycle gate: a paused or archived one-off never sends (§4.6). Checked
   // before the idempotency claim so resuming can still send later. Recurring
@@ -189,12 +273,6 @@ export async function sendCampaign(
   // gated upstream in the launch handler — so this only bites one-offs.
   const schedule = await stores.schedules.get(input.orgId, input.campaignId);
   if (!scheduleActive(schedule)) {
-    return { sent: 0, suppressed: 0, skipped: true };
-  }
-
-  // Idempotency: SQS is at-least-once, so claim each unit (campaign or slice)
-  // exactly once (#21). Fanned-out slices claim independently (#9).
-  if (!(await stores.sendClaims.claim(input.orgId, claimKey(input)))) {
     return { sent: 0, suppressed: 0, skipped: true };
   }
 
@@ -221,8 +299,27 @@ export async function sendCampaign(
   let sent = 0;
   let suppressed = 0;
   let devBlocked = 0;
+  let alreadySent = 0;
+
+  // Deliverability halt (§4.13, #165). checkDeliverability flips the campaign to
+  // "halted" on a bounce/complaint breach, but NOTHING in the send path read it,
+  // so a halted campaign ran to completion. Re-checked periodically inside the
+  // loop, because a breach detected mid-send must stop the remainder — not just
+  // the next campaign.
+  const isHalted = async () =>
+    (await stores.campaigns.get(input.orgId, input.campaignId))?.status === "halted";
+  if (await isHalted()) {
+    return { sent: 0, suppressed: 0, skipped: true, halted: true };
+  }
+  let halted = false;
+  let seen = 0;
 
   for (const sub of confirmed) {
+    if (seen > 0 && seen % HALT_CHECK_EVERY === 0 && (await isHalted())) {
+      halted = true;
+      break;
+    }
+    seen++;
     const subscriber = await stores.subscribers.get(input.orgId, sub.subscriberId);
     if (!subscriber) continue;
 
@@ -238,24 +335,39 @@ export async function sendCampaign(
       continue;
     }
 
+    // Idempotency, per recipient (#163). Claimed immediately before the send so
+    // a redelivery skips exactly those already dispatched and delivers the rest.
+    if (!(await stores.sendClaims.claim(input.orgId, recipientClaimKey(input.campaignId, subscriber.sub)))) {
+      alreadySent++;
+      continue;
+    }
+
     // Throttle only actual sends so skipped/suppressed rows don't burn tokens.
     if (opts.throttle) await opts.throttle.acquire();
 
-    const token = await magic.mint({
-      orgId: subscriber.orgId,
-      sub: subscriber.sub,
-      entitlement: subscriber.entitlement,
-      entitlementAsof: subscriber.entitlementAsof,
-    });
-    const html = renderForRecipient(input.template, subscriber.attributes, token);
+    try {
+      const token = await magic.mint({
+        orgId: subscriber.orgId,
+        sub: subscriber.sub,
+        entitlement: subscriber.entitlement,
+        entitlementAsof: subscriber.entitlementAsof,
+      });
+      const html = renderForRecipient(input.template, subscriber.attributes, token);
 
-    await sender.send({
-      from: list.fromAddress,
-      to: subscriber.email,
-      subject: input.subject,
-      html,
-      listUnsubscribe: listUnsubscribeHeader(list, subscriber.sub),
-    });
+      await sender.send({
+        from: list.fromAddress,
+        to: subscriber.email,
+        subject: input.subject,
+        html,
+        listUnsubscribe: await listUnsubscribeHeader(list, subscriber.sub, opts.unsubscribeLink),
+        tags: { orgId: input.orgId, campaignId: input.campaignId, subscriberId: subscriber.sub },
+      });
+    } catch (e) {
+      // The claim guards a dispatch that did not happen — give it back so the
+      // retry re-attempts THIS recipient instead of skipping them forever.
+      await stores.sendClaims.release(input.orgId, recipientClaimKey(input.campaignId, subscriber.sub));
+      throw e;
+    }
 
     const evt: EngagementEvent = {
       orgId: input.orgId,
@@ -268,5 +380,14 @@ export async function sendCampaign(
     sent++;
   }
 
-  return { sent, suppressed, devBlocked };
+  // `skipped` now means "nothing new to dispatch" — true for a full redelivery
+  // (every recipient already claimed), false when a retry delivered a remainder.
+  return {
+    sent,
+    suppressed,
+    devBlocked,
+    alreadySent,
+    skipped: sent === 0 && alreadySent > 0,
+    ...(halted ? { halted: true } : {}),
+  };
 }

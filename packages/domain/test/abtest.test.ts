@@ -164,3 +164,50 @@ test("finalizeAbTest persists the winner, sends the remainder once, and is idemp
   assert.equal(second.remainder, null);
   assert.equal(h.sender.sent.length, 0);
 });
+
+test("phase 2 reuses phase 1's split even when the list grew (#180)", async () => {
+  const h = await harness(100);
+  const descriptor = { orgId: ORG, campaignId: "drift", listId: LIST, subject: "ignored", template };
+  await h.stores.campaigns.put({
+    orgId: ORG,
+    campaignId: "drift",
+    type: "one_off",
+    subject: "ignored",
+    templateId: "t",
+    audience: { listId: LIST },
+    status: "sending",
+    abTest,
+  } as unknown as Campaign);
+
+  const { split } = await startAbTest(h.stores, h.sender, h.magic, h.clock, descriptor, abTest);
+  assert.deepEqual(split.remainder, { offset: 20, limit: 80 });
+
+  // The split is persisted at phase 1 so the decision window can't move it.
+  const stored = await h.stores.campaigns.get(ORG, "drift");
+  assert.deepEqual(stored?.abTest?.split?.remainder, { offset: 20, limit: 80 });
+
+  // 50 people join during the decision window. Recomputing on 150 would yield
+  // remainder {offset:30, limit:120} — a different, shifted window.
+  for (let i = 100; i < 150; i++) {
+    await h.stores.subscribers.put({
+      orgId: ORG, sub: `s${i}`, email: `s${i}@x.com`, attributes: {},
+      status: "active", entitlement: "free",
+    });
+    await h.stores.subscriptions.put({
+      orgId: ORG, subscriberId: `s${i}`, listId: LIST, status: "confirmed", updatedAt: "t",
+    });
+  }
+
+  const sentBefore = h.sender.sent.length;
+  const fin = await finalizeAbTest(h.stores, h.sender, h.magic, h.clock, descriptor, abTest);
+  assert.equal(fin.alreadyFinalized, false);
+  assert.equal(fin.remainder?.sent, 80, "must send phase 1's 80-recipient remainder, not a recomputed 120");
+
+  // And nobody from a holdout is mailed a second time.
+  const finalRecipients = h.sender.sent.slice(sentBefore).map((m) => m.to);
+  assert.equal(new Set(finalRecipients).size, 80);
+  for (const to of finalRecipients) {
+    const idx = Number(to.replace(/^s|@x\.com$/g, ""));
+    assert.ok(idx >= 20 && idx < 100, `${to} must come from the remainder window`);
+  }
+});

@@ -64,6 +64,16 @@ export async function startAbTest(
   const confirmed = await stores.subscriptions.listConfirmed(descriptor.orgId, descriptor.listId);
   const split = planAbSplit(confirmed.length, test.splitPct);
 
+  // Persist the split BEFORE sending, so phase 2 reuses these exact windows.
+  // Recomputing them after the decision window (hours later) against a changed
+  // confirmed count shifts every offset: the remainder then covers the wrong
+  // slice, silently skipping recipients who should have received the winner
+  // and re-covering holdout members who already got a variant (#180).
+  const campaign = await stores.campaigns.get(descriptor.orgId, descriptor.campaignId);
+  if (campaign?.abTest) {
+    await stores.campaigns.put({ ...campaign, abTest: { ...campaign.abTest, split } });
+  }
+
   const a = await sendCampaign(
     stores,
     sender,
@@ -171,8 +181,13 @@ export async function finalizeAbTest(
   const fresh = await stores.sendClaims.claim(descriptor.orgId, finalId);
   if (!fresh) return { decision, remainder: null, alreadyFinalized: true };
 
-  const confirmed = await stores.subscriptions.listConfirmed(descriptor.orgId, descriptor.listId);
-  const split = planAbSplit(confirmed.length, test.splitPct);
+  // Reuse phase 1's windows. Only recompute for a test started before the split
+  // was persisted, where there is nothing better to fall back to.
+  let split = campaign?.abTest?.split ?? test.split;
+  if (!split) {
+    const confirmed = await stores.subscriptions.listConfirmed(descriptor.orgId, descriptor.listId);
+    split = planAbSplit(confirmed.length, test.splitPct);
+  }
   const remainder = await sendAbWinnerToRemainder(
     stores,
     sender,

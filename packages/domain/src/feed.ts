@@ -49,17 +49,53 @@ function decodeEntities(s: string): string {
     .trim();
 }
 
+/**
+ * Inner text of each `<name …> … </name>` block, found with a linear scan.
+ *
+ * A regex like `<name(?:\s[^>]*)?>([\s\S]*?)</name>` is QUADRATIC when the body
+ * contains many opening tags and no closer: 256 KiB of `<item>` took 5.4s, and
+ * the 5 MiB fetch cap extrapolates to minutes of pegged CPU (#173). indexOf
+ * scanning is O(n) — the same technique already used by stripCdata.
+ */
+function scanBlocks(xml: string, name: string, limit = Infinity): string[] {
+  const out: string[] = [];
+  const hay = xml.toLowerCase();
+  const n = name.toLowerCase();
+  const open = `<${n}`;
+  const close = `</${n}`;
+  let i = 0;
+  while (out.length < limit) {
+    const s = hay.indexOf(open, i);
+    if (s < 0) break;
+    // The next char must end the tag name, so `<item>`/`<item a="b">` match but
+    // `<items>` does not.
+    const c = hay.charCodeAt(s + open.length);
+    if (!(c === 0x3e || c === 0x20 || c === 0x09 || c === 0x0a || c === 0x0d)) {
+      i = s + open.length;
+      continue;
+    }
+    const gt = hay.indexOf(">", s + open.length);
+    if (gt < 0) break;
+    if (hay.charCodeAt(gt - 1) === 0x2f) {
+      i = gt + 1; // self-closing `<item/>` has no inner text
+      continue;
+    }
+    const e = hay.indexOf(close, gt + 1);
+    if (e < 0) break; // unclosed — nothing further can match
+    out.push(xml.slice(gt + 1, e));
+    const endGt = hay.indexOf(">", e + close.length);
+    i = endGt < 0 ? e + close.length : endGt + 1;
+  }
+  return out;
+}
+
 function tag(block: string, name: string): string | undefined {
-  const m = block.match(new RegExp(`<${name}(?:\\s[^>]*)?>([\\s\\S]*?)</${name}>`, "i"));
-  return m ? decodeEntities(m[1] ?? "") : undefined;
+  const first = scanBlocks(block, name, 1)[0];
+  return first === undefined ? undefined : decodeEntities(first);
 }
 
 function blocksBetween(xml: string, name: string): string[] {
-  const out: string[] = [];
-  const re = new RegExp(`<${name}(?:\\s[^>]*)?>([\\s\\S]*?)</${name}>`, "gi");
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(xml)) !== null) out.push(m[1] ?? "");
-  return out;
+  return scanBlocks(xml, name);
 }
 
 function parseRss(xml: string): FeedItem[] {
