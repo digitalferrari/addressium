@@ -83,6 +83,12 @@ export async function saveCampaignDraft(
     // Preserve status/counters on edit; new drafts start as "draft".
     status: existing?.status ?? "draft",
     counters: existing?.counters ?? ZERO_COUNTERS,
+    // ...and the SCHEDULE (#201). `saveCampaignDraft` rebuilt the record from
+    // the input alone, so editing a subject on an already-scheduled campaign
+    // silently dropped its send time. The save schema has no `schedule` field —
+    // scheduling goes through its own route — so the draft editor could only
+    // ever have destroyed this, never set it.
+    ...(existing?.schedule ? { schedule: existing.schedule } : {}),
   };
   await stores.campaigns.put(campaign);
   return campaign;

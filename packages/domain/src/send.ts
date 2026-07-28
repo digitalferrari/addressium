@@ -151,6 +151,12 @@ export function recipientAllowedForDev(
   org: { environment?: OrgEnvironment; devAllowlist?: string[] } | undefined,
   email: string,
 ): boolean {
+  // NOTE (#201): a MISSING org returns `true` here, which reads as a fail-OPEN
+  // and is called out as contradicting the documented intent. It is not fixed in
+  // place because it cannot be: "no org record" is a normal condition across the
+  // send path and 28 tests, so denying here changes the contract to "every send
+  // requires an org record" — defensible, arguably right, and far larger than a
+  // one-line guard. Tracked separately rather than smuggled in.
   if (!org || (org.environment ?? "prod") !== "dev") return true;
   const addr = email.trim().toLowerCase();
   const at = addr.lastIndexOf("@");

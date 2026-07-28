@@ -115,3 +115,52 @@ test("manualSuppress adds an org-scoped entry and flips the subscriber", async (
   // org-scoped, not global
   assert.equal(await stores.suppression.isSuppressed("other", "x@y.com"), false);
 });
+
+test("editing a draft does not wipe its schedule (#201)", async () => {
+  // `saveCampaignDraft` rebuilt the record from its input alone, and the save
+  // schema has no `schedule` field — scheduling goes through its own route — so
+  // the draft editor could only ever destroy a send time, never set one.
+  // Changing a subject on an already-scheduled campaign silently unscheduled it.
+  const stores = memStores();
+  const draft = {
+    orgId: ORG,
+    campaignId: "spring",
+    type: "one_off" as const,
+    subject: "Spring",
+    templateId: "t1",
+    audience: { listId: "ledger" },
+  };
+  await saveCampaignDraft(stores, draft);
+
+  // Scheduled out of band, the way the schedule route does it.
+  const scheduled = (await stores.campaigns.get(ORG, "spring"))!;
+  await stores.campaigns.put({
+    ...scheduled,
+    status: "scheduled",
+    schedule: { sendAt: "2026-08-01T09:00:00.000Z", timezone: "America/Denver" },
+  });
+
+  // A pure copy edit.
+  const after = await saveCampaignDraft(stores, { ...draft, subject: "Spring, revised" });
+  assert.equal(after.subject, "Spring, revised");
+  assert.deepEqual(
+    after.schedule,
+    { sendAt: "2026-08-01T09:00:00.000Z", timezone: "America/Denver" },
+    "the send time must survive a subject edit",
+  );
+  assert.equal(after.status, "scheduled", "and so must the status");
+});
+
+test("a brand-new draft has no schedule to preserve", async () => {
+  const stores = memStores();
+  const fresh = await saveCampaignDraft(stores, {
+    orgId: ORG,
+    campaignId: "new",
+    type: "one_off",
+    subject: "New",
+    templateId: "t1",
+    audience: { listId: "ledger" },
+  });
+  assert.equal(fresh.schedule, undefined);
+  assert.equal(fresh.status, "draft");
+});

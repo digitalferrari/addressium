@@ -127,7 +127,14 @@ function baseUrl(u: string): string {
  * explicit disallowed scheme (`javascript:`/`data:`/`vbscript:`…) becomes "#".
  */
 function safeHref(u: string): string {
-  const t = u.trim();
+  // Control characters are STRIPPED before the scheme is read (#201), not just
+  // trimmed from the ends. Browsers discard C0 control characters and DEL
+  // anywhere inside a URL before resolving it, so `java\tscript:alert(1)` loads
+  // as `javascript:` — while the old check saw an interior tab, failed to match
+  // the scheme pattern, concluded "no scheme ⇒ relative" and let it through.
+  // Trimming alone cannot see that, because the character is in the middle.
+  // eslint-disable-next-line no-control-regex
+  const t = u.replace(/[\u0000-\u0020\u007f]/g, "");
   if (/^(https?:|mailto:|\/\/|\/|#)/i.test(t)) return u;
   if (!/^[a-z][a-z0-9+.-]*:/i.test(t)) return u; // no scheme ⇒ relative, allowed
   return "#";
