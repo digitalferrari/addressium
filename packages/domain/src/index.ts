@@ -1,4 +1,5 @@
 export * from "./ports.js";
+export * from "./cost.js";
 export * from "./memory.js";
 export * from "./tokens.js";
 export * from "./render.js";
