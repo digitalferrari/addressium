@@ -11,6 +11,7 @@ import type {
   EmailArchive,
   EngagementEvent,
   EntitlementSync,
+  ImportBatch,
   ImportMapping,
   List,
   Organization,
@@ -50,6 +51,7 @@ import type {
   SuppressionStore,
   UsageStore,
   VersionStore,
+  ImportBatchStore,
   ImportMappingStore,
 } from "./ports.js";
 import { ZERO_COUNTERS } from "./admin.js";
@@ -416,6 +418,42 @@ export class MemImportMappings implements ImportMappingStore {
   }
 }
 
+/**
+ * Import batches (#223). Rows are held in a keyed list rather than folded into
+ * the batch record, mirroring the pointer items the Dynamo adapter writes: a
+ * batch that imported 200k rows must not have to be loaded whole to be counted.
+ */
+export class MemImportBatches implements ImportBatchStore {
+  private map = new Map<string, ImportBatch>();
+  private rows = new Map<string, { subscriberId: string; listId: string }[]>();
+  private key = (orgId: string, batchId: string) => `${orgId}#${batchId}`;
+  async get(orgId: string, batchId: string) {
+    return this.map.get(this.key(orgId, batchId));
+  }
+  async list(orgId: string) {
+    return [...this.map.values()]
+      .filter((b) => b.orgId === orgId)
+      // Newest first: an operator reversing a bad upload wants the last one.
+      .sort((a, b) => b.startedAt.localeCompare(a.startedAt));
+  }
+  async put(b: ImportBatch) {
+    this.map.set(this.key(b.orgId, b.batchId), b);
+  }
+  async addRow(orgId: string, batchId: string, subscriberId: string, listId: string) {
+    const k = this.key(orgId, batchId);
+    const existing = this.rows.get(k) ?? [];
+    // Idempotent, like the Dynamo put it stands in for: re-running an import row
+    // must not inflate the batch's membership.
+    if (!existing.some((r) => r.subscriberId === subscriberId && r.listId === listId)) {
+      existing.push({ subscriberId, listId });
+    }
+    this.rows.set(k, existing);
+  }
+  async listRows(orgId: string, batchId: string) {
+    return [...(this.rows.get(this.key(orgId, batchId)) ?? [])];
+  }
+}
+
 export function memStores(): Stores {
   const events = new MemEvents();
   const campaigns = new MemCampaigns();
@@ -441,6 +479,7 @@ export function memStores(): Stores {
     usage: new MemUsage(),
     segments: new MemSegments(),
     importMappings: new MemImportMappings(),
+    importBatches: new MemImportBatches(),
     dripSequences: new MemDripSequences(),
   };
 }

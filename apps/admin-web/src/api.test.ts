@@ -230,3 +230,14 @@ test("createOrg() omits subscriberPool when magic links are off", async () => {
   const body = JSON.parse(String(lastCall().init.body));
   expect(body.subscriberPool).toBeUndefined();
 });
+
+test("importBatches() lists runs; importBatch() asks for one run's rows", async () => {
+  await api.importBatches("acme");
+  expect(lastCall().url).toMatch(/\/orgs\/acme\/import\/batches$/);
+  expect(lastCall().init.method).toBe("GET");
+
+  await api.importBatch("acme", "imp_2026-07-28T00:00:00.000Z");
+  // The id is a timestamp, so its colons must survive the round trip encoded —
+  // an unescaped one would be read as a URL delimiter.
+  expect(lastCall().url).toMatch(/batchId=imp_2026-07-28T00%3A00%3A00\.000Z$/);
+});

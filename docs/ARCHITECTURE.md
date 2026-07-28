@@ -451,14 +451,14 @@ normalized email, and an import report (created/updated/skipped/errored). Every
 imported subscription defaults to **`pending`** (#192), so an import can never
 silently start mailing a list.
 
-**Reading a real Pinpoint export is not built** (compendium #59) —
-**[Decided r2 — not yet built]**. A verified real-world export is **CSV with
-dotted column paths**, not the gzipped JSON Lines an export job produces — so the
-importer needs both shapes, and the CSV one is what operators actually hold. The
-sample carries 73 columns: `Id`, `ChannelType`, `Address`, `EndpointStatus`,
-`OptOut`, `EffectiveDate`, `Location.*`, `Attributes.*` and
-`User.UserAttributes.*`. Today's parser looks for a lowercase `email` header, so
-it reads that file as one unusable row.
+**Reading a real Pinpoint export** (compendium #59, #216). A verified real-world
+export is **CSV with dotted column paths**, not the gzipped JSON Lines an export
+*job* produces — the CSV is what operators actually hold, and it is the shape the
+mapper targets. The sample carries 73 columns: `Id`, `ChannelType`, `Address`,
+`EndpointStatus`, `OptOut`, `EffectiveDate`, `Location.*`, `Attributes.*` and
+`User.UserAttributes.*`. The original parser looked for a lowercase `email`
+header and read that file as one unusable row; the mapper below replaces it and
+is not Pinpoint-specific — any CSV maps the same way.
 
 Four structural facts that shape the work, each verified against the sample:
 
@@ -483,27 +483,39 @@ date available, but it is an endpoint-update stamp, **not** proof of opt-in, and
 must never be presented as consent provenance.
 
 The hard requirement stands: **`OptOut` / `EndpointStatus` must never become
-mailable.** No form of that guarantee exists yet — hand-converted Pinpoint columns
-fall into the attribute bag where nothing consults them, and the import API
-accepts `status: "confirmed"`, which would take an opted-out endpoint straight to
-mailable. Segment translation and suppression-list ingest are likewise unbuilt.
-Do not read "Pinpoint importer" as "your suppression state survives the
-migration"; it does not.
+mailable.** `import-mapping.ts` detects both columns from their value shape and
+marks the row non-mailable; `import-run.ts` then writes it as a subscriber with
+no active subscription, so the record is kept — dropping it would lose the very
+opt-out being declared — while nothing can mail it. A row-level opt-out outranks
+a per-list `true`. Segment translation and suppression-list ingest remain
+unbuilt: do not read "Pinpoint importer" as "your Pinpoint *suppression list*
+survives the migration", because that file is imported separately.
 
-**Import wizard** (compendium #60) — **[Decided r2 — not yet built]**. Before any
-row is written, the admin must declare:
+**Import wizard** (compendium #60, #216 / #220 / #223). Before any row is
+written, the admin declares:
 
 - **(a) consent basis** — *explicit* (double opt-in evidence) or *implicit*
-  (existing relationship), recorded on **every** imported subscription so a
-  later dispute is answered per row rather than per file;
-- **(b) tags** identifying this import batch;
-- **(c) target audiences** via multi-select, with create-new inline.
+  (existing relationship), recorded on **every** imported subscription as the
+  same `SubscriptionConsent` a double-opt-in signup writes, so a later dispute is
+  answered per row rather than per file;
+- **(b) a batch id** identifying this import run;
+- **(c) target audiences** per column, choosing an existing list or creating one
+  inline — a created list requires a from-address, compliance footer and physical
+  address, since defaulting them would ship a CAN-SPAM violation.
 
-Implicit consent defaults the subscription to `pending`. Today the options are
-`{orgId, listId, csv, status?, dryRun?}` — one list, no consent basis, no batch
-tags — so imported subscribers carry **no consent provenance at all**, which is
-the one place §4.19's provenance guarantee does not hold. The pending default is
-real, but it is unconditional rather than derived from a declared basis.
+`statusFor` derives the subscription status from the basis rather than trusting
+the caller: only `explicit` can produce `confirmed`, so `implicit` plus
+`status: "confirmed"` yields `pending`, not a mailable list that never opted in.
+Three-state columns are honoured — `true` subscribes, `false` writes an
+`unsubscribed` row so the decline survives the next import, and empty writes
+nothing, because the subscriber was never asked.
+
+Column plans are fingerprinted on the header set (order-insensitive) and saved,
+so a re-export of the same shape is offered its previous mapping. Each run leaves
+an **ImportBatch** record plus one pointer per membership it wrote, in a
+partition of its own — so "what did that bad file do?" is a query rather than an
+org-wide scan, and a run that dies halfway is still findable because the record
+is written before the first row.
 
 ### 4.8 Reporting & email archive (`services/reporting` + `apps/admin-web`)
 

@@ -273,6 +273,25 @@ export interface MappedImportReport {
   listsCreated: string[];
   discardedCells: number;
   errors: string[];
+  /** Stamped by the server even when the caller supplied none (#223). */
+  batchId?: string;
+}
+
+/** One recorded import run (#223). */
+export interface ImportBatch {
+  orgId: string;
+  batchId: string;
+  sourceFile?: string;
+  consentBasis?: "explicit" | "implicit";
+  startedAt: string;
+  created: number;
+  updated: number;
+  subscriptionsCreated: number;
+  rowCount: number;
+}
+export interface ImportBatchDetail {
+  batch: ImportBatch;
+  rows: { subscriberId: string; listId: string }[];
 }
 export interface NewListDefaults {
   fromAddress: string;
@@ -351,6 +370,10 @@ export const api = {
     newListDefaults?: NewListDefaults;
     dryRun?: boolean;
   }) => call<MappedImportReport>("POST", `/orgs/${orgId}/import/mapped`, body),
+  importBatches: (orgId: string) =>
+    call<ImportBatch[]>("GET", `/orgs/${orgId}/import/batches`),
+  importBatch: (orgId: string, batchId: string) =>
+    call<ImportBatchDetail>("GET", `/orgs/${orgId}/import/batches?batchId=${encodeURIComponent(batchId)}`),
   /** null means this org has NO thresholds — render "unprotected", not zeros. */
   alertConfig: (org: string) => call<AlertConfig | null>("GET", `/orgs/${org}/alerts`),
   saveAlertConfig: (body: AlertConfig) => call<AlertConfig>("POST", `/orgs/alerts`, body),

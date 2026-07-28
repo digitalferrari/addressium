@@ -852,6 +852,9 @@ export class ControlPlaneStack extends Stack {
     adminRoute("ImportMappedFn", "importMappedHandler", HttpMethod.POST, "/orgs/{org}/import/mapped");
     adminRoute("ImportMappingsGetFn", "importMappingsHandler", HttpMethod.GET, "/orgs/{org}/import/mappings");
     adminRoute("ImportMappingsPostFn", "importMappingsHandler", HttpMethod.POST, "/orgs/{org}/import/mappings");
+    // Import history (#223) — which run wrote which memberships, so a bad file
+    // can be found again rather than reconstructed from timestamps.
+    adminRoute("ImportBatchesFn", "importBatchesHandler", HttpMethod.GET, "/orgs/{org}/import/batches");
     adminRoute("PrivacyFn", "privacyHandler", HttpMethod.POST, "/privacy");
     adminRoute("BrandingPostFn", "brandingHandler", HttpMethod.POST, "/orgs/branding");
     // Deliverability thresholds — these drive the auto-halt (#217).

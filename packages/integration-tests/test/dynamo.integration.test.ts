@@ -214,3 +214,65 @@ test("signup → confirm → send → click → click map, then unsubscribe (on 
   });
   assert.equal(out2.sent, 0);
 });
+
+/**
+ * Import batches against the real API (#223).
+ *
+ * The in-memory store cannot show the thing that matters here: batch rows live
+ * in a partition of their own, so listing a batch's memberships must not depend
+ * on — or pollute — the org partition every other query ranges over.
+ */
+test("a batch's rows are enumerable, and live outside the org partition", async () => {
+  const client = new DynamoDBClient({
+    endpoint,
+    region: "us-east-1",
+    credentials: { accessKeyId: "x", secretAccessKey: "x" },
+  });
+  const stores = new DynamoStores(TABLE, client, { nonTransactionalCountersForTests: true });
+  const ORG = "batchorg";
+
+  await stores.importBatches.put({
+    orgId: ORG,
+    batchId: "b1",
+    sourceFile: "pinpoint.csv",
+    startedAt: "2026-07-01T00:00:00.000Z",
+    created: 2,
+    updated: 0,
+    subscriptionsCreated: 3,
+    rowCount: 3,
+  });
+  await stores.importBatches.put({
+    orgId: ORG,
+    batchId: "b2",
+    startedAt: "2026-07-02T00:00:00.000Z",
+    created: 0,
+    updated: 1,
+    subscriptionsCreated: 1,
+    rowCount: 1,
+  });
+
+  for (const [sub, list] of [["s1", "l1"], ["s1", "l2"], ["s2", "l1"]]) {
+    await stores.importBatches.addRow(ORG, "b1", sub as string, list as string);
+  }
+  await stores.importBatches.addRow(ORG, "b2", "s3", "l1");
+
+  const b1 = await stores.importBatches.get(ORG, "b1");
+  assert.equal(b1?.sourceFile, "pinpoint.csv");
+
+  const listed = await stores.importBatches.list(ORG);
+  assert.deepEqual(listed.map((b) => b.batchId), ["b2", "b1"], "newest first");
+
+  const rows = await stores.importBatches.listRows(ORG, "b1");
+  assert.equal(rows.length, 3);
+  // Scoped to the batch: b2's row must not leak into b1's listing.
+  assert.ok(!rows.some((r) => r.subscriberId === "s3"));
+
+  // Re-adding the same membership overwrites its pointer rather than adding a
+  // second — an import retry cannot inflate the batch.
+  await stores.importBatches.addRow(ORG, "b1", "s1", "l1");
+  assert.equal((await stores.importBatches.listRows(ORG, "b1")).length, 3);
+
+  // The rows are NOT in the org partition, so a subscriber listing is unaffected
+  // however large the import was. This is the whole reason for the split key.
+  assert.deepEqual(await stores.subscribers.list(ORG), []);
+});

@@ -502,6 +502,25 @@ export interface ImportMapping {
   updatedAt: string;
 }
 
+/**
+ * One import run (#223). Makes a bad file findable after the fact: without a
+ * batch record the only handle an operator has is "everything imported around
+ * then", which is not a handle at all when the fix is to reverse a specific
+ * upload.
+ */
+export interface ImportBatch {
+  orgId: OrgId;
+  batchId: string;
+  sourceFile?: string;
+  consentBasis?: "explicit" | "implicit";
+  startedAt: string;
+  created: number;
+  updated: number;
+  subscriptionsCreated: number;
+  /** Members written by this batch, so its rows can be listed without a scan. */
+  rowCount: number;
+}
+
 /** Cost model inputs (USD) for per-org chargeback (§11). Operator-configurable. */
 export interface CostRates {
   perEmail: number; // SES per-message

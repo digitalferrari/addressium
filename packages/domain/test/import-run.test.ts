@@ -322,3 +322,166 @@ test("statusFor is the whole rule, and it fails closed on an unknown basis", () 
   assert.equal(statusFor("implicit", "confirmed"), "pending");
   assert.equal(statusFor(undefined, "confirmed"), "pending", "no declared basis is not explicit");
 });
+
+/**
+ * Batch enumeration (#223).
+ *
+ * `consent.importBatchId` already recorded which run wrote a subscription, but
+ * answering the question that actually matters — "what did that bad file do?" —
+ * meant reading every subscription in the org. These cover the index that makes
+ * a run enumerable, and the counts an operator compares before reversing one.
+ */
+test("an import records a batch whose rows can be listed afterwards", async () => {
+  const stores = memStores();
+  const report = await importWithMapping(stores, clock, {
+    orgId: ORG,
+    csv: csv(),
+    plan: planFor(csv()),
+    newListDefaults: DEFAULTS,
+    batchId: "batch-a",
+    sourceFile: "pinpoint-export.csv",
+  });
+
+  const batch = await stores.importBatches.get(ORG, "batch-a");
+  assert.ok(batch, "the run left a record");
+  assert.equal(batch.sourceFile, "pinpoint-export.csv");
+  assert.equal(batch.created, report.created);
+  assert.equal(batch.updated, report.updated);
+  assert.equal(batch.subscriptionsCreated, report.subscriptionsCreated);
+
+  const rows = await stores.importBatches.listRows(ORG, "batch-a");
+  // rowCount is memberships, not file lines — the same measurement listRows
+  // returns, so the two numbers an operator compares are comparable.
+  assert.equal(rows.length, batch.rowCount);
+  assert.equal(rows.length, report.subscriptionsCreated + report.declinesRecorded);
+
+  // Every pointer resolves to a subscription that names this batch.
+  for (const r of rows) {
+    const s = await stores.subscriptions.get(ORG, r.subscriberId, r.listId);
+    assert.equal(s?.consent?.importBatchId, "batch-a", `${r.subscriberId}/${r.listId}`);
+  }
+});
+
+test("declines are enumerable too — reversing a batch must undo them as well", async () => {
+  const stores = memStores();
+  const report = await importWithMapping(stores, clock, {
+    orgId: ORG,
+    csv: csv(),
+    plan: planFor(csv()),
+    newListDefaults: DEFAULTS,
+    batchId: "batch-b",
+  });
+  assert.ok(report.declinesRecorded > 0, "the fixture carries at least one explicit no");
+
+  const rows = await stores.importBatches.listRows(ORG, "batch-b");
+  const statuses = await Promise.all(
+    rows.map(async (r) => (await stores.subscriptions.get(ORG, r.subscriberId, r.listId))?.status),
+  );
+  assert.ok(statuses.includes("unsubscribed"), "a decline is indexed, not just the opt-ins");
+});
+
+test("the batch record exists before the rows do, so a run that dies is still findable", async () => {
+  // Written up front rather than on success: a half-finished import is exactly
+  // the one someone needs to find, and a record written only at the end would be
+  // missing for precisely those runs.
+  const stores = memStores();
+  const seen: string[] = [];
+  const realPut = stores.subscribers.put.bind(stores.subscribers);
+  stores.subscribers.put = async (s) => {
+    const b = await stores.importBatches.get(ORG, "batch-c");
+    seen.push(b ? "batch-first" : "row-first");
+    return realPut(s);
+  };
+
+  await importWithMapping(stores, clock, {
+    orgId: ORG,
+    csv: csv(),
+    plan: planFor(csv()),
+    newListDefaults: DEFAULTS,
+    batchId: "batch-c",
+  });
+  assert.ok(seen.length > 0);
+  assert.ok(!seen.includes("row-first"), "the batch record predates every write it accounts for");
+});
+
+test("a dry run leaves no batch behind", async () => {
+  // A preview that wrote history would make the console's own confirmation step
+  // look like an import that already happened.
+  const stores = memStores();
+  await importWithMapping(stores, clock, {
+    orgId: ORG,
+    csv: csv(),
+    plan: planFor(csv()),
+    newListDefaults: DEFAULTS,
+    batchId: "batch-dry",
+    dryRun: true,
+  });
+  assert.equal(await stores.importBatches.get(ORG, "batch-dry"), undefined);
+  assert.deepEqual(await stores.importBatches.listRows(ORG, "batch-dry"), []);
+});
+
+test("re-running the same batch does not inflate its membership", async () => {
+  // Idempotent by (subscriber, list): a retried upload must not make a batch
+  // look twice as large as the file it came from.
+  const stores = memStores();
+  const opts = {
+    orgId: ORG,
+    csv: csv(),
+    plan: planFor(csv()),
+    newListDefaults: DEFAULTS,
+    batchId: "batch-d",
+  };
+  await importWithMapping(stores, clock, opts);
+  const first = await stores.importBatches.listRows(ORG, "batch-d");
+  await importWithMapping(stores, clock, opts);
+  const second = await stores.importBatches.listRows(ORG, "batch-d");
+  assert.equal(second.length, first.length);
+});
+
+test("batches list newest first, and only for their own org", async () => {
+  const stores = memStores();
+  for (const [i, id] of ["batch-old", "batch-new"].entries()) {
+    await stores.importBatches.put({
+      orgId: ORG,
+      batchId: id,
+      startedAt: `2026-0${i + 1}-01T00:00:00.000Z`,
+      created: 0,
+      updated: 0,
+      subscriptionsCreated: 0,
+      rowCount: 0,
+    });
+  }
+  await stores.importBatches.put({
+    orgId: "ledger",
+    batchId: "batch-other",
+    startedAt: "2026-12-01T00:00:00.000Z",
+    created: 0,
+    updated: 0,
+    subscriptionsCreated: 0,
+    rowCount: 0,
+  });
+
+  const listed = await stores.importBatches.list(ORG);
+  assert.deepEqual(listed.map((b) => b.batchId), ["batch-new", "batch-old"]);
+});
+
+test("a mixed-basis file records no single basis rather than guessing one", async () => {
+  const stores = memStores();
+  const plan = suggestMapping(previewCsv(csv()), { consentBasis: "implicit" });
+  const audiences = Object.entries(plan.columns).filter(([, m]) => m.kind === "audience");
+  assert.ok(audiences.length >= 2, "the fixture maps more than one audience column");
+  for (const [column, mapping] of audiences.slice(0, 1)) {
+    if (mapping.kind !== "audience") continue;
+    plan.columns[column] = { ...mapping, consentBasis: "explicit" };
+  }
+
+  await importWithMapping(stores, clock, {
+    orgId: ORG,
+    csv: csv(),
+    plan,
+    newListDefaults: DEFAULTS,
+    batchId: "batch-mixed",
+  });
+  const batch = await stores.importBatches.get(ORG, "batch-mixed");
+  assert.equal(batch?.consentBasis, undefined, "two bases means no single answer");
+});

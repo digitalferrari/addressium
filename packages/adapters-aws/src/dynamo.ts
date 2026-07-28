@@ -29,6 +29,7 @@ import type {
   EmailArchive,
   EngagementEvent,
   EntitlementSync,
+  ImportBatch,
   ImportMapping,
   List,
   Organization,
@@ -51,6 +52,7 @@ import type {
   EventStore,
   ListStore,
   OrganizationStore,
+  ImportBatchStore,
   ImportMappingStore,
   SegmentStore,
   SendClaimStore,
@@ -296,6 +298,46 @@ export class DynamoStores implements Stores {
         }),
       );
     },
+  };
+
+  /**
+   * Import batches (#223). The batch record sits in the org partition; its rows
+   * get a partition of their own (`ORG#x#IMPBATCH#<id>`) rather than sharing it.
+   *
+   * That split is the point. A 200k-row import in the org partition would make
+   * every `subscribers.list` / `lists.list` query page through import history to
+   * reach its own prefix, and would push one org partition toward the 10GB item
+   * -collection limit that a table with a GSI enforces. Rows are written once
+   * and read only when someone reverses a batch, so they belong off to the side.
+   */
+  importBatches: ImportBatchStore = {
+    get: (orgId, batchId) => this.get<ImportBatch>(org(orgId), `IMPBATCH#${batchId}`),
+    list: async (orgId) =>
+      (
+        await this.queryAll<ImportBatch>({
+          TableName: this.tableName,
+          KeyConditionExpression: "pk = :pk AND begins_with(sk, :s)",
+          ExpressionAttributeValues: { ":pk": org(orgId), ":s": "IMPBATCH#" },
+        })
+      ).sort((a, b) => b.startedAt.localeCompare(a.startedAt)),
+    put: (b) => this.put({ pk: org(b.orgId), sk: `IMPBATCH#${b.batchId}`, data: b }),
+    // Idempotent by key: a retried import row overwrites its own pointer instead
+    // of adding a second one, so rowCount and listRows cannot drift apart.
+    addRow: (orgId, batchId, subscriberId, listId) =>
+      this.put({
+        pk: `${org(orgId)}#IMPBATCH#${batchId}`,
+        sk: `ROW#${subscriberId}#${listId}`,
+        data: { subscriberId, listId },
+      }),
+    listRows: (orgId, batchId) =>
+      this.queryAll<{ subscriberId: string; listId: string }>({
+        TableName: this.tableName,
+        KeyConditionExpression: "pk = :pk AND begins_with(sk, :s)",
+        ExpressionAttributeValues: {
+          ":pk": `${org(orgId)}#IMPBATCH#${batchId}`,
+          ":s": "ROW#",
+        },
+      }),
   };
 
   suppression: SuppressionStore = {

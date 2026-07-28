@@ -20,7 +20,13 @@
  *     so the caller must supply them — there is no default.
  */
 import { randomUUID } from "node:crypto";
-import type { List, Subscriber, Subscription, SubscriptionStatus } from "@addressium/core";
+import type {
+  ImportBatch,
+  List,
+  Subscriber,
+  Subscription,
+  SubscriptionStatus,
+} from "@addressium/core";
 import {
   applyMapping,
   validateMapping,
@@ -201,6 +207,14 @@ export async function importWithMapping(
   const now = clock.now().toISOString();
   const seen = new Set<string>();
 
+  // The batch record is written BEFORE the first row, not after the last. An
+  // import that dies halfway is exactly the one an operator needs to find, and a
+  // record written only on success would be missing for precisely those runs.
+  // Counts are refreshed at the end; until then they read zero, which is honest
+  // for a run still in flight.
+  const recordBatch = Boolean(opts.batchId) && !opts.dryRun;
+  if (recordBatch) await putBatch(stores, opts, report, now);
+
   for (const [index, row] of rows.entries()) {
     const mapped: MappedRow = applyMapping(opts.plan, row);
     report.discardedCells += mapped.discardedColumns;
@@ -253,7 +267,41 @@ export async function importWithMapping(
 
     await writeSubscriptions(stores, opts, mapped, byName, subscriber.sub, now, report);
   }
+
+  if (recordBatch) await putBatch(stores, opts, report, now);
   return report;
+}
+
+/**
+ * The batch record (#223). `rowCount` counts memberships written, which is what
+ * `listRows` returns — deliberately not the file's line count, so the two
+ * numbers an operator compares are the same measurement.
+ */
+async function putBatch(
+  stores: Stores,
+  opts: MappedImportOptions,
+  report: MappedImportReport,
+  startedAt: string,
+): Promise<void> {
+  const bases = new Set(
+    Object.values(opts.plan.columns)
+      .flatMap((m) => (m.kind === "audience" ? [m.consentBasis] : []))
+      .filter(Boolean),
+  );
+  const batch: ImportBatch = {
+    orgId: opts.orgId,
+    batchId: opts.batchId as string,
+    startedAt,
+    created: report.created,
+    updated: report.updated,
+    subscriptionsCreated: report.subscriptionsCreated,
+    rowCount: report.subscriptionsCreated + report.declinesRecorded,
+    ...(opts.sourceFile ? { sourceFile: opts.sourceFile } : {}),
+    // Only when the whole file agrees. A mixed-basis import has no single
+    // answer, and guessing one would misstate what consent the rows carry.
+    ...(bases.size === 1 ? { consentBasis: [...bases][0] as ConsentBasis } : {}),
+  };
+  await stores.importBatches.put(batch);
 }
 
 /** Dry-run accounting, kept beside the write path so the two cannot drift. */
@@ -299,6 +347,13 @@ async function writeSubscriptions(
       },
     };
     await stores.subscriptions.put(subscription);
+    // The pointer is what makes a batch reversible: `consent.importBatchId` is
+    // on the subscription, but finding every subscription with a given batch id
+    // means scanning the org. Written for declines too — an import that recorded
+    // a "no" against the wrong list must be reversible the same way.
+    if (opts.batchId) {
+      await stores.importBatches.addRow(opts.orgId, opts.batchId, subscriberId, listId);
+    }
   };
 
   // A row the file tells us not to mail gets NO active subscription, even where

@@ -926,14 +926,15 @@ export async function importMappedHandler(event: HttpEvent): Promise<HttpResult>
     if (typeof body.csv !== "string" || !body.plan?.columns) {
       return json(400, { error: "csv and plan required" });
     }
+    // A batch id is always stamped, so a bad file's rows stay findable even when
+    // the caller did not think to supply one (#223).
+    const batchId = body.batchId ?? `imp_${clock.now().toISOString()}`;
     const report = await importWithMapping(stores(), clock, {
       orgId,
       csv: body.csv,
       plan: body.plan,
       ...(body.status ? { status: body.status } : {}),
-      // A batch id is always stamped, so a bad file's rows stay findable even
-      // when the caller did not think to supply one (#223).
-      batchId: body.batchId ?? `imp_${clock.now().toISOString()}`,
+      batchId,
       ...(body.sourceFile ? { sourceFile: body.sourceFile } : {}),
       ...(body.newListDefaults ? { newListDefaults: body.newListDefaults } : {}),
       ...(body.dryRun ? { dryRun: true } : {}),
@@ -944,7 +945,31 @@ export async function importMappedHandler(event: HttpEvent): Promise<HttpResult>
     if (report.errors.length > 0 && report.created === 0 && report.updated === 0) {
       return json(400, { error: report.errors[0], report });
     }
-    return json(200, report);
+    // The batch id comes back so the console can link straight to the run it
+    // just started — the caller usually did not supply one.
+    return json(200, { ...report, batchId });
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+/**
+ * GET /orgs/{org}/import/batches — import history (#223).
+ *
+ * With `?batchId=` it returns that batch's memberships instead of the list. One
+ * route rather than two because the pair is always read together: an operator
+ * picks a run from the history, then asks what it wrote.
+ */
+export async function importBatchesHandler(event: HttpEvent): Promise<HttpResult> {
+  try {
+    const orgId = event.pathParameters?.org ?? "";
+    requireGrant(event, "subscribers:manage", orgId);
+    const batchId = event.queryStringParameters?.batchId;
+    if (!batchId) return json(200, await stores().importBatches.list(orgId));
+
+    const batch = await stores().importBatches.get(orgId, batchId);
+    if (!batch) return json(404, { error: "no such import batch" });
+    return json(200, { batch, rows: await stores().importBatches.listRows(orgId, batchId) });
   } catch (e) {
     return fail(e);
   }
@@ -1235,6 +1260,7 @@ const ADMIN_ROUTES: Record<string, RouteHandler> = {
   "GET /orgs/{org}/export": exportHandler,
   "POST /orgs/{org}/import/preview": importPreviewHandler,
   "POST /orgs/{org}/import/mapped": importMappedHandler,
+  "GET /orgs/{org}/import/batches": importBatchesHandler,
   "GET /orgs/{org}/import/mappings": importMappingsHandler,
   "POST /orgs/{org}/import/mappings": importMappingsHandler,
   "POST /privacy": privacyHandler,

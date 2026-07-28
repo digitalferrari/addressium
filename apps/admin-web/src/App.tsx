@@ -1237,6 +1237,89 @@ function ImportMapper({ org }: { org: string }) {
               <ul>{report.errors.slice(0, 50).map((e, i) => <li key={i}>{e}</li>)}</ul>
             </details>
           )}
+          {report.batchId && <div className="muted">Batch <code>{report.batchId}</code></div>}
+        </div>
+      )}
+
+      <ImportHistory org={org} refresh={report?.batchId ?? ""} />
+    </div>
+  );
+}
+
+/**
+ * Import history (#223).
+ *
+ * Every run was already stamped on the subscriptions it wrote, but there was no
+ * way to ask what a given run had done — which is the only question anyone asks
+ * about an import, and always after discovering the file was wrong. Rows load on
+ * demand: a batch can hold hundreds of thousands, and nobody wants all of them
+ * just to see that the run existed.
+ */
+function ImportHistory({ org, refresh }: { org: string; refresh: string }) {
+  const batches = useAsync(() => api.importBatches(org), [org, refresh]);
+  const [openId, setOpenId] = useState("");
+  const detail = useAsync(
+    () => (openId ? api.importBatch(org, openId) : Promise.resolve(null)),
+    [org, openId],
+  );
+
+  if (batches.loading) return <div className="muted">Loading import history…</div>;
+  if (batches.error) return <div className="error">{batches.error}</div>;
+  const rows = batches.data ?? [];
+  if (rows.length === 0) {
+    return <div className="muted" style={{ marginTop: 16 }}>No imports recorded yet.</div>;
+  }
+
+  return (
+    <div style={{ marginTop: 24 }}>
+      <h3>Import history</h3>
+      <table className="table">
+        <thead>
+          <tr><th>Started</th><th>File</th><th>Basis</th><th>Created</th><th>Updated</th><th>Memberships</th><th /></tr>
+        </thead>
+        <tbody>
+          {rows.map((b) => (
+            <tr key={b.batchId}>
+              <td>{new Date(b.startedAt).toLocaleString()}</td>
+              <td>{b.sourceFile ?? <span className="muted">—</span>}</td>
+              {/* Blank means the file mixed bases, not that consent is unknown. */}
+              <td>{b.consentBasis ?? <span className="muted">mixed</span>}</td>
+              <td>{b.created}</td>
+              <td>{b.updated}</td>
+              <td>{b.rowCount}</td>
+              <td>
+                <button className="btn ghost" onClick={() => setOpenId(openId === b.batchId ? "" : b.batchId)}>
+                  {openId === b.batchId ? "Hide rows" : "Show rows"}
+                </button>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+
+      {openId && (
+        <div className="card">
+          {detail.loading && <div className="muted">Loading rows…</div>}
+          {detail.error && <div className="error">{detail.error}</div>}
+          {detail.data && (
+            <>
+              <strong>{detail.data.rows.length} membership(s) written by this run</strong>
+              <table className="table">
+                <thead><tr><th>Subscriber</th><th>List</th></tr></thead>
+                <tbody>
+                  {detail.data.rows.slice(0, 200).map((r) => (
+                    <tr key={`${r.subscriberId}#${r.listId}`}>
+                      <td><code>{r.subscriberId}</code></td>
+                      <td><code>{r.listId}</code></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {detail.data.rows.length > 200 && (
+                <div className="muted">Showing the first 200 of {detail.data.rows.length}.</div>
+              )}
+            </>
+          )}
         </div>
       )}
     </div>

@@ -12,6 +12,7 @@ import type {
   EmailArchive,
   EngagementEvent,
   EntitlementSync,
+  ImportBatch,
   ImportMapping,
   List,
   Organization,
@@ -83,6 +84,20 @@ export interface ListStore {
   get(orgId: string, listId: string): Promise<List | undefined>;
   put(l: List): Promise<void>;
   list(orgId: string): Promise<List[]>;
+}
+
+/**
+ * Import batches (#223). `listRows` resolves via pointer items rather than a
+ * GSI — the same trick `findByExternalId` uses — because an import writes them
+ * once and reads them rarely.
+ */
+export interface ImportBatchStore {
+  get(orgId: string, batchId: string): Promise<ImportBatch | undefined>;
+  list(orgId: string): Promise<ImportBatch[]>;
+  put(b: ImportBatch): Promise<void>;
+  /** Record that this batch wrote this subscription. */
+  addRow(orgId: string, batchId: string, subscriberId: string, listId: string): Promise<void>;
+  listRows(orgId: string, batchId: string): Promise<{ subscriberId: string; listId: string }[]>;
 }
 
 /** Saved import mappings (#216), looked up by header fingerprint. */
@@ -325,5 +340,6 @@ export interface Stores {
   usage: UsageStore;
   segments: SegmentStore;
   importMappings: ImportMappingStore;
+  importBatches: ImportBatchStore;
   dripSequences: DripSequenceStore;
 }
