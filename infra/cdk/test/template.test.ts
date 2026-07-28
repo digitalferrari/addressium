@@ -168,6 +168,17 @@ test("an operational dashboard exists, with its URL exported (#229)", () => {
 
 test("the analytics tier is absent unless explicitly enabled", () => {
   const t = template();
+  // The table must carry no stream either — a stream is billable and is the
+  // thing the OpenSearch mirror hangs off, so leaving one on would mean "off by
+  // default" was true of the visible resources and false of the cost.
+  const tables = Object.values(t.findResources("AWS::DynamoDB::Table"));
+  for (const table of tables) {
+    assert.equal(
+      (table.Properties as { StreamSpecification?: unknown }).StreamSpecification,
+      undefined,
+      "a default synth must leave the table streamless",
+    );
+  }
   for (const type of [
     "AWS::Kinesis::Stream",
     "AWS::KinesisFirehose::DeliveryStream",
@@ -309,33 +320,52 @@ test("naming the linked pools in context replaces the account-wide wildcard (#23
   assert.doesNotMatch(rendered, /userpool\/\*/, "the wildcard must be gone once pools are named");
 });
 
-test("no role may write to any secret in the account (#227)", () => {
-  // `resources: ["*"]` on CreateSecret/PutSecretValue meant an internet-facing
-  // route could overwrite this stack's OWN confirmation-token and webhook
-  // signing secrets — silently invalidating every outstanding opt-in link and
-  // every inbound webhook, with no error anywhere to explain why.
-  for (const policy of Object.values(template().findResources("AWS::IAM::Policy"))) {
+test("no role can write a secret, and no AI route exists (#227)", () => {
+  // The AI advisory layer was cut from the compendium at r2 and deleted. Its
+  // API-key upsert was the ONLY thing in the product that wrote a secret, so
+  // the grant went with it. This asserts the absence rather than trusting it:
+  // reintroducing a write here would also reintroduce reach over this stack's
+  // own confirmation-token and webhook signing secrets, and rotating those
+  // silently invalidates every outstanding opt-in link and inbound webhook.
+  const t = template();
+  for (const policy of Object.values(t.findResources("AWS::IAM::Policy"))) {
     const doc = (policy.Properties as { PolicyDocument: { Statement: Record<string, unknown>[] } })
       .PolicyDocument;
     for (const st of doc.Statement ?? []) {
       if (st.Effect === "Deny") continue;
-      const writes = actionsOf(st).filter(
-        (a) => a.startsWith("secretsmanager:") && !a.includes("GetSecretValue"),
-      );
-      if (writes.length === 0) continue;
-      const resources = Array.isArray(st.Resource) ? st.Resource : [st.Resource];
-      const rendered = JSON.stringify(resources);
-      assert.doesNotMatch(
-        rendered,
-        /^\["\*"\]$/,
-        `${writes.join(", ")} is granted on every secret in the account`,
-      );
-      // Either our own namespace, or a direct reference to a secret this stack
-      // created — both name what may be written. A bare "*" names nothing.
-      assert.ok(
-        rendered.includes("addressium/") || rendered.includes('"Ref"'),
-        `${writes.join(", ")} granted on an unscoped resource: ${rendered}`,
-      );
+      // Enumerated, not "anything that isn't a read": CDK's grantRead bundles
+      // DescribeSecret and GetSecretValue, both harmless, and an inverted filter
+      // would fail on those while missing an action nobody thought to exclude.
+      const WRITES = [
+        "secretsmanager:CreateSecret",
+        "secretsmanager:PutSecretValue",
+        "secretsmanager:UpdateSecret",
+        "secretsmanager:DeleteSecret",
+        "secretsmanager:RestoreSecret",
+        "secretsmanager:TagResource",
+        "secretsmanager:*",
+      ];
+      const writes = actionsOf(st).filter((a) => WRITES.includes(a));
+      assert.deepEqual(writes, [], `a role may write secrets: ${writes.join(", ")}`);
     }
   }
+
+  // And neither route survives, in CDK or in the router.
+  const routes = JSON.stringify(t.findResources("AWS::ApiGatewayV2::Route"));
+  assert.doesNotMatch(routes, /ai-config/);
+  assert.doesNotMatch(routes, /reports\/analyze/);
+});
+
+test("...and the flags actually turn it on (#228)", () => {
+  // The other half of "opt-in", and the half that decides whether this tier is a
+  // feature or dead code. If the flag did nothing, "off by default" would be
+  // trivially true and the whole tier would be unreachable — which is exactly
+  // the reading that made deleting it look reasonable.
+  const t = template({}, { enableAnalytics: true });
+  assert.ok(
+    Object.keys(t.findResources("AWS::KinesisFirehose::DeliveryStream")).length > 0,
+    "enableAnalytics must produce the delivery stream",
+  );
+  assert.ok(Object.keys(t.findResources("AWS::Glue::Database")).length > 0);
+  assert.ok(Object.keys(t.findResources("AWS::Athena::WorkGroup")).length > 0);
 });

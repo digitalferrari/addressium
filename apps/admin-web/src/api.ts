@@ -86,7 +86,6 @@ export interface OrgMeta {
   environment: "prod" | "dev";
   setupComplete: boolean;
   /** Configured AI analytics provider (vendor + model only; key never echoed) — #144. */
-  aiConfig?: { vendor: string; model: string };
 }
 
 export type TemplateMode = "visual" | "mjml" | "raw_html";
@@ -431,13 +430,9 @@ export const api = {
   setVisibility: (orgId: string, listId: string, visibility: "open" | "closed") =>
     call<unknown>("POST", `/lists/visibility`, { orgId, listId, visibility }),
   report: (org: string, campaign: string) => call<CampaignReport>("GET", `/orgs/${org}/campaigns/${campaign}/report`),
-  analyze: (orgId: string, campaignId: string) =>
-    call<{ vendor: string; model: string; analysis: string }>("POST", `/reports/analyze`, { orgId, campaignId }),
   getBranding: (org: string) => call<Branding | null>("GET", `/orgs/${org}/branding`),
   setBranding: (orgId: string, branding: Branding) => call<Branding>("POST", `/orgs/branding`, { orgId, branding }),
   setPresentation: (orgId: string, listId: string, presentation: ListPresentation) =>
     call<unknown>("POST", `/lists/presentation`, { orgId, listId, presentation }),
-  setAiConfig: (orgId: string, vendor: string, model: string, apiKey: string) =>
-    call<unknown>("POST", `/orgs/ai-config`, { orgId, vendor, model, apiKey }),
   suppress: (orgId: string, email: string) => call<unknown>("POST", `/subscribers/suppress`, { orgId, email }),
 };

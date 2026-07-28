@@ -327,14 +327,12 @@ Per list (**Configure → Presentation**) you can show/hide the frequency label,
 send-time label, description, reader count, and free/paid count. The subscriber
 directory honors these flags at render time.
 
-> **There is no AI layer to configure.** Compendium #62 cuts AI report
-> narratives: an external AI provider plus a third-party API key inside a
-> compliance-sensitive mail system, unrelated to sending email. Do not create an
-> LLM provider secret for addressium. The stack still ships an `AnalyzeFn`, a
-> `POST /orgs/ai-config` route and an "Analyze with AI" button in the console —
-> the cut is decided, the code has not been removed yet
-> **[Decided r2 — not yet built]**. Leave them unconfigured; with no `aiConfig`
-> on the org there is nothing to call and no key to leak.
+> **There is no AI layer to configure** (#62, #227). AI report narratives were
+> cut and the code is gone: an external provider plus a third-party API key
+> inside a compliance-sensitive mail system, unrelated to sending email. Do not
+> create an LLM provider secret for addressium — there is nothing that would read
+> it, and nothing in the stack can write one. `secretsmanager` access is
+> read-only across every role, asserted at synth.
 
 ---
 

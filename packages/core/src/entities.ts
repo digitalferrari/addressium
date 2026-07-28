@@ -133,11 +133,6 @@ export interface Organization {
    * bucket/display reporting. A recurring campaign may override it.
    */
   defaultTimezone: string;
-  /**
-   * Optional AI provider for LLM-assisted analytics (§4.8, #32). The API key is
-   * held in Secrets Manager; only the ARN + vendor/model live here.
-   */
-  aiConfig?: AiConfig;
   /** Subscriber-site branding/theme (§4.10, #31). */
   branding?: Branding;
   /** Public-signup bot protection (#62). */
@@ -184,13 +179,6 @@ export interface ReengagementPolicy {
 export interface SignupProtection {
   /** reCAPTCHA secret ARN for server-side verification. The site key lives in the embed snippet. */
   recaptchaSecretArn?: string;
-}
-
-export type AiVendor = "anthropic" | "openai" | "gemini";
-export interface AiConfig {
-  vendor: AiVendor;
-  model: string;
-  apiKeySecretArn: string;
 }
 
 /** Subscriber-site branding/theme (§4.10, #31). */

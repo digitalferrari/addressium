@@ -147,7 +147,7 @@ configured — silently shipping unprotected is worse than shipping without WAF.
 | 43 | **PublicListFn / PublicBrandingFn** | public GETs | Data the subscriber site and public site render. Branding is intentionally public — the public site uses it. |
 | 44 | **EntitlementFn / IdentityFn** | webhooks | Sync paid status and identity from the operator's systems, HMAC-verified |
 | 45 | **VersionFn** | `GET /version` | Running vs deployed version |
-| 46 | **ReportFn / UsageFn / AnalyzeFn / ScheduleFn** | API routes | Campaign reports, usage metering, scheduling |
+| 46 | **ReportFn / UsageFn / ScheduleFn** | API routes | Campaign reports, usage metering, scheduling. `AnalyzeFn` was the AI layer's and went with it (#62, #227). |
 
 **Deliberately not consolidated:** the public functions hold *different sensitive
 permissions* — ConfirmFn can create Cognito users, SignupFn can send mail and read
@@ -258,12 +258,21 @@ typically already paid for.
 
 | # | Item | Rationale |
 |---|---|---|
-| 62 | AI report narratives | External AI provider + third-party secret inside a compliance-sensitive mail system, unrelated to sending email |
+| 62 | AI report narratives | External AI provider + third-party secret inside a compliance-sensitive mail system, unrelated to sending email. **Code removed** (#227) — advisor, console screen, `POST /orgs/ai-config`, `AnalyzeFn` and `Organization.aiConfig` are gone. Its API-key upsert was the only secret WRITE in the product, so `secretsmanager` is now read-only for every role, asserted at synth. |
 | 63 | A/B testing | Not required |
-| 64 | Kinesis + Firehose + Glue + Athena + OpenSearch | Advanced analytics deferred. Events retained in DynamoDB; on-demand export to S3 covers "store it for later" with zero standing infrastructure. **Does not affect bounce handling — see #44.** |
+| 64 | Kinesis + Firehose + Glue + Athena + OpenSearch **[CLARIFIED r2]** | Cut from the **default posture**, not from the codebase — see item 68. Events are retained in DynamoDB and on-demand export to S3 covers "store it for later" with zero standing infrastructure. **Does not affect bounce handling — see #44.** |
 | 65 | SES inbound → S3 | Only served E2E mailbox reads; simulator addresses cover the same assertions |
 | 66 | Self-created WAF WebACLs | Now operator-supplied (#30, #31) |
 | 67 | Self-created ops alerts topic | Now operator-supplied (#32) |
+
+**Cut from the default posture is not cut from the codebase.** Item 64 means
+"nobody gets this unless they ask for it", not "delete it" — and the distinction
+was never written down, which left the code looking like an oversight. See item
+68.
+
+| # | Item | Decision |
+|---|---|---|
+| 68 | **Reporting read-model — kept, opt-in** **[NEW r2]** | The Kinesis → Firehose → S3 → Glue → Athena lake and the OpenSearch mirror **stay in the repo**, behind two CDK context flags that are off unless set: `enableAnalytics` and `enableOpenSearchMirror`. Neither is set anywhere in the repo, a default synth contains **zero** Kinesis, Firehose, Glue, Athena and OpenSearch resources, and the table carries no stream — asserted by a CDK test, so "off by default" is enforced rather than asserted in prose. Standing cost when unused is therefore zero, which is what made deleting it the wrong trade: it is working infrastructure that costs nothing to keep, and cross-campaign cohort questions are the one access pattern DynamoDB genuinely cannot serve. Architecture in ARCHITECTURE.md §4.23. If you turn it on, GDPR erasure (§4.19) must reach the lake too — rewrite or rebuild the affected partitions. |
 
 ---
 

@@ -14,7 +14,6 @@ import {
   saveCampaignDraft,
   saveSegment,
   manualSuppress,
-  setAiConfig,
 } from "@addressium/domain";
 import type { Organization } from "@addressium/core";
 
@@ -85,31 +84,6 @@ test("saveSegment persists a segment definition", async () => {
   });
   assert.equal(seg.name, "Paid subscribers");
   assert.equal((await stores.segments.list(ORG)).length, 1);
-});
-
-test("setAiConfig stores the provider config (ARN only) on the org", async () => {
-  const stores = memStores();
-  const org: Organization = {
-    orgId: ORG,
-    name: "Northwind",
-    domains: ["northwindtimes.example"],
-    subscriberPoolId: "pool",
-    magicLink: { kmsKeyArn: "arn", kid: "k", issuer: "i", audience: "a" },
-    sesConfigSet: "cs",
-    ipMode: "shared",
-    suppressionScope: "hybrid",
-    defaultTimezone: "UTC",
-    setupComplete: true,
-  };
-  await stores.organizations.put(org);
-  const updated = await setAiConfig(stores, ORG, {
-    vendor: "anthropic",
-    model: "claude-x",
-    apiKeySecretArn: "arn:aws:secretsmanager:...:secret/ai",
-  });
-  assert.equal(updated.aiConfig?.vendor, "anthropic");
-  assert.equal((await stores.organizations.get(ORG))?.aiConfig?.apiKeySecretArn, "arn:aws:secretsmanager:...:secret/ai");
-  await assert.rejects(() => setAiConfig(stores, "nope", { vendor: "openai", model: "m", apiKeySecretArn: "a" }), /unknown org/);
 });
 
 test("manualSuppress adds an org-scoped entry and flips the subscriber", async () => {

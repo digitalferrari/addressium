@@ -8,7 +8,6 @@
  * entity. No AWS or HTTP concerns here.
  */
 import type {
-  AiConfig,
   Branding,
   Campaign,
   DripSequence,
@@ -230,19 +229,6 @@ export async function publicListView(
     readerCount: p.showReaderCount ? counts?.total : undefined,
     freePaidCount: p.showFreePaidCount && counts ? { free: counts.free, paid: counts.paid } : undefined,
   };
-}
-
-/** Set the org's LLM analytics provider (§4.8, #32). Key is already in Secrets Manager. */
-export async function setAiConfig(
-  stores: Stores,
-  orgId: string,
-  aiConfig: AiConfig,
-): Promise<Organization> {
-  const org = await stores.organizations.get(orgId);
-  if (!org) throw new Error("unknown org");
-  const updated: Organization = { ...org, aiConfig };
-  await stores.organizations.put(updated);
-  return updated;
 }
 
 /**

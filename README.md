@@ -43,12 +43,13 @@ the same owner.
 A/B testing. Pinpoint's surviving non-email channels moved to AWS End User
 Messaging; this is email only, on purpose.
 
-**The AI layer is cut too**, but the code is still here. #62 cuts AI report
-narratives — an external provider plus a third-party API key inside a
-compliance-sensitive mail system, unrelated to sending email. The stack still
-ships an `AnalyzeFn`, a `POST /orgs/ai-config` route and an "Analyze with AI"
-button in the console **[Decided r2 — not yet built]**. Leave them unconfigured:
-with no `aiConfig` on the org there is nothing to call and no key to leak.
+**There is no AI layer** (#62, #227). AI report narratives were cut and the code
+is gone — an external provider plus a third-party API key inside a
+compliance-sensitive mail system, unrelated to sending email. Nothing to
+configure and nothing to leave switched off. Its API-key upsert was also the only
+code in the product that ever wrote a secret, so no role now holds
+`secretsmanager:CreateSecret` or `PutSecretValue` at all; a CDK assertion fails
+the build if one reappears.
 
 ---
 

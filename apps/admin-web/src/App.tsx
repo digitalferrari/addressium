@@ -20,7 +20,7 @@ import {
 } from "@addressium/domain/cost";
 import { api, type AlertRule, type Branding, type CreateOrgInput, type CreateOrgResult, type TeamMemberRow, type ColumnMapping, type ImportPreview, type MappedImportReport, type MappingPlan, type NewListDefaults, type CampaignReport, type DripStepDef, type EmailBlock, type ListPresentation, type ScheduleWhen, type SendScheduleState, type SetupState, type Template, type TemplateMode, type UsageRecord } from "./api.js";
 
-type View = "dashboard" | "setup" | "templates" | "compose" | "report" | "usage" | "schedules" | "branding" | "presentation" | "subscribers" | "segments" | "import" | "privacy" | "drips" | "settings" | "costs" | "deliverability" | "importmap" | "team" | "audit" | "addorg";
+type View = "dashboard" | "setup" | "templates" | "compose" | "report" | "usage" | "schedules" | "branding" | "presentation" | "subscribers" | "segments" | "import" | "privacy" | "drips" | "costs" | "deliverability" | "importmap" | "team" | "audit" | "addorg";
 
 export function App() {
   const [ready, setReady] = useState(false);
@@ -141,7 +141,6 @@ function Console() {
           <NavItem id="audit" label="Audit log" cap="team:manage" />
           <NavItem id="addorg" label="Add organization" cap="identity:manage" />
           <NavItem id="deliverability" label="Deliverability" cap="alerts:manage" />
-          <NavItem id="settings" label="AI settings" cap="identity:manage" />
         </nav>
         <div style={{ marginTop: 24 }} className="muted">
           {claims["custom:role"] ?? "unknown role"}
@@ -172,7 +171,6 @@ function Console() {
         {view === "audit" && <AuditLogView org={org} />}
         {view === "addorg" && <AddOrganization />}
         {view === "deliverability" && <Deliverability org={org} />}
-        {view === "settings" && <AiSettings org={org} />}
         </div>
       </main>
     </div>
@@ -262,26 +260,13 @@ function Report({ org, grant }: { org: string; grant: Grant | null }) {
   const [campaign, setCampaign] = useState("");
   const [report, setReport] = useState<CampaignReport | null>(null);
   const [err, setErr] = useState("");
-  const [ai, setAi] = useState<string>("");
-  const [busy, setBusy] = useState(false);
 
   const load = async () => {
-    setErr(""); setReport(null); setAi("");
+    setErr(""); setReport(null);
     try {
       setReport(await api.report(org, campaign));
     } catch (e) {
       setErr(String(e));
-    }
-  };
-  const analyze = async () => {
-    setBusy(true); setErr("");
-    try {
-      const r = await api.analyze(org, campaign);
-      setAi(`${r.vendor}/${r.model}\n\n${r.analysis}`);
-    } catch (e) {
-      setErr(String(e));
-    } finally {
-      setBusy(false);
     }
   };
 
@@ -297,11 +282,6 @@ function Report({ org, grant }: { org: string; grant: Grant | null }) {
           ))}
         </select>
         <button className="btn" onClick={() => void load()} disabled={!campaign}>Load</button>
-        {report && (
-          <button className="btn ghost" onClick={() => void analyze()} disabled={busy}>
-            {busy ? "Analyzing…" : "Analyze with AI"}
-          </button>
-        )}
       </div>
       {err && <p className="err">{err}</p>}
       {report && (
@@ -332,12 +312,6 @@ function Report({ org, grant }: { org: string; grant: Grant | null }) {
             </table>
           </div>
         </>
-      )}
-      {ai && (
-        <div className="card">
-          <div className="muted" style={{ marginBottom: 8 }}>AI analysis</div>
-          <pre style={{ whiteSpace: "pre-wrap", margin: 0 }}>{ai}</pre>
-        </div>
       )}
       {!can(grant, "reports:view", org) && <p className="muted">Your role can't view reports.</p>}
     </div>
@@ -2262,56 +2236,6 @@ function Deliverability({ org }: { org: string }) {
         {saving ? "Saving…" : "Save thresholds"}
       </button>
       {msg && <span style={{ marginLeft: 12 }}>{msg}</span>}
-    </div>
-  );
-}
-
-function AiSettings({ org }: { org: string }) {
-  const [vendor, setVendor] = useState("anthropic");
-  const [model, setModel] = useState("");
-  const [apiKey, setApiKey] = useState("");
-  const [msg, setMsg] = useState("");
-  // Reflect the saved provider so the form isn't blank when one is already
-  // configured (#144). The key is never returned, so it stays empty; re-saving
-  // requires re-entering it, which is the intended, safe behavior.
-  useEffect(() => {
-    let live = true;
-    api.orgMeta(org)
-      .then((m) => {
-        if (!live || !m.aiConfig) return;
-        setVendor(m.aiConfig.vendor);
-        setModel(m.aiConfig.model);
-      })
-      .catch(() => undefined);
-    return () => { live = false; };
-  }, [org]);
-  const save = async () => {
-    setMsg("");
-    try { await api.setAiConfig(org, vendor, model, apiKey); setApiKey(""); setMsg("Saved (key stored in Secrets Manager)"); }
-    catch (e) { setMsg(String(e)); }
-  };
-  return (
-    <div>
-      <h1 className="h1">AI analytics provider</h1>
-      <div className="card">
-        <div className="row">
-          <div>
-            <label>Vendor</label>
-            <select value={vendor} onChange={(e) => setVendor(e.target.value)}>
-              <option value="anthropic">Anthropic</option>
-              <option value="openai">OpenAI</option>
-              <option value="gemini">Google Gemini</option>
-            </select>
-          </div>
-          <div><label>Model</label><input value={model} onChange={(e) => setModel(e.target.value)} placeholder="model id" /></div>
-        </div>
-        <label>API key (stored in AWS Secrets Manager, never echoed)</label>
-        <input type="password" style={{ width: "100%" }} value={apiKey} onChange={(e) => setApiKey(e.target.value)} />
-        <div className="row" style={{ marginTop: 12 }}>
-          <button className="btn" onClick={() => void save()} disabled={!model || !apiKey}>Save provider</button>
-          {msg && <span className="muted">{msg}</span>}
-        </div>
-      </div>
     </div>
   );
 }

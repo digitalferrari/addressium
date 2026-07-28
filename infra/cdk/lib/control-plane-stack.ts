@@ -964,27 +964,6 @@ export class ControlPlaneStack extends Stack {
     adminRoute("AlertConfigGetFn", "alertConfigHandler", HttpMethod.GET, "/orgs/{org}/alerts");
     adminRoute("AlertConfigPostFn", "alertConfigHandler", HttpMethod.POST, "/orgs/alerts");
     adminRoute("PresentationFn", "listPresentationHandler", HttpMethod.POST, "/lists/presentation");
-    // AI config writes the API key to Secrets Manager (create/put), scoped to
-    // the `addressium/` namespace the reader half already uses. `"*"` here meant
-    // an internet-facing route could overwrite ANY secret in the account —
-    // including this stack's own confirmation-token and webhook signing keys,
-    // which would silently invalidate every outstanding opt-in link and every
-    // inbound webhook. The trailing wildcard covers the six random characters
-    // Secrets Manager appends to every secret ARN.
-    const aiConfigFn = adminRoute("AiConfigFn", "aiConfigHandler", HttpMethod.POST, "/orgs/ai-config");
-    aiConfigFn.addToRolePolicy(
-      new PolicyStatement({
-        actions: ["secretsmanager:CreateSecret", "secretsmanager:PutSecretValue"],
-        resources: [
-          Stack.of(this).formatArn({
-            service: "secretsmanager",
-            resource: "secret",
-            resourceName: "addressium/*",
-            arnFormat: ArnFormat.COLON_RESOURCE_NAME,
-          }),
-        ],
-      }),
-    );
 
     // Public (no auth): branding + list view the subscriber site reads.
     const publicBrandingFn = fn("PublicBrandingFn", apiEntry, "brandingHandler", apiEnv);
@@ -1018,16 +997,6 @@ export class ControlPlaneStack extends Stack {
     const usageInt = new HttpLambdaIntegration("UsageInt", usageFn);
     api.addRoutes({ path: "/orgs/{org}/usage", methods: [HttpMethod.GET], integration: usageInt, authorizer: adminAuth });
     api.addRoutes({ path: "/orgs/{org}/usage/{period}", methods: [HttpMethod.GET], integration: usageInt, authorizer: adminAuth });
-
-    const analyzeFn = fn("AnalyzeFn", reportingEntry, "analyzeHandler", apiEnv);
-    table.grantReadData(analyzeFn);
-    analyzeFn.addToRolePolicy(orgSecretsScoped());
-    api.addRoutes({
-      path: "/reports/analyze",
-      methods: [HttpMethod.POST],
-      integration: new HttpLambdaIntegration("AnalyzeInt", analyzeFn),
-      authorizer: adminAuth,
-    });
 
     // reportBatchItemFailures is required for the handler's `batchItemFailures`
     // return value to mean anything. Without it one throw failed the WHOLE batch

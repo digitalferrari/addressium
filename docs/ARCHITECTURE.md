@@ -1001,9 +1001,13 @@ slow against DynamoDB and would put reporting load on the sending path. So there
 is an optional CQRS read-model: an append-mostly columnar copy in S3 that
 reporting owns and can rebuild at any time.
 
-**It is not part of the core design.** Compendium #64 removed the streaming
-analytics stack from the *default* posture; the code keeps it behind two CDK
-context flags that are **off unless you set them**, and neither is set anywhere
+**It is not part of the core design, and it is deliberately kept** (compendium
+#64 / #68, #228). #64 removed the streaming analytics stack from the *default*
+posture — which is not the same as removing it from the codebase, a distinction
+that was never written down and left this tier looking like an oversight. It
+stays because standing cost when unused is genuinely zero and cross-campaign
+cohort questions are the one access pattern DynamoDB cannot serve. Two CDK
+context flags gate it, **off unless you set them**, and neither is set anywhere
 in the repo:
 
 | Context flag | What it adds |
@@ -1012,7 +1016,9 @@ in the repo:
 | `enableOpenSearchMirror` | DynamoDB Streams → an **OpenSearch Serverless** collection and its indexer Lambda, the segmentation escape hatch (§5) |
 
 A default synth contains **zero** Kinesis, Firehose, Glue, Athena and OpenSearch
-resources, and the table carries no stream. The always-on analytics path is §7.
+resources, and the table carries no stream — asserted by a CDK test rather than
+claimed here, so "off by default" fails the build if it stops being true. The
+always-on analytics path is §7.
 
 If you do turn it on: **Athena** SQL against the `events` table in a
 per-deployment workgroup (`docs/reporting/queries.sql` holds the canonical

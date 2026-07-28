@@ -8,7 +8,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  redactForLlm,
   slugifyOrgId,
   buildHtmlLinkMap,
   renderHtmlForRecipient,
@@ -16,11 +15,6 @@ import {
 } from "@addressium/domain";
 
 const N = 100_000;
-
-test("redactForLlm handles a long no-'@' run fast and still redacts real emails", () => {
-  assert.equal(redactForLlm("%".repeat(N) + " x"), "%".repeat(N) + " x");
-  assert.match(redactForLlm("reach me at a@b.com please"), /\[redacted\]/);
-});
 
 test("slugifyOrgId handles a huge interior dash run fast", () => {
   assert.equal(slugifyOrgId("a" + "-".repeat(N) + "b"), "a-b");

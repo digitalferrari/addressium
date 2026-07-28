@@ -17,7 +17,6 @@ import {
   SesEmailSender,
   getSecret,
   sanitizeEmailHtml,
-  upsertSecret,
 } from "@addressium/adapters-aws";
 import { InvokeCommand, LambdaClient } from "@aws-sdk/client-lambda";
 import { schemas, APP_VERSION, EXPECTED_SCHEMA_VERSION, type AlertConfig } from "@addressium/core";
@@ -57,7 +56,6 @@ import {
   eraseSubscriber,
   publicListView,
   recordAudit,
-  setAiConfig,
   setBranding,
   setListPresentation,
   saveCampaignDraft,
@@ -503,9 +501,6 @@ export async function orgMetaHandler(event: HttpEvent): Promise<HttpResult> {
       name: org.name,
       environment: org.environment ?? "prod",
       setupComplete: org.setupComplete,
-      // Surface the configured AI provider (vendor + model only) so the console
-      // can reflect saved state; the API key/secret ARN is never echoed (#144).
-      aiConfig: org.aiConfig ? { vendor: org.aiConfig.vendor, model: org.aiConfig.model } : undefined,
     });
   } catch (e) {
     return fail(e);
@@ -1300,32 +1295,6 @@ export async function publicListHandler(event: HttpEvent): Promise<HttpResult> {
   }
 }
 
-/**
- * POST /orgs/ai-config — set the org's LLM analytics provider (#32). The
- * plaintext API key is written to Secrets Manager here; only the ARN + vendor/
- * model are persisted on the org. Gated by identity:manage.
- */
-export async function aiConfigHandler(event: HttpEvent): Promise<HttpResult> {
-  try {
-    const { orgId, vendor, model, apiKey } = JSON.parse(event.body ?? "{}") as {
-      orgId?: string;
-      vendor?: "anthropic" | "openai" | "gemini";
-      model?: string;
-      apiKey?: string;
-    };
-    if (!orgId || !vendor || !model || !apiKey) {
-      return json(400, { error: "orgId, vendor, model, apiKey required" });
-    }
-    requireGrant(event, "identity:manage", orgId);
-    const apiKeySecretArn = await upsertSecret(`addressium/${orgId}/ai-provider`, apiKey);
-    const org = await setAiConfig(stores(), orgId, { vendor, model, apiKeySecretArn });
-    // Never echo the key back.
-    return json(200, { orgId: org.orgId, aiConfig: { vendor, model, apiKeySecretArn } });
-  } catch (e) {
-    return fail(e);
-  }
-}
-
 /** POST /webhooks/entitlement — signed webhook from the billing SoR (§4.3). */
 export async function entitlementSyncHandler(event: HttpEvent): Promise<HttpResult> {
   try {
@@ -1418,7 +1387,6 @@ const ADMIN_ROUTES: Record<string, RouteHandler> = {
   "POST /orgs/branding": brandingHandler,
   "GET /orgs/{org}/alerts": alertConfigHandler,
   "POST /orgs/alerts": alertConfigHandler,
-  "POST /orgs/ai-config": aiConfigHandler,
 };
 
 /** Unauthenticated. Deliberately excludes every admin handler. */
