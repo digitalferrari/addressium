@@ -121,8 +121,29 @@ const scheduler = () =>
 /** POST /signup — public, double opt-in (§4.2). */
 export async function signupHandler(event: HttpEvent): Promise<HttpResult> {
   try {
-    const input = JSON.parse(event.body ?? "{}") as unknown;
-    const res = await signup(stores(), await confirmSigner(), clock, input);
+    const raw = JSON.parse(event.body ?? "{}") as Record<string, unknown>;
+
+    // Same abuse protections as /signup/batch, which had them while THIS route —
+    // the primary, most-embedded signup path — had none (#170). An unprotected
+    // signup endpoint is a list-poisoning and confirmation-email-spam vector:
+    // every submission sends real mail to an attacker-chosen address, which
+    // burns sender reputation on the org's own SES identity.
+
+    // Honeypot: a filled hidden field means bot. Accept silently so scrapers
+    // can't distinguish success from rejection — but do nothing.
+    if (isHoneypotTripped(raw)) return json(202, { status: "pending" });
+
+    // reCAPTCHA: verify only if this org configured a secret (opt-in).
+    const orgId = typeof raw.orgId === "string" ? raw.orgId : "";
+    const protectedOrg = orgId ? await stores().organizations.get(orgId) : undefined;
+    const secretArn = protectedOrg?.signupProtection?.recaptchaSecretArn;
+    if (secretArn) {
+      const verifier = new GoogleRecaptchaVerifier(await getSecret(secretArn));
+      const ok = await verifier.verify(typeof raw.recaptchaToken === "string" ? raw.recaptchaToken : "");
+      if (!ok) return json(400, { error: "captcha verification failed" });
+    }
+
+    const res = await signup(stores(), await confirmSigner(), clock, raw);
 
     // Send the double opt-in confirmation email (transactional, §4.2).
     const list = await stores().lists.get(res.subscription.orgId, res.subscription.listId);

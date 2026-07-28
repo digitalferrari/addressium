@@ -359,6 +359,8 @@ export class ControlPlaneStack extends Stack {
     signupFn.addToRolePolicy(
       sesSendScoped(),
     );
+    // /signup now verifies the org's reCAPTCHA secret too (#170).
+    signupFn.addToRolePolicy(orgSecretsScoped());
     const signupBatchFn = fn("SignupBatchFn", apiEntry, "signupBatchHandler", {
       ...apiEnv,
       CONFIRM_URL_BASE:
