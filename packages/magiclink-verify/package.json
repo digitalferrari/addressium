@@ -20,5 +20,8 @@
   "files": [
     "dist",
     "README.md"
-  ]
+  ],
+  "devDependencies": {
+    "esbuild": "^0.25.12"
+  }
 }

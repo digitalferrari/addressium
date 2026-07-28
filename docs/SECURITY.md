@@ -385,6 +385,23 @@ first-class control:
   `sub` to `repo:<owner>/<repo>:ref:refs/tags/v*`; grant it only the CDK
   deploy permissions. No branch/PR run can assume it.
 - **Dependabot/Renovate**, **CodeQL**, and **secret scanning** enabled.
+
+### One accepted advisory
+
+`npm audit` reports **GHSA-mh99-v99m-4gvg** (`brace-expansion` DoS via unbounded
+expansion) with **no fix applied**, deliberately. It reaches us only as a
+dependency that `aws-cdk-lib` **bundles** inside its own `minimatch`, so an npm
+`overrides` entry does not patch it — it deletes the bundled copy and breaks CDK
+synth outright. That was tried and reverted.
+
+Accepting it is defensible on reachability: `aws-cdk-lib` appears in
+`infra/cdk` and **nowhere else** — no deployed service depends on it, so the
+code is absent from every Lambda. The only thing that ever evaluates those globs
+is `cdk synth` on a maintainer's machine or in CI, over stack definitions from
+this repository. There is no path from an untrusted input to it.
+
+It clears when aws-cdk-lib ships a release bundling a patched `minimatch`.
+Re-check on each CDK bump rather than suppressing the warning.
 - Branch protection + required review; maintainer **2FA**.
 - Public trust signals: **OpenSSF Scorecard** + **Best Practices Badge**.
 - Coordinated disclosure per [`../SECURITY.md`](../SECURITY.md).
