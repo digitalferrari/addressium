@@ -1062,6 +1062,21 @@ export async function importHandler(event: HttpEvent): Promise<HttpResult> {
       status: body.status,
       dryRun: body.dryRun,
     });
+    // A file this parser cannot read is a 400, not a 200 with zeros (#209). It
+    // looks for a lowercase `email` header; a real Pinpoint export has `Address`
+    // and 72 other dotted columns, so every row errored and the response still
+    // said `200 {created:0}` — which reads as "your list had nothing in it"
+    // rather than "this endpoint cannot read your file". The mapper (#216) is
+    // what handles arbitrary headers, so the error names it.
+    if (report.errors.length > 0 && report.created === 0 && report.updated === 0) {
+      return json(400, {
+        error:
+          `no row in this file had a usable 'email' column — this endpoint reads a plain ` +
+          `email/attribute CSV. Use the import mapper (POST /orgs/{org}/import/preview) to map ` +
+          `columns from an export whose headers differ.`,
+        report,
+      });
+    }
     return json(200, report);
   } catch (e) {
     return fail(e);

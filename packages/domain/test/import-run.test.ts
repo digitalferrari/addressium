@@ -16,6 +16,7 @@ import {
   statusFor,
   type NewListDefaults,
 } from "../src/import-run.js";
+import { importCsvSubscribers } from "../src/importer.js";
 import { memStores } from "../src/memory.js";
 import type { Clock } from "../src/ports.js";
 
@@ -510,4 +511,40 @@ test("columnsBlockingConfirmed names why a confirmed import must be refused", ()
   assert.ok(m && m.kind === "audience");
   mixed.columns[first as string] = { ...m, consentBasis: "implicit" };
   assert.deepEqual(columnsBlockingConfirmed(mixed), [first]);
+});
+
+/**
+ * The original #209 failure, at the layer that now prevents it.
+ *
+ * The simple importer looks for a lowercase `email` header. A real Pinpoint
+ * export has `Address` and 72 other dotted columns, so every row errored and the
+ * API still answered `200 {created:0}` — indistinguishable from "your list was
+ * empty". The mapper is what reads that file; this pins that it does, and that
+ * the old parser produces errors rather than silence for the API to turn into a
+ * 400.
+ */
+test("a real Pinpoint export is unreadable by the plain parser, and says so", async () => {
+  const stores = memStores();
+  const report = await importCsvSubscribers(stores, clock, {
+    orgId: ORG,
+    listId: "ledger",
+    csv: csv(),
+  });
+  assert.equal(report.created, 0);
+  assert.equal(report.updated, 0);
+  assert.ok(report.errors.length > 0, "errors, not silence — the API turns this into a 400");
+});
+
+test("the same file imports through the mapper", async () => {
+  // The other half of the pair: the failure above is only acceptable because
+  // this succeeds.
+  const stores = memStores();
+  const report = await importWithMapping(stores, clock, {
+    orgId: ORG,
+    csv: csv(),
+    plan: planFor(csv()),
+    newListDefaults: DEFAULTS,
+  });
+  assert.ok(report.created > 0, "the export's addresses are found via Address, not email");
+  assert.ok(report.subscriptionsCreated > 0, "and its Attributes.* columns become audiences");
 });
