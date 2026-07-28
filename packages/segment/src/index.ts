@@ -81,13 +81,33 @@ export class GsiSegmentEngine implements SegmentEngine {
         case "last_open_at":
           throw new Error("engagement predicates are not supported by the v1 segment engine (#28)");
         default: {
+          // `Object.hasOwn`, not `attributes[field] !== undefined` (#195):
+          // indexing walks the prototype chain, so `field: "constructor"` with
+          // `op: "exists"` returns `Object` and matched EVERY subscriber. The
+          // save schema rejects those names too — this is the second line, for
+          // predicates already stored and for any caller that bypasses the API.
+          if (!Object.hasOwn(subscriber.attributes, c.field)) {
+            // An absent attribute is "not equal" to any value, which is what
+            // `neq` should say — but it exists for nobody and equals nothing.
+            return c.op === "neq";
+          }
           const attr = subscriber.attributes[c.field];
-          if (c.op === "exists") return attr !== undefined;
+          if (c.op === "exists") return true;
           if (c.op === "neq") return attr !== c.value;
           return attr === c.value; // "eq"
         }
       }
     };
+    // Fail CLOSED on an unrecognised `match` (#195). The schema requires it, but
+    // a predicate stored before that schema existed could still carry a typo,
+    // and defaulting to `some` is what turned a narrow segment into the whole
+    // list. `every` is the safe direction: too few recipients is a visible
+    // mistake, too many is an unrecallable one.
+    if (predicate.match !== "all" && predicate.match !== "any") {
+      throw new Error(
+        `segment predicate has an invalid \`match\`: ${JSON.stringify(predicate.match)} — expected "all" or "any"`,
+      );
+    }
     return predicate.match === "all"
       ? predicate.conditions.every(test)
       : predicate.conditions.some(test);

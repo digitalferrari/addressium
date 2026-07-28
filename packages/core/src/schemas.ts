@@ -142,11 +142,55 @@ export const scheduleCampaignSchema = z.object({
 export type ScheduleCampaignInput = z.infer<typeof scheduleCampaignSchema>;
 
 /** Create/update-segment payload (admin). */
+/**
+ * Attribute names that must never be treated as a subscriber attribute (#195).
+ *
+ * `subscriber.attributes[field]` walks the prototype chain, so `constructor`
+ * with `op: "exists"` returns `Object` — which is `!== undefined`, so the
+ * condition matches EVERY subscriber. The engine also uses `Object.hasOwn` now;
+ * rejecting these at save is the other half, so the segment cannot be stored in
+ * the first place.
+ */
+const FORBIDDEN_FIELDS = ["__proto__", "constructor", "prototype"] as const;
+
+const segmentCondition = z
+  .object({
+    field: z.string().min(1).max(128),
+    op: z.enum(["in", "eq", "neq", "exists", "before", "after"]),
+    value: z.string().optional(),
+  })
+  .refine((c) => !FORBIDDEN_FIELDS.includes(c.field as (typeof FORBIDDEN_FIELDS)[number]), {
+    message: "field name is reserved and would match every subscriber",
+    path: ["field"],
+  })
+  .refine((c) => c.op === "exists" || c.value !== undefined, {
+    message: "value is required for every operator except `exists`",
+    path: ["value"],
+  });
+
+/**
+ * A segment predicate (#195). `match` is REQUIRED, which is the whole point.
+ *
+ * It used to be `z.unknown()`, interpreted later as
+ * `predicate.match === "all" ? every : some` — so a missing or misspelled
+ * `match` fell through to `some`, and combined with `case "list": return true`
+ * every subscriber in the base set matched. An operator saving "paid VIPs" with
+ * a typo saw a plausible preview and mailed the entire list, including the
+ * recipients the segment existed to exclude.
+ */
+export const segmentPredicateSchema = z.object({
+  match: z.enum(["all", "any"]),
+  // Bounded: an unbounded condition list is an amplification vector on a
+  // per-subscriber evaluation loop.
+  conditions: z.array(segmentCondition).min(1).max(50),
+});
+export type SegmentPredicateInput = z.infer<typeof segmentPredicateSchema>;
+
 export const saveSegmentSchema = z.object({
   orgId: z.string().min(1),
   segmentId: z.string().min(1),
   name: z.string().min(1),
-  predicate: z.unknown(),
+  predicate: segmentPredicateSchema,
 });
 export type SaveSegmentInput = z.infer<typeof saveSegmentSchema>;
 

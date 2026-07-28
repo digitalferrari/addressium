@@ -80,7 +80,16 @@ test("saveSegment persists a segment definition", async () => {
     orgId: ORG,
     segmentId: "paid",
     name: "Paid subscribers",
-    predicate: { entitlement: "paid" },
+    // A real predicate. This used to be `{ entitlement: "paid" }`, a shape the
+    // engine could never have evaluated — `predicate: z.unknown()` accepted it
+    // and nothing downstream would have matched anyone (#195).
+    predicate: {
+      match: "all",
+      conditions: [
+        { field: "list", op: "in", value: "ledger" },
+        { field: "entitlement", op: "eq", value: "paid" },
+      ],
+    },
   });
   assert.equal(seg.name, "Paid subscribers");
   assert.equal((await stores.segments.list(ORG)).length, 1);
