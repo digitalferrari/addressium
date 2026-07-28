@@ -11,6 +11,7 @@ import type { List } from "@addressium/core";
 import {
   HmacConfirmationSigner,
   confirmOptIn,
+  eraseSubscriber,
   exportCsv,
   exportCsvChunks,
   exportJsonl,
@@ -261,4 +262,34 @@ test("an empty org exports a header and nothing else", async () => {
   assert.equal(chunks.length, 1);
   assert.ok(chunks[0]?.startsWith("email,"));
   assert.deepEqual(await drain(exportJsonlChunks(stores, { orgId: "nobody" })), []);
+});
+
+test("an erased subject's PII never appears in a later export", async () => {
+  // The two features pull against each other: erasure removes personal data,
+  // export copies everything out. If an export produced after an erasure still
+  // carried the address, the erasure was undone by the next person who clicked
+  // Export — and it would leave the account in a file the operator then mails
+  // to a third party.
+  const stores = await seeded();
+  const before = await exportCsv(stores, { orgId: ORG, includeUnsubscribed: true });
+  const victim = before.match(/([\w.]+@[\w.]+)/)?.[1];
+  assert.ok(victim, "the fixture exports at least one real address");
+
+  const erased = await eraseSubscriber(stores, clock, ORG, victim);
+  assert.equal(erased, true);
+
+  const after = await exportCsv(stores, { orgId: ORG, includeUnsubscribed: true });
+  assert.ok(!after.includes(victim), `erased address still exported: ${victim}`);
+  // The row itself survives as a tombstone — an erased subject who vanished
+  // entirely would be re-added as fresh by the next import of an old file.
+  assert.ok(after.includes("erased:"), "the anonymized placeholder is what remains");
+
+  // Attributes are personal data too, and they are the half most likely to be
+  // forgotten: an address can be spotted by eye in a CSV, a birthDate cannot.
+  const jsonl = await exportJsonl(stores, { orgId: ORG, includeUnsubscribed: true });
+  for (const line of jsonl.trim().split("\n")) {
+    const row = JSON.parse(line) as { email: string; attributes: Record<string, string> };
+    if (!row.email.startsWith("erased:")) continue;
+    assert.deepEqual(row.attributes, {}, "an erased row must carry no attributes");
+  }
 });
