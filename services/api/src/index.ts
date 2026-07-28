@@ -7,6 +7,7 @@
  */
 import {
   CloudWatchHealth,
+  S3AuditLog,
   CognitoAdminDirectory,
   CognitoSubscriberAccounts,
   DynamoStores,
@@ -52,6 +53,7 @@ import {
   exportSubscriber,
   eraseSubscriber,
   publicListView,
+  recordAudit,
   setAiConfig,
   setBranding,
   setListPresentation,
@@ -665,6 +667,46 @@ export async function subscriberUnsuppressHandler(event: HttpEvent): Promise<Htt
  * caller sets status; suppressed addresses are skipped by the domain importer.
  */
 /**
+ * Audit sink (#191). The WORM bucket has been provisioned, alarmed and
+ * correctly moded since day one, and nothing has ever written an object to it —
+ * `recordAudit` had zero non-test callers, so every "sensitive actions are
+ * audited" claim in the docs rested on a function nobody called.
+ */
+let _audit: S3AuditLog | undefined;
+const auditLog = () => (_audit ??= new S3AuditLog(env("AUDIT_BUCKET")));
+
+/** Who is acting, from the verified JWT — never from the request body. */
+function actor(event: HttpEvent): string {
+  const claims = event.requestContext?.authorizer?.jwt?.claims ?? {};
+  return claims["sub"] ?? claims["cognito:username"] ?? "unknown";
+}
+
+/**
+ * Record a privileged action. Deliberately best-effort: an audit write that
+ * fails must not roll back an action the operator already completed, and
+ * throwing here would turn a logging outage into an outage of the product. The
+ * failure is logged loudly instead — a silent audit gap is the thing worth
+ * being noisy about.
+ */
+async function audit(
+  event: HttpEvent,
+  orgId: string | null,
+  action: string,
+  target?: string,
+): Promise<void> {
+  try {
+    await recordAudit(auditLog(), clock, {
+      orgId,
+      memberSub: actor(event),
+      action,
+      ...(target ? { target } : {}),
+    });
+  } catch (e) {
+    console.error("audit: append failed", { action, orgId, target, error: (e as Error).message });
+  }
+}
+
+/**
  * GET /orgs/{org}/health — one derived OK/degraded value (#229, compendium #29).
  *
  * Composed SERVER-side. Putting `cloudwatch:DescribeAlarms` in the browser
@@ -716,22 +758,29 @@ export async function teamHandler(event: HttpEvent): Promise<HttpResult> {
     requireGrant(event, "team:manage", body.orgId);
 
     switch (body.action) {
-      case "invite":
-        return json(200, await inviteMember(directory(), {
+      case "invite": {
+        const m = await inviteMember(directory(), {
           email: body.email ?? "",
           role: body.role ?? "",
           orgs: body.orgs ?? [],
-        }));
-      case "access":
+        });
+        await audit(event, body.orgId, "team.invite", `${m.email} as ${m.role}`);
+        return json(200, m);
+      }
+      case "access": {
         if (!body.username) return json(400, { error: "username required" });
-        return json(200, await setMemberAccess(directory(), body.username, {
+        const m = await setMemberAccess(directory(), body.username, {
           role: body.role ?? "",
           orgs: body.orgs ?? [],
-        }));
+        });
+        await audit(event, body.orgId, "team.access", `${m.email} → ${m.role} [${m.orgs.join(",")}]`);
+        return json(200, m);
+      }
       case "enable":
       case "disable":
         if (!body.username) return json(400, { error: "username required" });
         await setMemberEnabled(directory(), body.username, body.action === "enable");
+        await audit(event, body.orgId, `team.${body.action}`, body.username);
         return json(200, { ok: true });
       default:
         return json(400, { error: "unknown action" });
@@ -762,6 +811,9 @@ export async function exportHandler(event: HttpEvent): Promise<HttpResult> {
     const opts = { orgId, ...(listId ? { listId } : {}), ...(includeUnsubscribed ? { includeUnsubscribed } : {}) };
 
     const body = format === "jsonl" ? await exportJsonl(stores(), opts) : await exportCsv(stores(), opts);
+    // Taking an entire subscriber base out of the system is the single most
+    // sensitive read this product offers.
+    await audit(event, orgId, "subscribers.export", `${format}${listId ? ` list=${listId}` : ""}`);
     const stamp = clock.now().toISOString().slice(0, 10);
     return {
       statusCode: 200,
@@ -850,6 +902,7 @@ export async function importMappingsHandler(event: HttpEvent): Promise<HttpResul
       updatedAt: clock.now().toISOString(),
     };
     await stores().importMappings.put(mapping);
+    await audit(event, orgId, "import.mapping.save", mapping.name);
     return json(200, mapping);
   } catch (e) {
     return fail(e);
@@ -939,11 +992,19 @@ export async function privacyHandler(event: HttpEvent): Promise<HttpResult> {
     if (action === "export") {
       requireGrant(event, "subscribers:manage", orgId);
       const data = await exportSubscriber(stores(), orgId, email);
+      // A DSAR is a lawful request, and answering it is itself a privileged
+      // read of one person's whole record.
+      await audit(event, orgId, "privacy.export", email);
       return json(200, { found: data !== undefined, data });
     }
     if (action === "erase") {
       requireGrant(event, "subscribers:delete", orgId);
-      return json(200, { erased: await eraseSubscriber(stores(), clock, orgId, email) });
+      const erased = await eraseSubscriber(stores(), clock, orgId, email);
+      // Erasure is irreversible. If nothing records that it happened, nobody
+      // can later demonstrate the request was honoured — or notice one that
+      // was not requested.
+      await audit(event, orgId, "privacy.erase", email);
+      return json(200, { erased });
     }
     return json(400, { error: "action must be export or erase" });
   } catch (e) {
@@ -1028,6 +1089,7 @@ export async function alertConfigHandler(event: HttpEvent): Promise<HttpResult> 
       notifyTargets: parsed.data.notifyTargets,
     };
     await stores().alerts.put(config);
+    await audit(event, parsed.data.orgId, "alerts.update");
     return json(200, config);
   } catch (e) {
     return fail(e);

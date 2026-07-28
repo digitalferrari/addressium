@@ -710,6 +710,10 @@ export class ControlPlaneStack extends Stack {
     // necessity — but it is READ-ONLY on alarm state, and the handler returns a
     // verdict rather than the alarm list, so nothing about the account's alarms
     // reaches the browser (#229).
+    // The admin router is where privileged actions actually happen (#191):
+    // team changes, erasure, bulk export, alert thresholds. grantPut only — an
+    // audit log its own writer can delete from is not an audit log.
+    auditBucket.grantPut(adminApiFn);
     adminApiFn.addToRolePolicy(
       new PolicyStatement({
         effect: Effect.ALLOW,
