@@ -64,8 +64,8 @@ every org in a deployment is operated by the same owner.
 - Email channel via **Amazon SES v2**
 - Subscriber & list management with per-list subscription status
 - Public **signup forms** (embeddable snippet + hosted landing pages)
-- **Double opt-in** confirmation (configurable per list), preference center,
-  one-click unsubscribe
+- **Double opt-in** confirmation (configurable per list), one-click unsubscribe,
+  and a token-based preference center (**[Decided r2 — not yet built]**, §4.10)
 - **Broadcasts**: send now, scheduled, and recurring campaigns
 - **Drip automations**: trigger-based sequences (welcome series, re-engagement)
   via Step Functions
@@ -171,7 +171,7 @@ every org in a deployment is operated by the same owner.
 ```
                           ┌────────────────── CloudFront ──────────────────┐
                           │                                                 │
-   Public visitors ──▶  Signup / confirm / preference / unsubscribe pages   │
+   Public visitors ──▶  Signup / confirm / unsubscribe pages                │
    Admin operators ──▶  Admin SPA (React) ── Cognito auth ──────────────────┤
                           │                                                  │
                           ▼                                                  ▼
@@ -214,9 +214,11 @@ the event log on read).
   rate-limited, honeypot + optional CAPTCHA on signup): signup, double-opt-in
   confirmation, one-click unsubscribe. Tokenized/signed so a request can only
   affect the acting subscriber.
-- **Subscriber plane** (unauthenticated, **token-based**): signed preference,
-  confirm and unsubscribe links let a subscriber manage their own record with no
-  account and no login (§4.10).
+- **Subscriber plane** (unauthenticated, **token-based**): signed confirm and
+  unsubscribe links let a subscriber act on their own record with no account and
+  no login. Signed **preference** links, which would let them manage list
+  memberships and attributes the same way, are
+  **[Decided r2 — not yet built]** (§4.10).
 - **Admin plane** (Cognito-authenticated via a **separate admin pool**, staff):
   list/subscriber/segment/campaign/template/automation management, analytics, and
   settings. Every request carries a **role + organization scope**, enforced
@@ -254,7 +256,10 @@ role (convenience only — enforcement is server-side, §4.12). Surfaces:
   API keys & webhooks
 - **Configure** — organizations (silo management + setup), roles & access,
   settings (domains/DKIM/DMARC, magic-link & entitlement, alerts & SNS,
-  privacy & data, team), audit log
+  privacy & data, team), audit log. **Creating** an org is not one of these
+  screens: today it is an authenticated `POST /orgs` made with the JWT the
+  console holds, and `apps/admin-web` has no call for it
+  **[Decided r2 — not yet built]**
 - A **Live/Sandbox** toggle (§4.17) is always visible in the top bar
 
 ### 4.2 Public site (`apps/public-web`)
@@ -267,6 +272,7 @@ Static pages + minimal JS on S3/CloudFront:
 - **Confirmation page** — landing target for the double-opt-in link.
 - **Preference center** — subscriber self-manages list memberships and
   attributes via a signed, tokenized link (no login).
+  **[Decided r2 — not yet built]** (§4.10).
 - **Unsubscribe page** — one-click, honored globally or per-list.
 
 ### 4.3 API (`services/api`)
@@ -280,8 +286,8 @@ API Gateway HTTP API → Lambda. Two authorizer scopes:
   unsubscribe, version, public list, public branding, the JWKS endpoint, and the
   two HMAC-signed webhooks. They are defended by an operator-supplied WAF, a
   server-side honeypot and optional reCAPTCHA on signup, and tokenized/signed
-  links for confirm/preference/unsubscribe so a request can only affect the
-  subscriber the token encodes.
+  links for confirm/unsubscribe so a request can only affect the subscriber the
+  token encodes.
 
 Handlers are thin: validate (zod schemas from `packages/core`), authorize,
 mutate DynamoDB, enqueue async work. No business logic in the frontend.
@@ -547,7 +553,7 @@ sign-in / Cognito session-exchange logic on the main site is **out of scope**
 See §8.1 for the security model (why lite + forwardable + soft-paywall is safe)
 and §12 for the main-site integration contract.
 
-### 4.10 Subscriber identity & preference center (`apps/subscriber-web`)
+### 4.10 Subscriber identity & self-service (`apps/subscriber-web`)
 
 **The addressium subscriber record is the primary identity.** `Subscriber.sub` is
 a UUID addressium mints at signup and never changes; it keys the profile, the
@@ -557,10 +563,14 @@ subscriptions, the entitlement, and the `sub` claim in every magic-link token
 - **Signup is unauthenticated and pool-independent.** It records the subscriber
   profile keyed by `Subscriber.sub` and runs **double opt-in** confirmation. No
   account is created, and none is required.
-- **The preference center is token-based, not login-based.** Signed, tokenized
-  links — confirm, one-click unsubscribe, preference — let a subscriber act on
-  their own record with no password. `apps/subscriber-web` ships no auth module
-  and sends no `Authorization` header on any call.
+- **Self-service is token-based, not login-based.** Signed, tokenized links let a
+  subscriber act on their own record with no password. `apps/subscriber-web`
+  ships no auth module and sends no `Authorization` header on any call. Built
+  today: the newsletter directory, the subscribe-to-all view, **confirm** and
+  **one-click unsubscribe** — four routes, no more. A **preference** link, which
+  would let a subscriber manage list memberships and attributes the same
+  tokenized way, is **[Decided r2 — not yet built]**: there is no preference
+  route on the API and no preference page in any SPA.
 - **Cognito linkage is optional and read-only.** An org that already runs a
   Cognito pool for its own website can **link** it, so addressium's subscribers
   line up with the site's users. addressium *references* that pool; it does not
@@ -588,9 +598,9 @@ subscriptions, the entitlement, and the `sub` claim in every magic-link token
   **full** session (a real login). The lite half is built and enforced end to
   end: the token asserts `scope` and `amr`, and the reference verifier rejects
   anything that does not carry them (§8.1). The full half belongs to the
-  operator's own site — a subscriber login inside `apps/subscriber-web` is
-  **[Decided r2 — not yet built]** and may never be built, because the pool is
-  the org's, not ours.
+  operator's own site. **There is no subscriber login inside
+  `apps/subscriber-web`, and r2 does not call for one** — the pool is the org's,
+  not ours. That is a decision against building it, not a gap.
 
 ### 4.11 Multi-organization tenancy (silos)
 
@@ -762,8 +772,9 @@ Lambda — plus optional direct notify targets.
 
 These are **application** alerts about mail — "your complaint rate is climbing" —
 and are aimed at the operator running the lists. They are a different concern from
-**ops** alerts about the infrastructure ("EventsFn is throwing"), which go to the
-external ops topic and the CloudWatch dashboard described in §9.2.
+**ops** alerts about the infrastructure ("EventsFn is throwing"), which are routed
+per §9.2 — the external ops topic and the CloudWatch dashboard, both
+**[Decided r2 — not yet built]**.
 
 ### 4.19 Privacy (GDPR/CCPA), export & audit log
 
@@ -1030,8 +1041,8 @@ the export the default path is the r2 target.
   reCAPTCHA on signup to prevent list-bombing and abuse.
   **[Decided r2 — not yet built]** for the operator-supplied half: the stack
   still creates and associates its own WebACLs.
-- **Tokenized public actions**: confirm/preference/unsubscribe links are signed
-  and scoped so a request can only affect its own subscriber.
+- **Tokenized public actions**: confirm/unsubscribe links are signed and scoped
+  so a request can only affect its own subscriber.
 - **Consent provenance**: signup timestamp, IP, and source URL captured for
   GDPR/audit; double opt-in default strengthens proof of consent.
 - **Data residency**: everything stays in the operator's account and chosen
@@ -1131,17 +1142,22 @@ link can ever grant, not from assuming it stays private:
   against `"prod"` — a stage named `staging` or `prod-eu` silently gets the
   non-prod settings (§9.2).
 - **Cost posture**: near-$0 at idle — no always-on compute or database. The
-  standing bill is **≈ $5/month, plus $1 per organization**: 24 CloudWatch alarms
-  ($2.40), 2 Secrets Manager secrets ($0.80), one KMS signing key per org ($1.00
-  each), and roughly $1 of DynamoDB/S3/Lambda/SQS/SNS at test volume. Sending
-  adds SES at ~$0.10 per 1,000 emails plus one KMS `Sign` per recipient (§4.9).
-  **WAF is external and is the operator's own bill** (§4.3) — self-created ACLs
-  ran ~$17/month, which was 77% of idle cost and the reason they went. Two
-  components add cost only when opted in, and both are **off by default**: the
-  OpenSearch mirror (§5) and the reporting read-model (§4.23 — Kinesis, Firehose,
-  Athena scan at ~$5/TB, and the lake's own S3). The Athena workgroup carries a
-  per-query bytes-scanned cutoff so a bad query cannot run up a bill. All of
-  these drivers are metered per org (§11).
+  standing bill for a one-org install is **$4.20/month**: 24 CloudWatch alarms
+  ($2.40), one KMS signing key per org ($1.00), 2 Secrets Manager secrets
+  ($0.80). That is the tested model in
+  [`packages/domain/src/cost.ts`](../packages/domain/src/cost.ts), and the same
+  numbers the console's Cost estimator renders, so the figure here cannot drift
+  from the one on screen. DynamoDB/S3/Lambda/SQS/SNS add roughly $1 at test
+  volume, unmodelled and on top of that. Sending adds SES at ~$0.10 per 1,000
+  emails plus one KMS `Sign` per recipient (§4.9). Under r2 **WAF is external
+  and is the operator's own bill** (§4.3) **[Decided r2 — not yet built]** — the
+  stack still creates and associates two WebACLs, so today's idle bill carries
+  them too, at ~$17/month: about 77% of what an idle install really costs, and
+  the reason for the decision. Two components add cost only when opted in, and
+  both are **off by default**: the OpenSearch mirror (§5) and the reporting
+  read-model (§4.23 — Kinesis, Firehose, Athena scan at ~$5/TB, and the lake's
+  own S3). The Athena workgroup carries a per-query bytes-scanned cutoff so a bad
+  query cannot run up a bill. All of these drivers are metered per org (§11).
 
 ### 9.1 Bootstrapping the admin pool & first login
 
@@ -1163,9 +1179,10 @@ this at deploy time, so no manual pool setup is ever required:
 
 This is deliberately different from the **per-org subscriber pool**, which is
 **not** in the bootstrap config, is **optional**, and — per §4.10 — should be a
-**link to an existing pool** supplied during "Add organization", never one
-addressium builds. The admin pool is created once and belongs to us; a subscriber
-pool belongs to the org's own website.
+**link to an existing pool** supplied when the org is created, never one
+addressium builds. Org creation is an authenticated `POST /orgs` call; there is
+no "Add organization" screen in the console (§4.1). The admin pool is created
+once and belongs to us; a subscriber pool belongs to the org's own website.
 
 ### 9.2 Observability & ops alerting
 
@@ -1210,8 +1227,10 @@ Lambda throttles.
 imports no AWS SDK, so the full business logic runs against in-memory adapters,
 and the integration suite runs the whole journey — signup → double opt-in → send
 → open/click → click map — against a real DynamoDB API via dynalite, with no Java
-or Docker. `docker-compose.localstack.yml` un-skips four adapter tests (SQS, KMS,
-Scheduler, SES) for anyone who wants them.
+or Docker. `docker-compose.localstack.yml` un-skips three adapter tests (SQS,
+KMS, EventBridge Scheduler) for anyone who wants them. The suite's fourth skip is
+a placeholder that is only registered when LocalStack is *unreachable*, so it is
+never un-skipped — it disappears instead, and the total drops from 254 to 253.
 
 **A local dev mode is not built** (compendium #61)
 **[Decided r2 — not yet built]**. The target is `npm run dev` running the *same*
@@ -1226,7 +1245,7 @@ in the workspace are the three Vite frontends.
 addressium/
 ├── apps/
 │   ├── admin-web/            # React admin SPA (operator console)
-│   ├── subscriber-web/       # preference centre — token-based, no login
+│   ├── subscriber-web/       # directory / confirm / unsubscribe — token-based, no login
 │   └── public-web/           # embeddable signup snippet + hosted list/confirm/unsubscribe pages
 ├── packages/
 │   ├── core/                 # entity types, zod schemas, version marker
@@ -1278,7 +1297,7 @@ signing secret".
   importer, bootstrap + gated deploy + per-org provisioning.
 - **v1.x**: drip automations (Step Functions), materialized-tag segment builder,
   magic-link token service (JWKS + entitlement sync + lite-scope tokens),
-  feeds → campaign auto-build, preference center polish.
+  feeds → campaign auto-build, the token-based preference center (§4.10).
 - **Next, per compendium §6/§8** — the named gaps this document tags
   **[Decided r2 — not yet built]**: SQS in the event plane (§4.5), transactional
   counters (§7), bulk export/portability (§4.19), the real Pinpoint-export reader

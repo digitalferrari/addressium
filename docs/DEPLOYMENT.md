@@ -78,14 +78,16 @@ CloudFront, Secrets Manager and IAM resources.
 ```bash
 npm install        # all workspaces
 npm run build      # tsc -b across packages/services/apps/infra
-npm test           # 259 tests, no AWS creds needed
+npm test           # 254 tests, no AWS creds needed
 npm run test:web   # 8 component tests
 ```
 
 `npm test` runs in-memory and against a real DynamoDB API (dynalite — no Java,
-no Docker). Four of the 259 skip unless LocalStack is reachable: the SQS, KMS and
-EventBridge Scheduler adapter tests. Bring up `docker-compose.localstack.yml`
-first and all 259 run.
+no Docker). With LocalStack down that is 250 passing and 4 skipped: the SQS, KMS
+and EventBridge Scheduler adapter tests, plus a placeholder that exists **only**
+when LocalStack is unreachable. Bring up `docker-compose.localstack.yml` first
+and the total becomes 253, all passing — the placeholder is not registered, so
+the two totals never match.
 
 ## 3. Configure the control plane
 
@@ -205,12 +207,15 @@ build time:
 | `apps/subscriber-web` | Directory / confirm / unsubscribe | `VITE_API_BASE`, `VITE_ORG_ID` |
 | `apps/public-web` | Standalone + embeddable signup | `VITE_API_BASE`, `VITE_ORG_ID` |
 
-> **The subscriber site has no login.** Its routes are directory, list, confirm
-> and unsubscribe, all reached with a signed token or no auth at all — it reads
-> no `VITE_COGNITO_*` and sends no `Authorization` header. An authenticated
-> preference centre backed by a subscriber Cognito login is
-> **[Decided r2 — not yet built]**; there is no authenticated preference-centre
-> endpoint on the API either.
+> **The subscriber site has no login, and r2 does not call for one.** Its four
+> routes are directory, subscribe-to-all, confirm and unsubscribe, all reached
+> with a signed token or no auth at all — it reads no `VITE_COGNITO_*` and sends
+> no `Authorization` header. A subscriber pool belongs to the org, not to
+> addressium, and the addressium subscriber record is the primary identity (§6).
+> There is no preference-centre endpoint on the API either, authenticated or
+> tokenized; the token-based preference centre in
+> [`ARCHITECTURE.md`](ARCHITECTURE.md) §4.10 is
+> **[Decided r2 — not yet built]**.
 
 ```bash
 VITE_API_BASE="https://<api-id>.execute-api.<region>.amazonaws.com" \
@@ -312,10 +317,11 @@ directory honors these flags at render time.
 > **There is no AI layer to configure.** Compendium #62 cuts AI report
 > narratives: an external AI provider plus a third-party API key inside a
 > compliance-sensitive mail system, unrelated to sending email. Do not create an
-> LLM provider secret for addressium. The stack still ships an `AnalyzeFn` and a
-> `POST /orgs/ai-config` route — the cut is decided, the code has not been
-> removed yet. Leave them unconfigured; with no `aiConfig` on the org there is
-> nothing to call and no key to leak.
+> LLM provider secret for addressium. The stack still ships an `AnalyzeFn`, a
+> `POST /orgs/ai-config` route and an "Analyze with AI" button in the console —
+> the cut is decided, the code has not been removed yet
+> **[Decided r2 — not yet built]**. Leave them unconfigured; with no `aiConfig`
+> on the org there is nothing to call and no key to leak.
 
 ---
 

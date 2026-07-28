@@ -39,9 +39,16 @@ the same owner.
 | **RBAC** | Developer Admin / Editor / Analyst / Support, org-scoped, enforced server-side via Cedar |
 | **Import & export** | CSV in. CSV/JSONL out, including consent records, so you can leave — **[Decided r2 — not yet built]**: today only the per-subject GDPR export exists |
 
-**Deliberately not included:** SMS, push, voice, in-app, recommender models, A/B
-testing, or an AI layer. Pinpoint's surviving non-email channels moved to AWS End
-User Messaging; this is email only, on purpose.
+**Deliberately not included:** SMS, push, voice, in-app, recommender models, or
+A/B testing. Pinpoint's surviving non-email channels moved to AWS End User
+Messaging; this is email only, on purpose.
+
+**The AI layer is cut too**, but the code is still here. #62 cuts AI report
+narratives — an external provider plus a third-party API key inside a
+compliance-sensitive mail system, unrelated to sending email. The stack still
+ships an `AnalyzeFn`, a `POST /orgs/ai-config` route and an "Analyze with AI"
+button in the console **[Decided r2 — not yet built]**. Leave them unconfigured:
+with no `aiConfig` on the org there is nothing to call and no key to leak.
 
 ---
 
@@ -154,7 +161,7 @@ Details: [`scripts/README.md`](scripts/README.md) ·
 ## Upgrades
 
 ```bash
-npm test                # 259 tests; 4 skip without LocalStack, 255 always run
+npm test                # 254 tests; 250 pass, 4 skip without LocalStack
 npm run deploy:check    # dry run — refuses anything that would destroy data
 npm run deploy          # in place; CloudFormation rolls back on failure
 curl $API/version       # running build; nothing writes the deploy marker yet
@@ -245,7 +252,7 @@ packages/segment          segment predicate evaluation
 packages/magiclink-verify hardened reference verifier for publisher sites
 services/*                Lambda entry points — thin wiring over the domain
 apps/admin-web            operator console
-apps/subscriber-web       preference centre
+apps/subscriber-web       subscriber directory, confirm & unsubscribe
 apps/public-web           public list pages
 infra/bootstrap           one-time account bootstrap (CloudFormation)
 infra/cdk                 the application stack
@@ -262,8 +269,8 @@ Node 20+, npm workspaces.
 ```bash
 npm install
 npm run build
-npm test          # 259 tests: in-memory + real DynamoDB API via dynalite
-                  # 4 need LocalStack and skip without it; 255 always run
+npm test          # 254 tests: in-memory + real DynamoDB API via dynalite
+                  # 250 pass; 4 skip without LocalStack
 npm run test:web  # 8 component tests
 ```
 

@@ -1,9 +1,10 @@
 /**
  * Subscriber site (#5): newsletter directory (branding-themed, presentation
- * toggles honored), double opt-in confirm landing, preference center /
- * unsubscribe. Reads public branding + list views; posts signup to the API.
- * The subscriber Cognito login (per-org shared pool) reuses the same Hosted-UI
- * PKCE flow as the admin app when VITE_COGNITO_* is configured.
+ * toggles honored) and all-lists view, plus the double opt-in confirm landing
+ * and one-click unsubscribe, both reached by signed token. Reads public
+ * branding + list views; posts signup to the API. There is no login here — the
+ * addressium subscriber record is the identity, and any Cognito pool belongs to
+ * the org, not to us (docs/ARCHITECTURE.md §4.10).
  */
 import { useEffect, useMemo, useState } from "react";
 import { api, applyBranding, ORG, type Branding, type PublicList } from "./api.js";

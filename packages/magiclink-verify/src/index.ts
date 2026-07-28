@@ -23,7 +23,11 @@ import {
 } from "jose";
 
 export interface MagicLinkClaims extends JWTPayload {
-  /** The subscriber's Cognito subject in the shared pool. */
+  /**
+   * addressium's durable subscriber id (`Subscriber.sub`) — NOT a Cognito
+   * subject. Link it to a user in the org's own pool via `Subscriber.externalId`
+   * if the org runs one (docs/ARCHITECTURE.md §4.10, §12).
+   */
   sub: string;
   /** Lite access only. */
   scope: "content:read";

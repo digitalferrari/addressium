@@ -93,9 +93,11 @@ it. The linking half is real: the HMAC-verified identity-sync webhook,
 The read-only posture is not: today provisioning can **create** a per-org pool
 (`subscriberPool: { mode: "create" }`) and the confirm path can **create users**
 in it when an org sets `createAccountsOnConfirm` (off by default). Both are
-therefore **[Decided r2 — not yet built]**. There is no subscriber login or
-authenticated preference center at all — preference management is entirely
-signed-token-based.
+therefore **[Decided r2 — not yet built]**. There is no subscriber login at all,
+and r2 does not call for one — the pool is the org's, not ours. The subscriber
+surface is four unauthenticated routes: directory, subscribe-to-all, confirm and
+unsubscribe, the last two reached by signed token. A tokenized preference centre
+is **[Decided r2 — not yet built]** — there is no preference route on the API.
 
 ---
 
