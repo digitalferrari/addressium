@@ -153,6 +153,12 @@ test("supplying a WebACL ARN produces an association and still creates no ACL", 
   assert.deepEqual(Object.keys(t.findResources("AWS::WAFv2::WebACL")), []);
 });
 
+test("an operational dashboard exists, with its URL exported (#229)", () => {
+  const t = template();
+  assert.equal(Object.keys(t.findResources("AWS::CloudWatch::Dashboard")).length, 1);
+  assert.ok("OpsDashboardUrl" in (t.toJSON().Outputs ?? {}));
+});
+
 test("the analytics tier is absent unless explicitly enabled", () => {
   const t = template();
   for (const type of [

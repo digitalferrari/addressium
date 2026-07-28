@@ -40,7 +40,14 @@ import { HttpLambdaIntegration } from "aws-cdk-lib/aws-apigatewayv2-integrations
 import { HttpUserPoolAuthorizer } from "aws-cdk-lib/aws-apigatewayv2-authorizers";
 import { Topic } from "aws-cdk-lib/aws-sns";
 import { EmailSubscription, SqsSubscription } from "aws-cdk-lib/aws-sns-subscriptions";
-import { Alarm, ComparisonOperator, TreatMissingData } from "aws-cdk-lib/aws-cloudwatch";
+import {
+  Alarm,
+  AlarmStatusWidget,
+  ComparisonOperator,
+  Dashboard,
+  GraphWidget,
+  TreatMissingData,
+} from "aws-cdk-lib/aws-cloudwatch";
 import { LogGroup, RetentionDays } from "aws-cdk-lib/aws-logs";
 import { SnsAction } from "aws-cdk-lib/aws-cloudwatch-actions";
 import { Secret } from "aws-cdk-lib/aws-secretsmanager";
@@ -690,12 +697,26 @@ export class ControlPlaneStack extends Stack {
       // Team management (#226) acts on OUR admin pool, not the operator's
       // subscriber directory.
       ADMIN_POOL_ID: adminPool.userPoolId,
+      // Scopes the health check to THIS deployment's alarms; every alarm this
+      // stack creates is named with the construct id prefix.
+      ALARM_PREFIX: `${Stack.of(this).stackName}-`,
     });
     table.grantReadWriteData(adminApiFn);
     // Scoped to this pool only, and to the four actions team management needs —
     // not cognito-idp:* on the account. The router is internet-facing, so a
     // wildcard here would let one compromised route reach every pool in the
     // account, including the operator's subscriber directories.
+    // DescribeAlarms takes no resource-level condition, so this is "*" by
+    // necessity — but it is READ-ONLY on alarm state, and the handler returns a
+    // verdict rather than the alarm list, so nothing about the account's alarms
+    // reaches the browser (#229).
+    adminApiFn.addToRolePolicy(
+      new PolicyStatement({
+        effect: Effect.ALLOW,
+        actions: ["cloudwatch:DescribeAlarms"],
+        resources: ["*"],
+      }),
+    );
     adminApiFn.addToRolePolicy(
       new PolicyStatement({
         effect: Effect.ALLOW,
@@ -813,6 +834,8 @@ export class ControlPlaneStack extends Stack {
     adminRoute("UnsuppressFn", "subscriberUnsuppressHandler", HttpMethod.POST, "/subscribers/unsuppress");
     // Subscriber migration (#100) + GDPR/CCPA data-subject requests (#101).
     adminRoute("ImportFn", "importHandler", HttpMethod.POST, "/orgs/{org}/import");
+    // System health (#229) — a single derived verdict for the console.
+    adminRoute("HealthFn", "healthHandler", HttpMethod.GET, "/orgs/{org}/health");
     // Team management (#226) — deployment-wide members, gated on team:manage.
     adminRoute("TeamGetFn", "teamHandler", HttpMethod.GET, "/orgs/{org}/team");
     adminRoute("TeamPostFn", "teamHandler", HttpMethod.POST, "/team");
@@ -895,8 +918,13 @@ export class ControlPlaneStack extends Stack {
 
     // ---- infra alarms (#92) — page ops on a stuck/failing send pipeline ----
     const alarmAction = new SnsAction(opsAlerts);
+    // Every alarm, kept so the dashboard and the health endpoint describe the
+    // same set the alarms themselves use — three hand-maintained lists would
+    // drift, and a health badge that watches a stale subset is worse than none.
+    const allAlarms: Alarm[] = [];
     const alarm = (id: string, a: Alarm) => {
       a.addAlarmAction(alarmAction);
+      allAlarms.push(a);
       return a;
     };
     // Anything in the DLQ means messages exhausted their retries — investigate.
@@ -1116,6 +1144,55 @@ export class ControlPlaneStack extends Stack {
     new CfnOutput(this, "PublicSiteUrl", { value: publicSite.distribution.domainName });
     new CfnOutput(this, "PublicSiteBucket", { value: publicSite.bucket.bucketName });
     new CfnOutput(this, "AuditBucketName", { value: auditBucket.bucketName });
+
+    // ---- operational dashboard (#229, compendium #29) ----
+    //
+    // Alarms are for the engineer; the console gets a single derived badge. A
+    // marketer does not care about Lambda throttles, and an on-call engineer
+    // should not have to sign into a marketing console to see them — so these
+    // are two surfaces, not one shared screen.
+    const dashboard = new Dashboard(this, "OpsDashboard", {
+      dashboardName: `addressium-${props.stage}`,
+    });
+    dashboard.addWidgets(
+      new GraphWidget({
+        title: "Send pipeline",
+        left: [
+          sendQueue.metricApproximateNumberOfMessagesVisible(),
+          sendQueue.metricApproximateAgeOfOldestMessage(),
+        ],
+        right: [sendDlq.metricApproximateNumberOfMessagesVisible()],
+        width: 12,
+      }),
+      new GraphWidget({
+        title: "Event plane",
+        left: [
+          eventsQueue.metricApproximateNumberOfMessagesVisible(),
+          eventsQueue.metricApproximateAgeOfOldestMessage(),
+        ],
+        right: [eventsDlq.metricApproximateNumberOfMessagesVisible()],
+        width: 12,
+      }),
+      new GraphWidget({
+        title: "Handlers — errors and throttles",
+        left: [senderFn.metricErrors(), eventsFn.metricErrors(), adminApiFn.metricErrors()],
+        right: [senderFn.metricThrottles(), eventsFn.metricThrottles()],
+        width: 12,
+      }),
+      new GraphWidget({
+        title: "DynamoDB",
+        left: [table.metricThrottledRequestsForOperations({ operations: [] })],
+        right: [table.metricSystemErrorsForOperations({ operations: [] })],
+        width: 12,
+      }),
+      // Alarm state at a glance, so the dashboard answers "is anything wrong"
+      // before it answers "what exactly".
+      new AlarmStatusWidget({ title: "Alarms", alarms: allAlarms, width: 24 }),
+    );
+    new CfnOutput(this, "OpsDashboardUrl", {
+      value: `https://${this.region}.console.aws.amazon.com/cloudwatch/home?region=${this.region}#dashboards:name=addressium-${props.stage}`,
+      description: "Operational dashboard (#229)",
+    });
 
     // The ARNs an operator needs to attach their own WebACL (#225, compendium
     // #30/#31). Without these the documented runbook was unfollowable: there

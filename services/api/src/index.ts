@@ -6,6 +6,7 @@
  * lives here. See docs/ARCHITECTURE.md §4.2–4.3, §4.12.
  */
 import {
+  CloudWatchHealth,
   CognitoAdminDirectory,
   CognitoSubscriberAccounts,
   DynamoStores,
@@ -664,6 +665,25 @@ export async function subscriberUnsuppressHandler(event: HttpEvent): Promise<Htt
  * caller sets status; suppressed addresses are skipped by the domain importer.
  */
 /**
+ * GET /orgs/{org}/health — one derived OK/degraded value (#229, compendium #29).
+ *
+ * Composed SERVER-side. Putting `cloudwatch:DescribeAlarms` in the browser
+ * would hand a marketing console a read view of the whole account's alarm
+ * state, which is the opposite of the split #29 draws — and the console is
+ * shown a verdict, never raw alarm names.
+ */
+export async function healthHandler(event: HttpEvent): Promise<HttpResult> {
+  try {
+    const orgId = event.pathParameters?.org ?? "";
+    requireGrant(event, "reports:view", orgId);
+    const report = await new CloudWatchHealth(env("ALARM_PREFIX")).check();
+    return json(200, { ...report, checkedAt: clock.now().toISOString() });
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+/**
  * Admin team management (#226) — GET/POST /team.
  *
  * Gated on `team:manage`, which only `developer_admin` holds. Scoped to the
@@ -1104,6 +1124,7 @@ const ADMIN_ROUTES: Record<string, RouteHandler> = {
   "POST /subscribers/unsubscribe": subscriberUnsubscribeHandler,
   "POST /subscribers/unsuppress": subscriberUnsuppressHandler,
   "POST /orgs/{org}/import": importHandler,
+  "GET /orgs/{org}/health": healthHandler,
   "GET /orgs/{org}/team": teamHandler,
   "POST /team": teamHandler,
   "GET /orgs/{org}/export": exportHandler,

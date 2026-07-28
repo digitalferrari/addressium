@@ -281,7 +281,15 @@ export interface TeamMemberRow {
   capabilities: string[];
 }
 
+export interface HealthReport {
+  status: "ok" | "degraded" | "unknown";
+  alarmsInAlarm: number;
+  reason?: string;
+  checkedAt: string;
+}
+
 export const api = {
+  health: (org: string) => call<HealthReport>("GET", `/orgs/${org}/health`),
   team: (org: string) => call<TeamMemberRow[]>("GET", `/orgs/${org}/team`),
   inviteMember: (orgId: string, email: string, role: string, orgs: string[]) =>
     call<TeamMemberRow>("POST", `/team`, { orgId, action: "invite", email, role, orgs }),

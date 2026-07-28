@@ -40,3 +40,4 @@ export { GoogleRecaptchaVerifier } from "./recaptcha.js";
 export { sanitizeEmailHtml } from "./sanitize.js";
 export { CognitoSubscriberAccounts } from "./cognito-accounts.js";
 export { CognitoAdminDirectory } from "./admin-directory.js";
+export { CloudWatchHealth, type HealthReport, type HealthStatus } from "./health.js";

@@ -191,3 +191,11 @@ test("setMemberEnabled() maps the boolean to an explicit action", async () => {
   await api.setMemberEnabled("acme", "u1", true);
   expect(JSON.parse(String(lastCall().init.body)).action).toBe("enable");
 });
+
+test("health() GETs a single derived verdict, not alarm state", async () => {
+  await api.health("acme");
+  const { url, init } = lastCall();
+  expect(url).toMatch(/\/orgs\/acme\/health$/);
+  expect(init.method).toBe("GET");
+  // The SPA holds no CloudWatch permission; composition happens server-side.
+});

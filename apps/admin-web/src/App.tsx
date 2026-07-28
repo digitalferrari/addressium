@@ -150,7 +150,7 @@ function Console() {
       </aside>
       <main className="main">
         <div className="view" key={view}>
-        {view === "dashboard" && <Dashboard org={org} onGoToSetup={() => setView("setup")} />}
+        {view === "dashboard" && (<><HealthBadge org={org} /><Dashboard org={org} onGoToSetup={() => setView("setup")} /></>)}
         {view === "setup" && <Setup org={org} />}
         {view === "templates" && <Templates org={org} />}
         {view === "compose" && <Compose org={org} onScheduled={() => setView("schedules")} />}
@@ -1658,6 +1658,42 @@ function PresentationEditor({ org }: { org: string }) {
 }
 
 
+
+
+/**
+ * System health (#229, compendium #29) — ONE derived verdict.
+ *
+ * Deliberately not a list of alarm names. A marketer reading
+ * `SendDlqNotEmptyAlarm` in a campaign tool learns nothing they can act on, and
+ * the detail belongs on the CloudWatch dashboard where the runbook lives. The
+ * composition happens server-side so the SPA holds no CloudWatch permission.
+ */
+function HealthBadge({ org }: { org: string }) {
+  const h = useAsync(() => api.health(org), [org]);
+  if (h.loading || h.error || !h.data) return null;
+
+  const { status, alarmsInAlarm, reason } = h.data;
+  // "unknown" is kept distinct from "degraded": a health check that cannot run
+  // is not evidence that the system is unhealthy, and conflating them sends
+  // someone to debug the mail pipeline over a missing IAM permission.
+  const style: Record<string, { label: string; color: string; note: string }> = {
+    ok: { label: "System OK", color: "#15803d", note: "No alarms firing." },
+    degraded: {
+      label: "Degraded",
+      color: "#b45309",
+      note: `${alarmsInAlarm} alarm${alarmsInAlarm === 1 ? "" : "s"} firing — see the CloudWatch dashboard.`,
+    },
+    unknown: { label: "Health unknown", color: "#6b7280", note: reason ?? "Could not read alarm state." },
+  };
+  const s = style[status] ?? style["unknown"]!;
+
+  return (
+    <div className="card" style={{ borderColor: s.color }}>
+      <strong style={{ color: s.color }}>{s.label}</strong>
+      <div className="muted">{s.note}</div>
+    </div>
+  );
+}
 
 const ROLE_HELP: Record<string, string> = {
   developer_admin: "Everything, including managing this team",
