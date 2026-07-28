@@ -865,10 +865,34 @@ per §9.2 — the external ops topic and the CloudWatch dashboard, both
 - **Consent provenance** (timestamp / IP / source URL) is captured on signup
   (#220) and on import as the same `SubscriptionConsent` shape (#223);
   configurable **event retention** (e.g. 13 / 25 months) supports compliance.
-- **Audit log:** every privileged admin action (sends, closes, deletes, key
-  rotations, org provisioning, manual unsubscribes) is recorded **immutably**
-  with member + org + timestamp, into a dedicated S3 bucket under **Object
-  Lock**.
+- **Audit log** (#29, #191): every privileged admin action (team changes,
+  erasure, DSAR and bulk export, suppression edits, alert thresholds, org
+  provisioning) is recorded **immutably** with member + org + timestamp, into a
+  dedicated S3 bucket under **Object Lock**. Appending is best-effort by design —
+  an audit write that fails must not roll back an action the operator already
+  completed — and a failure is logged loudly rather than swallowed.
+
+  **It is readable from the console.** `GET /orgs/{org}/audit`, gated on
+  `team:manage`: the log names members and their actions, so it is the same
+  administrative surface as Team & access, not a report an analyst may browse.
+  `org=GLOBAL` reads the cross-org scope (org creation, pool linking) — a scope
+  of its own rather than "every org", since merging them would let an operator
+  scoped to one org read deployment-wide actions. A log nobody can read is a
+  compliance artifact rather than a control: until this landed, "who exported
+  subscriber data on the 14th?" was answerable only by an AWS console login,
+  which is the dependency this section exists to remove.
+
+  Keys are `audit/<scope>/<ISO timestamp>-<uuid>.json`, so they sort
+  chronologically — but S3 lists only ASCENDING, and the question is always
+  "what happened most recently". The reader therefore walks **day prefixes
+  backwards** and stops once it has enough, so a recent page costs a handful of
+  list calls no matter how much history sits behind it. The IAM grant is Put and
+  Read, never Delete.
+
+  Objects transition to **Glacier Instant Retrieval** after 90 days, not Deep
+  Archive: a Deep Archive object cannot be fetched without a restore taking
+  hours, so the viewer would fail outright on anything past the transition — the
+  log retained and unreadable, which is the worst of both.
 - **The Object Lock mode is GOVERNANCE, not COMPLIANCE** (compendium #9, #219).
   Both make a written object immutable for its retention window; the difference
   is recoverability. Under GOVERNANCE a sufficiently privileged principal can

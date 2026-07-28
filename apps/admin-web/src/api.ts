@@ -303,6 +303,14 @@ export interface ExportLink {
   url: string;
   expiresAt: string;
 }
+/** One recorded privileged action (#191). */
+export interface AuditRow {
+  orgId: string | null;
+  memberSub: string;
+  action: string;
+  target?: string;
+  at: string;
+}
 export interface NewListDefaults {
   fromAddress: string;
   complianceFooter: string;
@@ -380,6 +388,12 @@ export const api = {
     newListDefaults?: NewListDefaults;
     dryRun?: boolean;
   }) => call<MappedImportReport>("POST", `/orgs/${orgId}/import/mapped`, body),
+  /**
+   * The WORM audit log (#191). `"GLOBAL"` reads the cross-org scope — org
+   * creation and pool linking, which belong to no single org.
+   */
+  auditLog: (orgId: string, limit = 100) =>
+    call<AuditRow[]>("GET", `/orgs/${orgId}/audit?limit=${limit}`),
   importBatches: (orgId: string) =>
     call<ImportBatch[]>("GET", `/orgs/${orgId}/import/batches`),
   importBatch: (orgId: string, batchId: string) =>

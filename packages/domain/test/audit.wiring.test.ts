@@ -84,3 +84,56 @@ test("target is optional — some actions have no single subject", async () => {
   const e = await recordAudit(log, clock, { orgId: "summit", memberSub: "s", action: "alerts.update" });
   assert.equal((e as AuditEntry).target, undefined);
 });
+
+/**
+ * The read side (#191).
+ *
+ * The bucket was provisioned, then the writes were wired, and the only way to
+ * see an entry was still an AWS console login — the dependency §4.19 exists to
+ * remove. These pin the contract the S3 reader has to satisfy: newest first,
+ * one scope at a time, and bounded.
+ */
+const at = (iso: string): AuditEntry => ({
+  orgId: "summit",
+  memberSub: "s",
+  action: "subscribers.export",
+  at: iso,
+});
+
+test("entries come back newest first — an audit view is read from the top", async () => {
+  const log = new MemAuditLog();
+  for (const d of ["2026-07-01", "2026-07-28", "2026-07-14"]) {
+    await log.append(at(`${d}T00:00:00.000Z`));
+  }
+  const read = await log.read("summit");
+  assert.deepEqual(read.map((e) => e.at.slice(0, 10)), ["2026-07-28", "2026-07-14", "2026-07-01"]);
+});
+
+test("a scope reads only its own entries — GLOBAL is not 'all orgs'", async () => {
+  // An entry belongs to exactly one scope. Merging them would let an operator
+  // scoped to one org read deployment-wide actions, which is the opposite of
+  // what org scoping is for.
+  const log = new MemAuditLog();
+  await log.append({ orgId: "summit", memberSub: "s", action: "team.invite", at: NOW });
+  await log.append({ orgId: "ledger", memberSub: "s", action: "team.invite", at: NOW });
+  await log.append({ orgId: null, memberSub: "s", action: "orgs.create", at: NOW });
+
+  assert.deepEqual((await log.read("summit")).map((e) => e.action), ["team.invite"]);
+  assert.deepEqual((await log.read(null)).map((e) => e.action), ["orgs.create"]);
+  assert.deepEqual(await log.read("nobody"), []);
+});
+
+test("the window and the limit both bound the read", async () => {
+  // Unbounded is not an option: a deployment that has run for a year would page
+  // its entire history to answer a question about yesterday.
+  const log = new MemAuditLog();
+  for (let d = 1; d <= 10; d++) {
+    await log.append(at(`2026-07-${String(d).padStart(2, "0")}T00:00:00.000Z`));
+  }
+  assert.equal((await log.read("summit", { limit: 3 })).length, 3);
+  const windowed = await log.read("summit", {
+    from: "2026-07-04T00:00:00.000Z",
+    to: "2026-07-06T00:00:00.000Z",
+  });
+  assert.deepEqual(windowed.map((e) => e.at.slice(8, 10)), ["06", "05", "04"]);
+});

@@ -243,6 +243,25 @@ export class ControlPlaneStack extends Stack {
         Duration.days(365 * auditRetentionYears),
       ),
       removalPolicy: RemovalPolicy.RETAIN,
+      // GLACIER_INSTANT_RETRIEVAL, deliberately NOT Deep Archive (#191). Seven
+      // years of audit objects is real standing cost, but the console now reads
+      // this bucket directly — and a Deep Archive object cannot be fetched at
+      // all without a restore that takes hours, so the viewer would simply fail
+      // on anything older than the transition. Instant Retrieval is same-
+      // millisecond access at a lower rate, which is the trade that keeps the
+      // log readable. Objects are tiny and written once, so 90 days of standard
+      // storage covers every read anyone actually makes.
+      lifecycleRules: [
+        {
+          id: "archive-audit-entries",
+          transitions: [
+            {
+              storageClass: StorageClass.GLACIER_INSTANT_RETRIEVAL,
+              transitionAfter: Duration.days(90),
+            },
+          ],
+        },
+      ],
     });
     // Send pipeline queue with a dead-letter queue (#92): a message that fails
     // to send `maxReceiveCount` times lands in the DLQ instead of being lost, so
@@ -735,6 +754,11 @@ export class ControlPlaneStack extends Stack {
     // team changes, erasure, bulk export, alert thresholds. grantPut only — an
     // audit log its own writer can delete from is not an audit log.
     auditBucket.grantPut(adminApiFn);
+    // Read, so the console can answer "who exported subscriber data on the
+    // 14th?" without an AWS console login (#191). Read and Put only — never
+    // Delete: an audit log its own writer can remove from is not an audit log,
+    // and Object Lock is the second line rather than the first.
+    auditBucket.grantRead(adminApiFn);
     // Write the export, then presign a GET of it. Read is needed because a
     // presigned URL can only carry permissions the signer itself holds — a
     // write-only role would sign a URL that 403s. Scoped to this bucket, whose
@@ -882,6 +906,9 @@ export class ControlPlaneStack extends Stack {
     // Import history (#223) — which run wrote which memberships, so a bad file
     // can be found again rather than reconstructed from timestamps.
     adminRoute("ImportBatchesFn", "importBatchesHandler", HttpMethod.GET, "/orgs/{org}/import/batches");
+    // Audit log READ (#191). The writes were wired in #191's first half; without
+    // this the record existed and nobody could see it.
+    adminRoute("AuditReadFn", "auditReadHandler", HttpMethod.GET, "/orgs/{org}/audit");
     adminRoute("PrivacyFn", "privacyHandler", HttpMethod.POST, "/privacy");
     adminRoute("BrandingPostFn", "brandingHandler", HttpMethod.POST, "/orgs/branding");
     // Deliverability thresholds — these drive the auto-halt (#217).

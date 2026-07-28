@@ -712,6 +712,39 @@ async function audit(
 }
 
 /**
+ * GET /orgs/{org}/audit — read the WORM log (#191).
+ *
+ * Gated on `team:manage`, the developer-admin-only capability. "Who exported
+ * subscriber data on the 14th?" is the same administrative surface as "who can
+ * reach this system", and the log names members and their actions — an analyst
+ * with `reports:view` has no business reading it.
+ *
+ * `org=GLOBAL` reads the cross-org scope (org creation, pool linking). It is a
+ * separate scope rather than "every org": an entry belongs to exactly one, and
+ * merging them would let an operator scoped to one org read deployment-wide
+ * actions. The `team:manage` check still runs against the caller's own orgs, so
+ * reaching GLOBAL requires the wildcard-free admin grant.
+ */
+export async function auditReadHandler(event: HttpEvent): Promise<HttpResult> {
+  try {
+    const scope = event.pathParameters?.org ?? "";
+    requireGrant(event, "team:manage", scope);
+    const q = event.queryStringParameters ?? {};
+    const entries = await auditLog().read(scope === "GLOBAL" ? null : scope, {
+      ...(q.from ? { from: q.from } : {}),
+      ...(q.to ? { to: q.to } : {}),
+      ...(q.limit ? { limit: Number(q.limit) } : {}),
+    });
+    // Deliberately NOT audited. Reading the log is not a privileged mutation,
+    // and an entry per view would bury the actions the log exists to record
+    // under the noise of people looking at it.
+    return json(200, entries);
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+/**
  * GET /orgs/{org}/health — one derived OK/degraded value (#229, compendium #29).
  *
  * Composed SERVER-side. Putting `cloudwatch:DescribeAlarms` in the browser
@@ -1288,6 +1321,7 @@ const ADMIN_ROUTES: Record<string, RouteHandler> = {
   "POST /subscribers/unsubscribe": subscriberUnsubscribeHandler,
   "POST /subscribers/unsuppress": subscriberUnsuppressHandler,
   "POST /orgs/{org}/import": importHandler,
+  "GET /orgs/{org}/audit": auditReadHandler,
   "GET /orgs/{org}/health": healthHandler,
   "GET /orgs/{org}/team": teamHandler,
   "POST /team": teamHandler,

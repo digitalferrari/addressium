@@ -171,7 +171,18 @@ operator's own user pool is optional, and is the operator's business
 - **TOTP MFA required** on the admin pool (enforced in the CDK stack).
 - **Append-only audit log** on an S3 **Object Lock (WORM)** bucket, created in
   every stage with a `RETAIN` removal policy, so history cannot be rewritten
-  even by an admin. The lock *mode* is an open item — see §10.
+  even by an admin. The mode is GOVERNANCE (§10) — recoverable by a principal
+  holding `s3:BypassGovernanceRetention`, which is the escape hatch erasure
+  depends on.
+- **The log is readable from the console** (#191), gated on `team:manage` —
+  Developer Admin only. The log names members and their actions, so it is the
+  same administrative surface as Team & access rather than a report; an analyst
+  with `reports:view` cannot reach it. Cross-org entries (org creation, pool
+  linking) live in a `GLOBAL` scope of their own, so an operator scoped to one
+  org cannot read deployment-wide actions. Reading is deliberately **not itself
+  audited**: it is not a mutation, and an entry per view would bury the actions
+  the log exists to record. The Lambda's grant is Put and Read, never Delete —
+  Object Lock is the second line of defence, not the first.
 - Only Developer Admin can change roles — no privilege-escalation path.
 
 ### 4.4 Send-path abuse & denial-of-wallet

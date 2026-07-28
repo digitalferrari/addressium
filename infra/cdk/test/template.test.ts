@@ -204,3 +204,24 @@ test("the export bucket expires its objects and is not versioned (#224)", () => 
     RestrictPublicBuckets: true,
   });
 });
+
+test("the audit bucket archives cheaply but stays readable (#191)", () => {
+  // Seven years of audit objects is real standing cost, but the console reads
+  // this bucket directly now. A Deep Archive object cannot be fetched without a
+  // restore that takes hours, so the viewer would fail outright on anything
+  // older than the transition — the log would be retained and unreadable, which
+  // is the worst of both.
+  const audit = Object.values(template().findResources("AWS::S3::Bucket")).find(
+    (b) => b.Properties?.ObjectLockEnabled === true,
+  );
+  assert.ok(audit, "the WORM audit bucket exists");
+  const rules =
+    (audit.Properties as { LifecycleConfiguration?: { Rules: Record<string, unknown>[] } })
+      .LifecycleConfiguration?.Rules ?? [];
+  const transitions = rules.flatMap((r) => (r.Transitions ?? []) as { StorageClass: string }[]);
+  assert.ok(transitions.length > 0, "audit objects must not sit in STANDARD for seven years");
+  for (const t of transitions) {
+    assert.notEqual(t.StorageClass, "DEEP_ARCHIVE", "a restore-required class breaks the viewer");
+    assert.notEqual(t.StorageClass, "GLACIER", "likewise — GLACIER Flexible needs a restore");
+  }
+});
