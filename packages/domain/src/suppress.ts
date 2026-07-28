@@ -56,12 +56,50 @@ async function suppressAndFlip(
   }
 }
 
-export function recordBounce(
+/** SES bounce classification (docs.aws.amazon.com SES event publishing). */
+export type BounceType = "Permanent" | "Transient" | "Undetermined";
+
+/**
+ * Record a bounce, suppressing ONLY on a permanent one.
+ *
+ * A transient bounce is a full mailbox, greylisting, or a throttled receiver —
+ * conditions that clear. Suppressing on those permanently kills a valid
+ * subscriber, and because suppression is global (§4.13) it kills them across
+ * every org. The gate lives here rather than in the events handler so the
+ * guarantee is structural: a backfill, replay tool, webhook, or suppression
+ * importer can't reintroduce the bug by forgetting to check (#211).
+ *
+ * `undefined` is treated as permanent to preserve the historical contract for
+ * callers that genuinely don't know — SES always supplies the classification.
+ */
+export async function recordBounce(
   stores: Stores,
   clock: Clock,
-  input: { orgId: string; subscriberId: string; email: string; campaignId?: string; listId?: string },
-): Promise<void> {
-  return suppressAndFlip(stores, clock, input, "bounce", "bounced");
+  input: {
+    orgId: string;
+    subscriberId: string;
+    email: string;
+    campaignId?: string;
+    listId?: string;
+    bounceType?: BounceType;
+  },
+): Promise<{ suppressed: boolean }> {
+  if (input.bounceType && input.bounceType !== "Permanent") {
+    // Still record it: soft bounces must be visible, both for reporting and so
+    // repeated-soft-bounce escalation can be built on real data later.
+    if (input.campaignId) {
+      await stores.events.append({
+        orgId: input.orgId,
+        subscriberId: input.subscriberId,
+        campaignId: input.campaignId,
+        type: "bounce",
+        at: clock.now().toISOString(),
+      });
+    }
+    return { suppressed: false };
+  }
+  await suppressAndFlip(stores, clock, input, "bounce", "bounced");
+  return { suppressed: true };
 }
 
 export function recordComplaint(

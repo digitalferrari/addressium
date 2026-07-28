@@ -67,18 +67,6 @@ async function apply(notif: Notification) {
     return { ok: true };
   }
   if ((notif.eventType === "Bounce" || notif.eventType === "Complaint") && notif.email) {
-    // A Transient bounce (mailbox full, greylisting, throttled) must NOT
-    // suppress — recordBounce always suppresses and flips the subscriber, so
-    // treating every bounce alike permanently kills valid addresses over a
-    // temporary condition.
-    if (notif.eventType === "Bounce" && notif.bounceType && notif.bounceType !== "Permanent") {
-      console.warn("events: transient bounce, not suppressing", {
-        orgId: notif.orgId,
-        campaignId: notif.campaignId,
-        bounceType: notif.bounceType,
-      });
-      return { ok: true, transient: true };
-    }
     const input = {
       orgId: notif.orgId,
       subscriberId: notif.subscriberId,
@@ -86,8 +74,21 @@ async function apply(notif: Notification) {
       campaignId: notif.campaignId,
       listId: notif.listId,
     };
-    if (notif.eventType === "Bounce") await recordBounce(s, clock, input);
-    else await recordComplaint(s, clock, input);
+    if (notif.eventType === "Bounce") {
+      // The Permanent-only gate lives in recordBounce (#211), so every caller
+      // gets it — this just forwards SES's classification.
+      const r = await recordBounce(s, clock, { ...input, bounceType: notif.bounceType as never });
+      if (!r.suppressed) {
+        console.warn("events: transient bounce recorded, not suppressed", {
+          orgId: notif.orgId,
+          campaignId: notif.campaignId,
+          bounceType: notif.bounceType,
+        });
+        return { ok: true, transient: true };
+      }
+    } else {
+      await recordComplaint(s, clock, input);
+    }
     // Evaluate the org's deliverability thresholds; publish to SNS + halt on breach (§4.18).
     const result = await checkDeliverability(s, alerts, clock, notif.orgId, notif.campaignId);
     return { ok: true, alert: result };

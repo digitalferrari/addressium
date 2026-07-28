@@ -160,3 +160,42 @@ test("bounce marks the subscription bounced and suppresses", async () => {
   assert.equal(sub?.status, "bounced");
   assert.equal(await h.stores.suppression.isSuppressed(ORG, "gone@nowhere.test"), true);
 });
+
+test("a transient bounce is recorded but never suppresses (#211)", async () => {
+  const stores = memStores();
+  const clock = new SystemClock();
+  await stores.subscribers.put({
+    orgId: ORG, sub: "s1", email: "full@x.example", status: "active",
+    entitlement: "free", attributes: {},
+  });
+
+  for (const bounceType of ["Transient", "Undetermined"] as const) {
+    const r = await recordBounce(stores, clock, {
+      orgId: ORG, subscriberId: "s1", email: "full@x.example",
+      campaignId: "c1", bounceType,
+    });
+    assert.equal(r.suppressed, false, `${bounceType} must not suppress`);
+    assert.equal(await stores.suppression.isSuppressed(ORG, "full@x.example"), false);
+    const s = await stores.subscribers.get(ORG, "s1");
+    assert.equal(s?.status, "active", "subscriber stays mailable");
+  }
+  // ...but the soft bounce is still visible, not dropped.
+  const events = await stores.events.all(ORG, "c1");
+  assert.equal(events.filter((e) => e.type === "bounce").length, 2);
+});
+
+test("a permanent bounce still suppresses, and so does an unclassified one", async () => {
+  for (const bounceType of ["Permanent", undefined] as const) {
+    const stores = memStores();
+    const clock = new SystemClock();
+    await stores.subscribers.put({
+      orgId: ORG, sub: "s1", email: "gone@x.example", status: "active",
+      entitlement: "free", attributes: {},
+    });
+    const r = await recordBounce(stores, clock, {
+      orgId: ORG, subscriberId: "s1", email: "gone@x.example", bounceType,
+    });
+    assert.equal(r.suppressed, true, `${bounceType ?? "unclassified"} must suppress`);
+    assert.equal(await stores.suppression.isSuppressed(ORG, "gone@x.example"), true);
+  }
+});

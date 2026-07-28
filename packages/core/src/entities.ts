@@ -264,6 +264,18 @@ export interface AbTest {
   winnerMetric: "open" | "click";
   decisionWindowMins: number;
   winner?: "A" | "B";
+  /**
+   * The holdout/remainder windows resolved at phase 1, persisted so phase 2
+   * reuses them. Recomputing the split hours later against a changed confirmed
+   * count shifts every offset (#180). Absent on tests started before this
+   * existed, in which case phase 2 falls back to recomputing.
+   */
+  split?: {
+    total: number;
+    holdoutA: { offset: number; limit: number };
+    holdoutB: { offset: number; limit: number };
+    remainder: { offset: number; limit: number };
+  };
 }
 
 export interface Campaign {
