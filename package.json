@@ -21,7 +21,9 @@
     "test:web": "vitest run",
     "deploy": "npm --workspace @addressium/infra-cdk run deploy",
     "bootstrap:aws": "./scripts/aws-bootstrap.sh",
-    "teardown:aws": "./scripts/aws-teardown.sh"
+    "teardown:aws": "./scripts/aws-teardown.sh",
+    "deploy:check": "./scripts/deploy-check.sh",
+    "predeploy": "./scripts/deploy-check.sh"
   },
   "devDependencies": {
     "@testing-library/dom": "^10.4.0",

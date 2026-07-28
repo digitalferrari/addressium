@@ -22,6 +22,7 @@ import type {
   SuppressionEntry,
   SuppressionScope,
   UsageRecord,
+  DeployedVersion,
 } from "@addressium/core";
 import type { EmailTemplate } from "./render.js";
 
@@ -114,6 +115,16 @@ export interface EventStore {
 export interface EntitlementStore {
   put(e: EntitlementSync): Promise<void>;
   latest(orgId: string, subscriberId: string): Promise<EntitlementSync | undefined>;
+}
+
+/**
+ * The deployed-version marker (#213). A singleton item, not org-scoped: it
+ * describes the installation, and the migration runner reads it to decide which
+ * migrations are pending.
+ */
+export interface VersionStore {
+  get(): Promise<DeployedVersion | undefined>;
+  put(v: DeployedVersion): Promise<void>;
 }
 
 /** Idempotency guard: claim a campaign send exactly once (SQS is at-least-once). */
@@ -283,6 +294,7 @@ export interface Stores {
   events: EventStore;
   entitlements: EntitlementStore;
   sendClaims: SendClaimStore;
+  version: VersionStore;
   campaigns: CampaignStore;
   series: CampaignSeriesStore;
   schedules: SendScheduleStore;

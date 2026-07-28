@@ -107,7 +107,17 @@ export class ControlPlaneStack extends Stack {
       pointInTimeRecovery: true,
       stream: enableOpenSearchMirror ? StreamViewType.NEW_AND_OLD_IMAGES : undefined,
       kinesisStream: analyticsStream,
-      removalPolicy: props.stage === "prod" ? RemovalPolicy.RETAIN : RemovalPolicy.DESTROY,
+      // NEVER destroy subscriber, consent, or analytics data — in ANY stage.
+      // This previously read `stage === "prod" ? RETAIN : DESTROY`, so every
+      // non-prod deployment carried DeletionPolicy: Delete on the one table
+      // holding every subscriber and every engagement event (#190). A typo in
+      // the stage name had the same effect, since the comparison is a string
+      // equality against a free-form value.
+      removalPolicy: RemovalPolicy.RETAIN,
+      // Belt and braces: DynamoDB refuses the delete itself, so even a
+      // hand-rolled API call or a CloudFormation rollback cannot drop the table.
+      // Turning this off is a deliberate, separate action.
+      deletionProtection: true,
     });
     table.addGlobalSecondaryIndex({
       indexName: "gsi1", // email lookup
@@ -241,7 +251,9 @@ export class ControlPlaneStack extends Stack {
         role: new StringAttribute({ mutable: true }),
         orgs: new StringAttribute({ mutable: true }),
       },
-      removalPolicy: props.stage === "prod" ? RemovalPolicy.RETAIN : RemovalPolicy.DESTROY,
+      // Operator identities + MFA enrollments. Losing these locks every admin out
+      // of the console, so retain in every stage (#190).
+      removalPolicy: RemovalPolicy.RETAIN,
     });
     adminPool.addDomain("AdminHostedUi", {
       cognitoDomain: { domainPrefix: `${props.adminHostedUiDomainPrefix}-${props.stage}` },
@@ -559,6 +571,17 @@ export class ControlPlaneStack extends Stack {
       methods: [HttpMethod.POST],
       integration: new HttpLambdaIntegration("SignupBatchInt", signupBatchFn),
     });
+    // Public, unauthenticated: reports only release + schema version, never
+    // config or secrets. Lets an operator confirm an upgrade landed without
+    // reading CloudFormation, and the upgrade rehearsal asserts on it (#213).
+    const versionFn = fn("VersionFn", apiEntry, "versionHandler", apiEnv);
+    table.grantReadData(versionFn);
+    api.addRoutes({
+      path: "/version",
+      methods: [HttpMethod.GET],
+      integration: new HttpLambdaIntegration("VersionInt", versionFn),
+    });
+
     api.addRoutes({
       path: "/confirm",
       methods: [HttpMethod.GET],

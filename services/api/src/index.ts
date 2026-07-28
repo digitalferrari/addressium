@@ -15,7 +15,7 @@ import {
   sanitizeEmailHtml,
   upsertSecret,
 } from "@addressium/adapters-aws";
-import { schemas } from "@addressium/core";
+import { schemas, APP_VERSION, EXPECTED_SCHEMA_VERSION } from "@addressium/core";
 import {
   HmacConfirmationSigner,
   SystemClock,
@@ -393,6 +393,33 @@ export async function orgMetaHandler(event: HttpEvent): Promise<HttpResult> {
       // Surface the configured AI provider (vendor + model only) so the console
       // can reflect saved state; the API key/secret ARN is never echoed (#144).
       aiConfig: org.aiConfig ? { vendor: org.aiConfig.vendor, model: org.aiConfig.model } : undefined,
+    });
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+/**
+ * GET /version — what is actually deployed.
+ *
+ * Public and unauthenticated by design: it reports only the release and schema
+ * version, never configuration or secrets. An operator needs to answer "did my
+ * upgrade land?" without reading CloudFormation, and the upgrade rehearsal
+ * (#213) asserts on it before and after a deploy.
+ *
+ * `deployed` is the marker last written to the table; `running` is the version
+ * of the code answering this request. They differ mid-deploy, and a persistent
+ * mismatch means the marker write failed — which is worth seeing.
+ */
+export async function versionHandler(): Promise<HttpResult> {
+  try {
+    const deployed = await stores().version.get();
+    return json(200, {
+      running: APP_VERSION,
+      expectedSchemaVersion: EXPECTED_SCHEMA_VERSION,
+      deployed: deployed ?? null,
+      // Surfaces a half-applied upgrade rather than hiding it behind a 200.
+      inSync: deployed?.version === APP_VERSION,
     });
   } catch (e) {
     return fail(e);
