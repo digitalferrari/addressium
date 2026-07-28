@@ -60,7 +60,7 @@ forwarded-email recipient, and a poisoned dependency in the supply chain.
 
 | Boundary | Top threats (STRIDE) | Primary controls |
 |---|---|---|
-| Public plane | Spoofing, DoS/denial-of-wallet, injection | Double opt-in, signed action tokens, zod input validation, in-app honeypot + opt-in reCAPTCHA on `/signup*` (#40); edge rate limits and a WAF CAPTCHA rule are **operator-supplied** **[Decided r2 — not yet built]** |
+| Public plane | Spoofing, DoS/denial-of-wallet, injection | Double opt-in, signed action tokens, zod input validation, in-app honeypot + opt-in reCAPTCHA on `/signup*` (#40); edge rate limits and a WAF CAPTCHA rule are **operator-supplied** (#225) — the stack creates no WebACL, so an unconfigured deploy is genuinely unprotected |
 | Magic-link / main site | **Tampering** (alg confusion, forged token), **EoP** (paywall→account) | RFC 8725 alg-pinning, per-org keys, lite scope, step-up on the main site |
 | Subscriber plane | Spoofing, info disclosure | Signed, single-purpose action tokens (confirm, RFC 8058 unsubscribe) scoped to one subscriber's `sub`; a per-org Cognito pool is **optional** and, under r2, reference-only **[Decided r2 — not yet built]** |
 | Admin plane | **EoP**, repudiation | Server-side RBAC + org scope, TOTP MFA, immutable audit log |
@@ -266,7 +266,7 @@ narrower than it sounds is worse than one that is absent:
   tombstoned", not "every trace of the person is gone".
 - **Export is per-subject only.** The DSAR path returns one subject's profile,
   subscriptions, and entitlement as JSON. Bulk CSV/JSONL portability is
-  **[Decided r2 — not yet built]** (#58) — so the project's "you can export your
+  **Done** (#58, #224) — so the project's "you can export your
   data at any time" promise is not yet true at the list level.
 - **Consent provenance is recorded on public double opt-in** (timestamp and
   source URL, when the signup supplies one). The CSV importer records **no**
@@ -288,7 +288,7 @@ delivery of the event stream is an integrity control.
   `maxReceiveCount: 5`, and two of the 24 alarms watch it (DLQ-not-empty, queue
   age). A message that repeatedly fails to send is inspectable and replayable
   instead of lost. Built.
-- **SQS between SNS and `EventsFn`** (#20, #44) **[Decided r2 — not yet built]**.
+- ~~SQS between SNS and `EventsFn`~~ **Done** (#20, #44, #218).
   Today SES → SNS invokes `EventsFn` **directly**, which is an async Lambda
   invocation: AWS retries twice and then discards the event permanently, and
   there is no events DLQ. Interposing SQS adds durable buffering, a real DLQ,
@@ -296,7 +296,7 @@ delivery of the event stream is an integrity control.
   complaint ingestion as best-effort, not guaranteed.
 - **Event write + counter increment in one `TransactWriteItems`** (#57), made
   exactly-once by the deterministic `eventId`.
-  **[Decided r2 — not yet built]** — campaign counters are derived today by
+  **Done** (#221) — campaign counters were derived by
   folding the whole event list on every read; the stored `Campaign.counters`
   field is only ever zero-initialized and nothing increments it, so any figure
   served straight from that field reads zero.
@@ -309,7 +309,7 @@ delivery of the event stream is an integrity control.
 |---|---|
 | IAM | Least-privilege per Lambda; scoped resource ARNs; **no wildcards**; no long-lived keys |
 | Detection | CloudTrail (all regions), GuardDuty, AWS Config, Security Hub |
-| Edge | **Operator-supplied WAF** (#30, #31) **[Decided r2 — not yet built]**: create or reuse a REGIONAL WebACL for the HTTP API and a CLOUDFRONT-scope one (in `us-east-1`) for the SPAs — AWS managed common + known-bad-inputs rule sets, a per-IP rate limit, optionally a CAPTCHA rule on `/signup` — then associate them |
+| Edge | **Operator-supplied WAF** (#30, #31, #225): create or reuse a REGIONAL WebACL for the HTTP API and a CLOUDFRONT-scope one (in `us-east-1`) for the SPAs — AWS managed common + known-bad-inputs rule sets, a per-IP rate limit, optionally a CAPTCHA rule on `/signup` — then associate them |
 | Storage | S3 Block Public Access on; SSE-KMS; TLS-only bucket policies |
 | Compute | IMDSv2 only (any EC2/containers); minimal Lambda perms; DLQs |
 | Budget | AWS Budgets + anomaly alarms (denial-of-wallet backstop) |

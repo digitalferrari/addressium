@@ -204,7 +204,7 @@ deliberately **not** in this diagram: both are opt-in, off by default, and no
 core path depends on either (§4.23, §5, §7).
 
 Two gaps between the diagram and the deployed stack, each marked
-**[Decided r2 — not yet built]** where it is described: the **SQS hop between SNS
+**Now built** (#218): the **SQS hop between SNS
 and the events Lambda** (§4.5 — today the Lambda is subscribed directly to the
 topic) and the **hot counters** (§7 — today every figure is derived by folding
 the event log on read).
@@ -309,7 +309,7 @@ operator attaches a **REGIONAL** ACL to the HTTP API stage and a
 **CLOUDFRONT**-scope ACL (which must live in `us-east-1`) to the two
 distributions, with the AWS managed common + known-bad-inputs rule sets, a per-IP
 rate limit, and optionally a CAPTCHA rule on `/signup`.
-**[Decided r2 — not yet built]** — `infra/cdk/lib/waf.ts` still builds both ACLs
+**Now built** (#225) — the stack creates no WebACL; `infra/cdk/lib/waf.ts` is retained only as the source of the managed-rule exclusions the operator runbook needs
 and the stack still associates them, unconditionally, in every stage; and the
 stack emits **no** API stage ARN or distribution ARN for an operator to attach
 their own to.
@@ -819,7 +819,7 @@ per §9.2 — the external ops topic and the CloudWatch dashboard, both
   the address is tombstoned", not "the person's data is gone". Erasure reaching
   S3 is **[Decided r2 — not yet built]** (#164).
 - **Bulk export / portability** (compendium #58)
-  **[Decided r2 — not yet built]**: CSV **and** JSONL, including consent
+  **Now built** (#224): CSV **and** JSONL, including consent
   provenance, round-trip importable through §4.7, because *users must be able to
   leave*. Nothing of this
   exists yet: there is no export route, no export writer, and no CSV or JSONL

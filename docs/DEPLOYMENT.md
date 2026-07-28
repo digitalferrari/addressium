@@ -67,11 +67,10 @@ SES, KMS, Cognito, API Gateway, SQS, SNS, EventBridge, Step Functions, S3,
 CloudFront, Secrets Manager and IAM resources.
 
 > **WAF is deliberately absent from that list.** addressium consumes an
-> operator-supplied WebACL rather than creating a competing one (#30/#31) — see
-> §8. **[Decided r2 — not yet built]**: today `lib/waf.ts` still builds a
-> REGIONAL and a CLOUDFRONT ACL and the stack associates both, unconditionally,
-> in every stage, so a deployer today *does* additionally need `wafv2:*` to
-> create and associate them.
+> operator-supplied WebACL rather than creating a competing one (#30/#31, #225)
+> — see §8. A default synth contains zero `AWS::WAFv2::WebACL` resources, so the
+> deploy identity needs no `wafv2:*` permission at all. You create the ACLs
+> yourself, with whatever principal already manages edge protection.
 
 ## 2. Build
 
@@ -366,22 +365,31 @@ admin console and the public site.
 
 ### 8.3 The ARNs
 
-**[Decided r2 — not yet built]** — compendium §3 requires the stack to emit the
-ARNs these associations need. It does not:
+The stack emits what the associations need:
 
-| You need | Stack emits today |
+| You need | Stack output |
 | --- | --- |
-| HTTP API **stage ARN** | `HttpApiUrl` — a URL. Derive the ARN from the API id in it. |
-| Admin distribution **ARN** | `AdminSiteUrl` — a domain name. |
-| Public distribution **ARN** | `PublicSiteUrl` — a domain name. |
+| HTTP API **stage ARN** | `ApiStageArn` |
+| Admin distribution **id** | `AdminDistributionId` |
+| Public distribution **id** | `PublicDistributionId` |
 
-Until the outputs land, resolve the ids from those values (or from the console)
-and construct the ARNs by hand.
+Record the resulting WebACL ARNs as `apiWebAclArn` and `cloudfrontWebAclArn` in
+`addressium.config.json` and the stack does the association for you. Leave them
+unset and no association is made — `npm run deploy:check` warns, naming which
+surface is exposed.
 
-> **A resource can carry only one WebACL.** While the stack still creates and
-> associates its own, attaching yours displaces it — and the next `cdk deploy`
-> puts the stack's ACL back, silently. Until #66 lands, either accept the
-> stack's ACLs or expect to reassociate after every deploy.
+> **Rules you must exclude, or the console breaks (#188).** The AWS managed rule
+> sets reject the request bodies this application legitimately sends. Exclude
+> `SizeRestrictions_BODY` and `CrossSiteScripting_BODY` on the routes that carry
+> HTML — saving a campaign or a template posts an entire email body — and
+> exclude `/signup/batch` from any CAPTCHA rule, since it is called by the
+> subscriber site rather than by a person. Enable `URL_DECODE` and
+> `NORMALIZE_PATH` transformations, and turn on WAF logging: a WAF that blocks
+> template saving with no log is indistinguishable from a broken deploy.
+
+> **A resource carries only one WebACL.** That is why addressium creates none:
+> ours would displace yours, and the next `cdk deploy` would silently put ours
+> back (#225).
 
 ### 8.4 Alert routing
 

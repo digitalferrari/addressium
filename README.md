@@ -37,7 +37,7 @@ the same owner.
 | **Multi-org silos** | Per-org KMS key, SES identity and config set. Dev orgs are fail-closed to an allowlist, so a test blast cannot reach a live list. |
 | **Brandable subscriber site** | Per-org logo, theme, background; per-list presentation toggles, no rebuild |
 | **RBAC** | Developer Admin / Editor / Analyst / Support, org-scoped, enforced server-side via Cedar |
-| **Import & export** | CSV in. CSV/JSONL out, including consent records, so you can leave — **[Decided r2 — not yet built]**: today only the per-subject GDPR export exists |
+| **Import & export** | CSV in, through an interactive field mapper. CSV/JSONL out including consent provenance, and the export re-imports through that same mapper — so leaving is a round trip, not just a download. |
 
 **Deliberately not included:** SMS, push, voice, in-app, recommender models, or
 A/B testing. Pinpoint's surviving non-email channels moved to AWS End User
@@ -97,7 +97,7 @@ Cognito users", "can send mail", and "holds the webhook signing secret".
 | **DynamoDB** | Single-digit-ms reads at any list size, no capacity planning, no idle cost. A relational DB needs an always-on instance. |
 | **SES** | The mail transport. Per-org configuration sets isolate deliverability reputation between tenants. |
 | **SQS** | Decouples "schedule a campaign" from "send 500,000 emails" — retries, backpressure, partial-batch failure reporting. |
-| **SNS → Lambda** for events | As built, SNS invokes `EventsFn` *asynchronously*: two retries, then the event is **discarded**. A dropped bounce is an address you keep mailing, which is why SQS belongs in the middle — durability and a dead-letter queue. **[Decided r2 — not yet built]** |
+| **SNS → SQS → Lambda** for events | An SNS→Lambda subscription is an *asynchronous* invoke: two retries, then the event is discarded. A dropped bounce is an address you keep mailing, so the queue sits in the middle — durable delivery, a dead-letter queue, and partial batch failure so one poison event does not fail its nine peers. |
 | **EventBridge Scheduler** | Timezone-aware recurring sends that track DST correctly. Plain cron does not. |
 | **Step Functions** | Drip steps wait days. Lambda cannot wait; Step Functions can, for fractions of a cent. |
 | **KMS (asymmetric, per org)** | Signs magic-link tokens. Per-org so one key's compromise cannot forge another org's tokens. The public half is published as JWKS, verifiable by any JWT library. |
@@ -105,24 +105,20 @@ Cognito users", "can send mail", and "holds the webhook signing secret".
 | **S3** | Rendered-body archive (powers click maps), audit log under Object Lock (GOVERNANCE, 7-year default retention), analytics archive. |
 | **CloudFront + OAC** | SPA delivery over HTTPS from private buckets. |
 
-### Services addressium does **not** create **[Decided r2 — not yet built]**
+### Services addressium does **not** create
 
 Your account probably already runs these. Creating our own would duplicate cost,
-fight your existing rules, or quietly bypass your security posture. That is the
-decision, not the code: **today the stack creates both**, and neither
-configuration key below exists yet. Do not attach a second WebACL expecting the
-stack to have left the slot empty.
+fight your existing rules, or quietly bypass your security posture.
 
-| Service | What you will do | What the stack does today |
+| Service | What you do | Why |
 |---|---|---|
-| **WAF** | Attach your own WebACL. The stack outputs the API stage ARN and both CloudFront distribution ARNs. | Creates two WebACLs of its own — regional and CloudFront — and associates them to the API stage and both distributions. It emits no ARN outputs to attach against. |
+| **WAF** | Attach your own WebACL and set `apiWebAclArn` / `cloudfrontWebAclArn`. The stack outputs `ApiStageArn`, `AdminDistributionId` and `PublicDistributionId` to associate against. | A resource carries only one WebACL, so ours would displace yours — and silently reattach on the next deploy. It was also ~$17/month against a ~$4 idle bill, and a CloudFront-scope ACL is only creatable in `us-east-1`, so it broke deploys in every other region. |
 | **Ops alerting** | Set `opsAlertTopicArn` (an existing SNS topic) or `opsAlertEmail`. Alert routing is your infrastructure. | Consumes yours when set; creates and subscribes a topic when given only an email. Set neither and `deploy:check` warns. |
 
-The same decision calls for a `doctor` command that warns when no WAF
-association or alert target is configured — shipping silently unprotected is
-worse than shipping without them. That command does not exist either
-**[Decided r2 — not yet built]**. The only preflight that ships is
-`npm run deploy:check`, and it guards data-holding resources, not exposure.
+`npm run deploy:check` warns when no WAF association or alert target is
+configured — shipping silently unprotected is worse than shipping without them.
+A standalone `doctor` command is still **[Decided r2 — not yet built]**; today
+those preflight checks live in `deploy:check` alongside its data-safety guard.
 
 ---
 
@@ -308,13 +304,17 @@ verifier — ships as a hardened, copy-paste module: `packages/magiclink-verify`
   CloudFormation.
 - The version marker is readable, but nothing writes it on deploy yet.
 - GDPR erasure does not yet reach the S3 archive.
-- **Bulk export does not exist yet.** A single subject can be exported for a
-  GDPR request; the CSV/JSONL list export with consent records is not written.
-- The importer **cannot read a real Pinpoint export file.** A verified sample is
-  CSV, but with 73 dotted columns (`Address`, `EndpointStatus`, `OptOut`,
-  `Attributes.*`, `User.UserAttributes.*`) — not the lowercase `email` header the
-  parser expects. List membership rides in the `Attributes.*` columns as
-  `true`/`false`/empty, and empty means *never asked*, not *unsubscribed*.
+- **Bulk export returns inline rather than streaming to S3.** Fine for an
+  ordinary list; an org large enough to exceed a Lambda response is exactly the
+  org most likely to be migrating.
+- The importer reads a real Pinpoint export **through the field mapper** — a
+  verified sample is CSV with 73 dotted columns (`Address`, `EndpointStatus`,
+  `OptOut`, `Attributes.*`, `User.UserAttributes.*`), and list membership rides
+  in the `Attributes.*` columns as `true`/`false`/empty where empty means *never
+  asked*. Gzipped JSON Lines exports are still unsupported, and a saved mapping
+  is not yet re-offered on the next file with the same headers.
+- The audit log is still dead code: the WORM bucket is provisioned and correctly
+  moded, and nothing has ever written an object to it.
 
 **1.0 is gated on** the end-to-end suite passing against a real AWS account, GDPR
 erasure completing, and one install running for 30 days.
