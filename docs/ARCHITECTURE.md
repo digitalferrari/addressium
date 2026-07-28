@@ -109,9 +109,10 @@ every org in a deployment is operated by the same owner.
 - **Editorial vs advertising link handling**: the sender adds tokens + click
   tracking to **editorial** links only; **LiveIntent advertising** links are left
   untouched (no token, no tracking)
-- **Migration importer**: CSV ingest today; reading a real Pinpoint export
-  (gzipped JSON Lines, with `OptOut`/`EndpointStatus` honored) is §4.7 and
-  **[Decided r2 — not yet built]**
+- **Migration importer**: generic CSV ingest today; reading a real Pinpoint
+  export — dotted-column CSV *and* gzipped JSON Lines, with
+  `OptOut`/`EndpointStatus` honored and `Attributes.*` mapped to audiences — is
+  §4.7 and **[Decided r2 — not yet built]**
 - **Admin console** (React SPA) protected by Cognito
 - **Infrastructure as code** via AWS CDK (TypeScript), behind a one-time
   bootstrap stack and a permissions boundary (§9)
@@ -451,13 +452,40 @@ imported subscription defaults to **`pending`** (#192), so an import can never
 silently start mailing a list.
 
 **Reading a real Pinpoint export is not built** (compendium #59) —
-**[Decided r2 — not yet built]**. Pinpoint exports **gzipped JSON Lines** of
-endpoint records; there is no gzip reader, no JSON Lines parser, and no
-endpoint-field handling anywhere in the codebase. That work carries one hard
-requirement: **`OptOut` / `EndpointStatus` must never become mailable.** No form
-of that guarantee exists yet — hand-converted Pinpoint columns fall into the
-attribute bag where nothing consults them, and the import API accepts
-`status: "confirmed"`, which would take an opted-out endpoint straight to
+**[Decided r2 — not yet built]**. A verified real-world export is **CSV with
+dotted column paths**, not the gzipped JSON Lines an export job produces — so the
+importer needs both shapes, and the CSV one is what operators actually hold. The
+sample carries 73 columns: `Id`, `ChannelType`, `Address`, `EndpointStatus`,
+`OptOut`, `EffectiveDate`, `Location.*`, `Attributes.*` and
+`User.UserAttributes.*`. Today's parser looks for a lowercase `email` header, so
+it reads that file as one unusable row.
+
+Four structural facts that shape the work, each verified against the sample:
+
+- **List membership lives in `Attributes.*`**, one boolean column per newsletter —
+  not in a separate segment file. So the importer's job is largely
+  column-to-audience mapping, which is what makes the wizard below load-bearing.
+- **Those columns are three-state: `true`, `false`, and empty** — 26 of 50 were
+  empty in the sample. **Empty means never asked; `false` means declined.**
+  Collapsing them loses the distinction consent rests on.
+- **A prefix denotes the publication** (`SD_`, `SH_`, `SP_`), and 13 unprefixed
+  names *also* exist in prefixed form — `Sports` and `SD_Sports` both appear. One
+  file can therefore span several orgs, and the duplicate pairs need an explicit
+  precedence rule rather than a silent last-write-wins.
+- **Not every `Attributes.*` column is a list.** `audiences`, `companyname`,
+  `contactOwner` and `promotionsTest` are ordinary attributes; treating every
+  column as an audience would invent newsletters.
+
+`User.UserAttributes.*` carries real PII — `birthDate`, `gender`, name, address —
+so an import writes far more personal data than an email address, which the
+retention and erasure paths (§4.19) must account for. `EffectiveDate` is the only
+date available, but it is an endpoint-update stamp, **not** proof of opt-in, and
+must never be presented as consent provenance.
+
+The hard requirement stands: **`OptOut` / `EndpointStatus` must never become
+mailable.** No form of that guarantee exists yet — hand-converted Pinpoint columns
+fall into the attribute bag where nothing consults them, and the import API
+accepts `status: "confirmed"`, which would take an opted-out endpoint straight to
 mailable. Segment translation and suppression-list ingest are likewise unbuilt.
 Do not read "Pinpoint importer" as "your suppression state survives the
 migration"; it does not.

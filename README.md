@@ -310,8 +310,11 @@ verifier — ships as a hardened, copy-paste module: `packages/magiclink-verify`
 - GDPR erasure does not yet reach the S3 archive.
 - **Bulk export does not exist yet.** A single subject can be exported for a
   GDPR request; the CSV/JSONL list export with consent records is not written.
-- The importer **cannot read a real Pinpoint export file** — it is CSV-only,
-  while Pinpoint exports gzipped JSON Lines.
+- The importer **cannot read a real Pinpoint export file.** A verified sample is
+  CSV, but with 73 dotted columns (`Address`, `EndpointStatus`, `OptOut`,
+  `Attributes.*`, `User.UserAttributes.*`) — not the lowercase `email` header the
+  parser expects. List membership rides in the `Attributes.*` columns as
+  `true`/`false`/empty, and empty means *never asked*, not *unsubscribed*.
 
 **1.0 is gated on** the end-to-end suite passing against a real AWS account, GDPR
 erasure completing, and one install running for 30 days.
