@@ -42,16 +42,12 @@ const alerts = new SnsAlertPublisher();
 async function apply(notif: Notification) {
   const s = stores();
 
-  // SNS is at-least-once, and every branch below mutates counters or
-  // suppression, so a redelivery would double-count opens/clicks and skew the
-  // deliverability math that gates the halt. The claim store is a conditional
-  // put — reuse it as a dedupe key when SES gave us a message id.
-  if (notif.messageId) {
-    const key = `sesevent:${notif.messageId}:${notif.eventType}`;
-    if (!(await s.sendClaims.claim(notif.orgId, key))) {
-      return { ok: true, deduped: true };
-    }
-  }
+  // SNS is at-least-once, so redeliveries must not double-count. Idempotency is
+  // carried by the deterministic `eventId` (#183): the event row's sort key is
+  // derived from it, so re-writing the same source event overwrites its own row.
+  // This replaced a coarser claim-per-(messageId,type) scheme, which ALSO
+  // discarded a subscriber's genuine second open — the eventId includes the
+  // provider's per-occurrence timestamp, so real repeats survive.
 
   if (notif.eventType === "Click" && notif.link) {
     const linkId = await recordClick(s, clock, {
@@ -59,11 +55,12 @@ async function apply(notif: Notification) {
       campaignId: notif.campaignId,
       subscriberId: notif.subscriberId,
       clickedUrl: notif.link, // token stripped inside recordClick
+      eventId: notif.eventId,
     });
     return { ok: true, linkId };
   }
   if (notif.eventType === "Open") {
-    await recordOpen(s, clock, notif.orgId, notif.campaignId, notif.subscriberId);
+    await recordOpen(s, clock, notif.orgId, notif.campaignId, notif.subscriberId, notif.eventId);
     return { ok: true };
   }
   if ((notif.eventType === "Bounce" || notif.eventType === "Complaint") && notif.email) {

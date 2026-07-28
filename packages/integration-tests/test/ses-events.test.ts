@@ -72,3 +72,29 @@ test("an untagged or non-actionable event resolves to undefined, not a bad guess
   assert.equal(normalize({ eventType: "Delivery", mail: { tags } }), undefined);
   assert.equal(normalize(null), undefined);
 });
+
+test("the same notification delivered twice yields one stable eventId (#183)", () => {
+  const raw = {
+    eventType: "Open",
+    mail: { messageId: "0100abc", timestamp: "2026-07-28T10:00:00.000Z", tags },
+    open: { timestamp: "2026-07-28T10:05:00.000Z" },
+  };
+  const a = normalize(unwrap(snsEvent(raw))[0]);
+  const b = normalize(unwrap(snsEvent(raw))[0]); // SNS at-least-once redelivery
+  assert.ok(a?.eventId);
+  assert.equal(a.eventId, b?.eventId, "redelivery must collapse onto the same row");
+});
+
+test("a genuine second open is NOT collapsed", () => {
+  const base = { eventType: "Open", mail: { messageId: "0100abc", tags } };
+  const first = normalize({ ...base, open: { timestamp: "2026-07-28T10:05:00.000Z" } });
+  const second = normalize({ ...base, open: { timestamp: "2026-07-28T14:30:00.000Z" } });
+  assert.notEqual(first?.eventId, second?.eventId, "distinct occurrences stay distinct");
+});
+
+test("event type is part of the identity, so a bounce and an open never collide", () => {
+  const mail = { messageId: "0100abc", timestamp: "2026-07-28T10:00:00.000Z", tags };
+  const open = normalize({ eventType: "Open", mail });
+  const bounce = normalize({ eventType: "Bounce", mail });
+  assert.notEqual(open?.eventId, bounce?.eventId);
+});

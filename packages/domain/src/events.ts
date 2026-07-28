@@ -9,6 +9,8 @@ import type { EngagementEvent } from "@addressium/core";
 import type { Clock, Stores } from "./ports.js";
 
 export interface RecordClickInput {
+  /** Stable source id so a redelivered notification doesn't double-count (#183). */
+  eventId?: string;
   orgId: string;
   campaignId: string;
   subscriberId: string;
@@ -28,6 +30,8 @@ export async function recordOpen(
   orgId: string,
   campaignId: string,
   subscriberId: string,
+  /** Stable source id so a redelivered notification doesn't double-count (#183). */
+  eventId?: string,
 ): Promise<void> {
   await stores.events.append({
     orgId,
@@ -35,6 +39,7 @@ export async function recordOpen(
     subscriberId,
     type: "open",
     at: clock.now().toISOString(),
+    eventId,
   });
 }
 
@@ -62,6 +67,7 @@ export async function recordClick(
     type: "click",
     linkId, // token is NOT stored — only the resolved link-id
     at: clock.now().toISOString(),
+    eventId: input.eventId,
   };
   await stores.events.append(evt);
   // Clicks are the engagement signal that resets the sunset clock (opens are not

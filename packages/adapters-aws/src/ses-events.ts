@@ -11,6 +11,7 @@
  * pure AWS-shape translation, and because keeping it here makes it directly
  * unit-testable.
  */
+import { createHash } from "node:crypto";
 import { SES_TAG, decodeTag } from "./ses.js";
 
 /** Our internal, already-resolved shape (direct invoke and tests). */
@@ -28,6 +29,8 @@ export interface Notification {
   bounceType?: string;
   /** SES message id, used to make at-least-once delivery idempotent. */
   messageId?: string;
+  /** Stable id for THIS occurrence — see EngagementEvent.eventId (#183). */
+  eventId?: string;
 }
 
 /** The subset of the SES event-publishing payload we consume. */
@@ -37,15 +40,19 @@ export interface SesNotification {
   notificationType?: string;
   mail?: {
     messageId?: string;
+    timestamp?: string;
     destination?: string[];
     tags?: Record<string, string[]>;
   };
   bounce?: {
     bounceType?: string;
     bouncedRecipients?: Array<{ emailAddress?: string }>;
+    timestamp?: string;
   };
-  complaint?: { complainedRecipients?: Array<{ emailAddress?: string }> };
-  click?: { link?: string };
+  complaint?: { complainedRecipients?: Array<{ emailAddress?: string }>; timestamp?: string };
+  click?: { link?: string; timestamp?: string };
+  open?: { timestamp?: string };
+  delivery?: { timestamp?: string };
 }
 
 /**
@@ -114,6 +121,27 @@ export function normalize(input: unknown): Notification | undefined {
     x.complaint?.complainedRecipients?.[0]?.emailAddress ??
     x.mail?.destination?.[0];
 
+  // The provider's own timestamp for this occurrence. Two REDELIVERIES of one
+  // notification share it (so they collapse); two genuine opens do not (so both
+  // are kept). Falling back to the mail timestamp is safe — it is constant per
+  // message, so at worst repeat events of the same type collapse, which is
+  // strictly better than counting phantoms.
+  const occurredAt =
+    x.bounce?.timestamp ??
+    x.complaint?.timestamp ??
+    x.click?.timestamp ??
+    x.open?.timestamp ??
+    x.delivery?.timestamp ??
+    x.mail?.timestamp;
+
+  const messageId = x.mail?.messageId;
+  const eventId = messageId
+    ? createHash("sha256")
+        .update(`${messageId}|${eventType}|${occurredAt ?? ""}`)
+        .digest("hex")
+        .slice(0, 32)
+    : undefined;
+
   return {
     eventType,
     orgId,
@@ -122,6 +150,7 @@ export function normalize(input: unknown): Notification | undefined {
     email,
     link: x.click?.link,
     bounceType: x.bounce?.bounceType,
-    messageId: x.mail?.messageId,
+    messageId,
+    eventId,
   };
 }

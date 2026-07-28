@@ -395,6 +395,16 @@ export interface EngagementEvent {
   type: EventType;
   linkId?: string; // for clicks; token already redacted
   at: string;
+  /**
+   * Stable identity for this occurrence, used to make writes idempotent and to
+   * let the analytics lake dedupe (#183).
+   *
+   * Derived from the SOURCE event (SES message id + type + the provider's
+   * timestamp), so two deliveries of the same SNS notification collapse while
+   * two genuine opens stay distinct. Absent for internally-generated events,
+   * which fall back to a random id — those are written once by construction.
+   */
+  eventId?: string;
 }
 
 export interface SuppressionEntry {

@@ -300,10 +300,15 @@ export class DynamoStores implements Stores {
   };
 
   events: EventStore = {
+    // The sort key carries the event's stable id, so re-writing the same source
+    // event overwrites its own row instead of appending a duplicate. It used to
+    // be a fresh randomUUID() per call, which made every at-least-once
+    // redelivery a permanent phantom open/click/bounce with no way to tell them
+    // apart after the fact (#183).
     append: (e) =>
       this.put({
         pk: `${org(e.orgId)}#CAMPAIGN#${e.campaignId}`,
-        sk: `EVENT#${e.at}#${randomUUID()}`,
+        sk: `EVENT#${e.at}#${e.eventId ?? randomUUID()}`,
         data: e,
       }),
     all: (orgId, campaignId) =>
