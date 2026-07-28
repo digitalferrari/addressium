@@ -255,19 +255,31 @@ widget operators paste into any page:
    are never deleted.
 
 > **The subscriber Cognito pool.** `POST /orgs` requires a `subscriberPool` of
-> `{"mode":"create"}` or `{"mode":"link","poolId":"..."}`, and stamps the result
-> on the org as a **required** `subscriberPoolId`. The r2 target is that a
-> per-org subscriber pool is **optional and reference-only** — addressium links
-> an existing pool and never owns, creates or writes to it, with
-> `Subscriber.externalId` as the join key and the addressium subscriber record as
-> the primary identity. **[Decided r2 — not yet built]:** today `mode:"create"`
-> really does call `CreateUserPool`, and if you set the org's
-> `signupProtection.createAccountsOnConfirm` flag the public confirm handler
-> calls `AdminCreateUser` in that pool (off unless you set it). If you want the
-> reference-only posture now, pass `{"mode":"link"}` and leave
-> `createAccountsOnConfirm` unset. Magic links do not depend on any of this —
-> they are signed with the org's KMS ES256 key and verified against the published
-> JWKS, whether or not a pool exists.
+> `{"poolId":"..."}` for a pool **you already own**, and stamps it on the org as
+> an optional `subscriberPoolId`. There is no create mode: a pool has too many
+> consequential settings for this application to choose on your behalf, and the
+> stack holds no `CreateUserPool` permission. Linking validates the pool with
+> `DescribeUserPool` and nothing more.
+>
+> Supply a pool **if and only if** you enable magic links. With them off,
+> addressium never contacts Cognito and sends plain email. With them on, the
+> token carries the pool's `sub` so your paywall can resolve the reader against
+> your own directory with no call back to us — which means each confirmed
+> subscriber needs an account in that pool. addressium creates one, once, with a
+> random permanent password and Cognito's welcome email suppressed (we own the
+> messaging). It writes nothing else.
+>
+> That write is done by a dedicated function no route can reach. If you want to
+> narrow its IAM further, name your pools at deploy time:
+>
+> ```bash
+> npx cdk deploy -c subscriberPoolIds='["us-east-1_abc","us-east-1_def"]'
+> ```
+>
+> Without it the grant falls back to `userpool/*` in your account — still three
+> enumerated actions, still with an explicit `Deny` on the admin pool, but wider
+> than it needs to be. Pools are linked at runtime, so their ARNs cannot be known
+> at synth time unless you say so.
 
 > **Dev / test organizations.** To rehearse real campaigns against production
 > workflows without risk, add an org with `environment: "dev"`. Give it a full

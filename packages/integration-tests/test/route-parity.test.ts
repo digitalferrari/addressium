@@ -91,3 +91,22 @@ test("the admin table covers every route the console calls", () => {
     assert.ok(ROUTE_KEYS.admin.includes(key), `console route missing: ${key}`);
   }
 });
+
+test("the subscriber-account provisioner is reachable from NO route (#23)", () => {
+  // It is the only code in the product that may write to an operator's user
+  // directory, and it holds the IAM grant to prove it. Mapping it to a route —
+  // in either table — would put that grant behind an HTTP endpoint, which is
+  // the exposure the split exists to remove. `confirmHandler` invokes it
+  // directly instead.
+  const src = readFileSync(API, "utf8");
+  assert.match(src, /export async function subscriberAccountHandler/, "the handler exists");
+  for (const [table, keys] of Object.entries(ROUTE_KEYS)) {
+    for (const key of keys) {
+      const entry = new RegExp(`"${key.replace(/[/{}]/g, "\\$&")}":\\s*(\\w+)`);
+      const handler = src.match(entry)?.[1];
+      assert.notEqual(handler, "subscriberAccountHandler", `routed in ${table} as ${key}`);
+    }
+  }
+  // ...and CDK must not register a route for it either.
+  assert.doesNotMatch(readFileSync(STACK, "utf8"), /adminRoute\([^)]*subscriberAccountHandler/);
+});

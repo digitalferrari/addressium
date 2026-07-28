@@ -85,15 +85,22 @@ do not.
 
 **Subscriber plane — the subscriber record is the identity, not a pool account.**
 Signup is unauthenticated and creates an addressium subscriber keyed by our own
-durable id; a subscriber normally has no Cognito user at all. Under r2 a per-org
-subscriber pool is **optional and reference-only** — addressium links to a pool
-the org already owns via `Subscriber.externalId` and does not create or write to
-it. The linking half is real: the HMAC-verified identity-sync webhook,
-`externalId` as the join key, and email-change and delete handling are built.
-The read-only posture is not: today provisioning can **create** a per-org pool
-(`subscriberPool: { mode: "create" }`) and the confirm path can **create users**
-in it when an org sets `createAccountsOnConfirm` (off by default). Both are
-therefore **[Decided r2 — not yet built]**. There is no subscriber login at all,
+durable id; a subscriber has no Cognito user unless the org uses magic links. A
+per-org subscriber pool is **optional and link-only** — addressium links to a
+pool the org already owns via `Subscriber.externalId`, and the stack holds no
+`CreateUserPool` permission anywhere. The linking half is real: the HMAC-verified
+identity-sync webhook, `externalId` as the join key, and email-change and delete
+handling are built.
+
+The single write addressium makes into that pool is creating a **subscriber**
+after their double opt-in, with a random permanent password and Cognito's
+welcome email suppressed — the magic-link token carries the pool `sub`, so a
+subscriber without an account would receive an unresolvable token. It lives in a
+dedicated function reachable from no route (#23); the public `/confirm` handler
+can only ask for it, holding `lambda:InvokeFunction` on that one function and no
+Cognito permission at all. The provisioner's grant is three enumerated actions,
+narrowed to exact pool ARNs when the operator names them at deploy time, with an
+explicit `Deny` on the admin pool. There is no subscriber login at all,
 and r2 does not call for one — the pool is the org's, not ours. The subscriber
 surface is four unauthenticated routes: directory, subscribe-to-all, confirm and
 unsubscribe, the last two reached by signed token. A tokenized preference centre

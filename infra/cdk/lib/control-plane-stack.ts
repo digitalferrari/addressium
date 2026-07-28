@@ -490,29 +490,78 @@ export class ControlPlaneStack extends Stack {
     );
     // The embed widget's reCAPTCHA secret is org-configured at runtime (#62).
     signupBatchFn.addToRolePolicy(orgSecretsScoped());
-    const confirmFn = fn("ConfirmFn", apiEntry, "confirmHandler", apiEnv);
-    // Opt-in post-verify subscriber-account provisioning (#62). Per-org pools are
-    // created at runtime, so we can't enumerate ARNs; the handler only calls this
-    // when the org explicitly enables createAccountsOnConfirm.
-    confirmFn.addToRolePolicy(
+    /**
+     * The ONLY role in this stack that may write to an operator's subscriber
+     * pool (#23, #62). It is not wired to any API route — nothing can reach it
+     * from the internet — and `confirmHandler` invokes it asynchronously after a
+     * double opt-in.
+     *
+     * The split is the point. `/confirm` is the most exposed route in the
+     * product: unauthenticated, linked from every confirmation email, and the
+     * one an attacker probes first. Holding `AdminCreateUser` there meant a
+     * compromise of that route reached the operator's user directory. Now it
+     * holds `lambda:InvokeFunction` on this one function and nothing else, and
+     * the pool id is re-read from the org record here rather than trusted from
+     * the payload — otherwise an invoker naming an arbitrary pool would have
+     * back the escalation this removes.
+     */
+    const subscriberAccountFn = fn(
+      "SubscriberAccountFn",
+      apiEntry,
+      "subscriberAccountHandler",
+      apiEnv,
+    );
+    table.grantReadWriteData(subscriberAccountFn);
+    // Subscriber pools belong to the OPERATOR and are linked at runtime, so
+    // their ARNs cannot be enumerated at synth. Naming them in context is what
+    // turns this from "every pool in the account" into the two or three that
+    // are actually linked — worth doing, and the reason the option exists.
+    const linkedPoolIds =
+      (this.node.tryGetContext("subscriberPoolIds") as string[] | undefined) ?? [];
+    subscriberAccountFn.addToRolePolicy(
       new PolicyStatement({
-        actions: ["cognito-idp:AdminCreateUser", "cognito-idp:AdminGetUser"],
-        resources: [
-          Stack.of(this).formatArn({ service: "cognito-idp", resource: "userpool", resourceName: "*" }),
+        actions: [
+          "cognito-idp:AdminCreateUser",
+          "cognito-idp:AdminGetUser",
+          "cognito-idp:AdminSetUserPassword",
         ],
+        resources:
+          linkedPoolIds.length > 0
+            ? linkedPoolIds.map((id) =>
+                Stack.of(this).formatArn({
+                  service: "cognito-idp",
+                  resource: "userpool",
+                  resourceName: id,
+                }),
+              )
+            : [
+                Stack.of(this).formatArn({
+                  service: "cognito-idp",
+                  resource: "userpool",
+                  resourceName: "*",
+                }),
+              ],
       }),
     );
-    // The scoping above still leaves every pool in THIS account in range —
+    // The wildcard fallback still leaves every pool in THIS account in range —
     // including the admin pool. An explicit Deny (which always wins in IAM)
-    // closes the actual escalation: a publicly reachable /confirm handler being
-    // able to AdminCreateUser its way into the control plane (#167).
-    confirmFn.addToRolePolicy(
+    // closes the escalation that actually matters: provisioning a subscriber
+    // account into the control plane's own directory (#167).
+    subscriberAccountFn.addToRolePolicy(
       new PolicyStatement({
         effect: Effect.DENY,
         actions: ["cognito-idp:*"],
         resources: [adminPool.userPoolArn],
       }),
     );
+
+    const confirmFn = fn("ConfirmFn", apiEntry, "confirmHandler", {
+      ...apiEnv,
+      SUBSCRIBER_ACCOUNT_FN: subscriberAccountFn.functionName,
+    });
+    // Invoke only, on that one function. `/confirm` can ask for provisioning; it
+    // cannot perform it, and it cannot reach Cognito at all.
+    subscriberAccountFn.grantInvoke(confirmFn);
     const unsubscribeFn = fn("UnsubscribeFn", apiEntry, "unsubscribeHandler", apiEnv);
     const entitlementFn = fn("EntitlementFn", apiEntry, "entitlementSyncHandler", apiEnv);
     const identityFn = fn("IdentityFn", apiEntry, "identitySyncHandler", apiEnv);

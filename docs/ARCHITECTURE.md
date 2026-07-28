@@ -621,19 +621,31 @@ subscriptions, the entitlement, and the `sub` claim in every magic-link token
   would let a subscriber manage list memberships and attributes the same
   tokenized way, is **[Decided r2 — not yet built]**: there is no preference
   route on the API and no preference page in any SPA.
-- **Cognito linkage is optional and read-only.** An org that already runs a
+- **Cognito linkage is optional and link-only.** An org that already runs a
   Cognito pool for its own website can **link** it, so addressium's subscribers
   line up with the site's users. addressium *references* that pool; it does not
-  own it, create it, or write to it. The join key is `Subscriber.externalId`.
-  **[Decided r2 — not yet built]** — as shipped this is not read-only and not
-  optional: `Organization.subscriberPoolId` is a **required** field, provisioning
-  accepts `subscriberPool: {mode: "create"}` and issues a real `CreateUserPool`,
-  and the public confirm handler can call `AdminCreateUser` when an org sets
-  `signupProtection.createAccountsOnConfirm` (optional, off unless configured).
-  Both paths carry an explicit IAM `Deny` on the admin pool, so neither can
-  escalate into the control plane — but neither is read-only. `mode: "link"`,
-  which only validates an existing pool with `DescribeUserPool`, is the path that
-  matches the target.
+  own it and never creates it. `Organization.subscriberPoolId` is optional and
+  present **if and only if** `magicLink` is: an org with magic links off never
+  touches Cognito at all, and the stack holds no `cognito-idp:CreateUserPool`
+  permission anywhere. The join key is `Subscriber.externalId`, the pool's `sub`.
+
+  The one write addressium performs is creating a **subscriber** in the linked
+  pool, after that subscriber's double opt-in, with a random permanent password
+  and Cognito's own welcome email suppressed — because the magic-link token
+  carries the pool `sub` a paywall resolves against, and a subscriber with no
+  pool account would get an unresolvable token. Nothing else is written; the
+  pool's configuration is the operator's.
+
+  That write lives in a **function of its own** (`SubscriberAccountFn`, #23),
+  reachable from no route. `/confirm` — unauthenticated, linked from every
+  confirmation email, the first route an attacker probes — invokes it
+  asynchronously and holds `lambda:InvokeFunction` on that one function and
+  nothing else. It cannot reach Cognito. The provisioner's grant is three
+  enumerated actions, narrowed to the exact pool ARNs when the operator names
+  them in `-c subscriberPoolIds=…`, with an explicit `Deny` on the admin pool
+  that closes the escalation the wildcard fallback would otherwise leave open
+  (#167). The pool id is re-read from the org record inside the provisioner
+  rather than trusted from the invocation payload.
 - **Identity sync works, in one direction.** The HMAC-verified
   `POST /webhooks/identity` route accepts upsert/delete from the operator's
   system of record, matches on `externalId`, reconciles an email-only subscriber

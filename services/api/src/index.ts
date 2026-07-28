@@ -19,6 +19,7 @@ import {
   sanitizeEmailHtml,
   upsertSecret,
 } from "@addressium/adapters-aws";
+import { InvokeCommand, LambdaClient } from "@aws-sdk/client-lambda";
 import { schemas, APP_VERSION, EXPECTED_SCHEMA_VERSION, type AlertConfig } from "@addressium/core";
 import {
   HmacConfirmationSigner,
@@ -241,28 +242,34 @@ export async function confirmHandler(event: HttpEvent): Promise<HttpResult> {
     // After the double opt-in is verified, ensure the subscriber has an account
     // in the org's linked pool, so their magic-link tokens can carry the pool
     // `sub` a paywall resolves against. Gated on the org having magic links on
-    // — with the feature off addressium never touches Cognito at all. This
-    // replaces the old `createAccountsOnConfirm` opt-in, which was incompatible
-    // with the token contract: an org whose subscribers mostly lacked an
-    // account would mint mostly unresolvable tokens.
+    // — with the feature off addressium never touches Cognito at all.
     //
-    // Best-effort: a provisioning hiccup must not fail the confirmation the
-    // subscriber just completed. A subscriber left without an externalId is
-    // sent to without a token and shows up in SendResult.untokenized.
+    // Handed to a dedicated function rather than done here (#23). THIS handler
+    // is the internet-facing double-opt-in landing page; giving it Cognito write
+    // permission means a compromise of the most-exposed route in the product
+    // reaches the operator's user directory. The provisioner holds that grant
+    // instead, scoped to the linked pools, and this route can only ask it to run.
+    //
+    // Best-effort and asynchronous: a provisioning hiccup must not fail — or
+    // slow — the confirmation the subscriber just completed. A subscriber left
+    // without an externalId is sent to without a token and shows up in
+    // SendResult.untokenized.
     const first = subs[0];
     if (first) {
       const org = await stores().organizations.get(first.orgId);
       if (org?.magicLink && org.subscriberPoolId) {
         try {
-          await provisionSubscriberAccount(
-            stores(),
-            new CognitoSubscriberAccounts(),
-            first.orgId,
-            org.subscriberPoolId,
-            first.subscriberId,
-          );
-        } catch {
+          await requestSubscriberAccount({
+            orgId: first.orgId,
+            poolId: org.subscriberPoolId,
+            subscriberId: first.subscriberId,
+          });
+        } catch (e) {
           // swallow — confirmation already succeeded; account sync can be retried
+          console.error("confirm: subscriber account request failed", {
+            orgId: first.orgId,
+            error: (e as Error).message,
+          });
         }
       }
     }
@@ -270,6 +277,67 @@ export async function confirmHandler(event: HttpEvent): Promise<HttpResult> {
   } catch (e) {
     return fail(e);
   }
+}
+
+/**
+ * Ask the provisioner to run. Event invocation, so the caller neither waits for
+ * Cognito nor fails with it — the confirmation is already durable by this point,
+ * and a subscriber without a pool account is a degraded send, not a lost signup.
+ */
+async function requestSubscriberAccount(payload: SubscriberAccountRequest): Promise<void> {
+  await new LambdaClient({}).send(
+    new InvokeCommand({
+      FunctionName: env("SUBSCRIBER_ACCOUNT_FN"),
+      InvocationType: "Event",
+      Payload: Buffer.from(JSON.stringify(payload)),
+    }),
+  );
+}
+
+export interface SubscriberAccountRequest {
+  orgId: string;
+  poolId: string;
+  subscriberId: string;
+}
+
+/**
+ * Create (or resolve) the subscriber's account in the org's linked Cognito pool
+ * and stamp the returned `sub` as their externalId (#23, #62).
+ *
+ * A function of its own for exactly one reason: it is the only code in the
+ * product that may write to an operator's user directory, and it must therefore
+ * be the only role that can. It is NOT reachable from the API — no route maps to
+ * it — so the only caller is `confirmHandler`, via `lambda:InvokeFunction` on
+ * this function alone.
+ *
+ * The pool id arrives in the payload rather than the environment because pools
+ * are per-org and linked at runtime. It is re-read from the ORG RECORD here and
+ * not trusted from the caller: an invoker who could name an arbitrary pool would
+ * have the escalation this split exists to remove.
+ */
+export async function subscriberAccountHandler(event: SubscriberAccountRequest): Promise<void> {
+  const org = await stores().organizations.get(event.orgId);
+  if (!org?.magicLink || !org.subscriberPoolId) {
+    // The toggle went off, or the pool was unlinked, between confirm and here.
+    console.warn("subscriber-account: org no longer provisions accounts", { orgId: event.orgId });
+    return;
+  }
+  if (org.subscriberPoolId !== event.poolId) {
+    // Not fatal — the org record wins — but worth saying out loud, because it
+    // means a request was queued against a pool that is no longer the org's.
+    console.warn("subscriber-account: pool changed since the request", {
+      orgId: event.orgId,
+      requested: event.poolId,
+      current: org.subscriberPoolId,
+    });
+  }
+  await provisionSubscriberAccount(
+    stores(),
+    new CognitoSubscriberAccounts(),
+    event.orgId,
+    org.subscriberPoolId,
+    event.subscriberId,
+  );
 }
 
 /** POST /campaigns/schedule — send now, at a time, or recurring (§4.6, §4.16). */

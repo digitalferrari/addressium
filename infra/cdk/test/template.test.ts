@@ -19,8 +19,15 @@ import { App } from "aws-cdk-lib";
 import { Match, Template } from "aws-cdk-lib/assertions";
 import { ControlPlaneStack } from "../lib/control-plane-stack.js";
 
-function template(props: Record<string, unknown> = {}): Template {
-  const app = new App({ context: { "aws:cdk:bundling-stacks": [] } });
+/**
+ * `props` become stack props; `context` becomes app context, which is where the
+ * deploy-time knobs live (`cdk deploy -c auditRetentionYears=…`).
+ */
+function template(
+  props: Record<string, unknown> = {},
+  context: Record<string, unknown> = {},
+): Template {
+  const app = new App({ context: { "aws:cdk:bundling-stacks": [], ...context } });
   const stack = new ControlPlaneStack(app, "test-stack", {
     stage: "dev",
     adminEmails: ["ops@example.com"],
@@ -224,4 +231,80 @@ test("the audit bucket archives cheaply but stays readable (#191)", () => {
     assert.notEqual(t.StorageClass, "DEEP_ARCHIVE", "a restore-required class breaks the viewer");
     assert.notEqual(t.StorageClass, "GLACIER", "likewise — GLACIER Flexible needs a restore");
   }
+});
+
+/** Statements attached to the role of the function whose logical id starts with `prefix`. */
+function policyFor(t: ReturnType<typeof template>, prefix: string): Record<string, unknown>[] {
+  const fns = t.findResources("AWS::Lambda::Function");
+  const logicalId = Object.keys(fns).find((k) => k.startsWith(prefix));
+  assert.ok(logicalId, `no function named ${prefix}*`);
+  const roleRef = (fns[logicalId]!.Properties as { Role: { "Fn::GetAtt": string[] } }).Role[
+    "Fn::GetAtt"
+  ][0];
+
+  const out: Record<string, unknown>[] = [];
+  for (const p of Object.values(t.findResources("AWS::IAM::Policy"))) {
+    const roles = (p.Properties as { Roles?: { Ref: string }[] }).Roles ?? [];
+    if (!roles.some((r) => r.Ref === roleRef)) continue;
+    out.push(
+      ...(((p.Properties as { PolicyDocument: { Statement: Record<string, unknown>[] } })
+        .PolicyDocument.Statement) ?? []),
+    );
+  }
+  return out;
+}
+
+const actionsOf = (s: Record<string, unknown>): string[] =>
+  Array.isArray(s.Action) ? (s.Action as string[]) : s.Action ? [s.Action as string] : [];
+
+test("the /confirm handler cannot reach Cognito at all (#23)", () => {
+  // It is the most exposed route in the product: unauthenticated, linked from
+  // every confirmation email, the first thing an attacker probes. It used to
+  // hold AdminCreateUser on every pool in the account, so a compromise there
+  // reached the operator's user directory. It now holds lambda:InvokeFunction
+  // on one function and nothing else.
+  const t = template();
+  const statements = policyFor(t, "ConfirmFn");
+  const cognito = statements
+    .filter((s) => s.Effect !== "Deny")
+    .flatMap(actionsOf)
+    .filter((a) => a.startsWith("cognito-idp:"));
+  assert.deepEqual(cognito, [], `/confirm still holds ${cognito.join(", ")}`);
+
+  const invokes = statements.flatMap(actionsOf).filter((a) => a.startsWith("lambda:Invoke"));
+  assert.ok(invokes.length > 0, "it must still be able to ASK for provisioning");
+});
+
+test("the provisioner holds the Cognito grant, and is denied the admin pool (#23, #167)", () => {
+  const statements = policyFor(template(), "SubscriberAccountFn");
+  const allowed = statements
+    .filter((s) => s.Effect !== "Deny")
+    .flatMap(actionsOf)
+    .filter((a) => a.startsWith("cognito-idp:"));
+  assert.ok(allowed.includes("cognito-idp:AdminCreateUser"));
+  assert.ok(allowed.includes("cognito-idp:AdminSetUserPassword"));
+  // Never a wildcard action: this role may create and read a subscriber, not
+  // reconfigure a pool.
+  assert.ok(!allowed.includes("cognito-idp:*"), "the ALLOW must stay enumerated");
+
+  // The explicit Deny is what closes the escalation the wildcard resource leaves
+  // open — provisioning a "subscriber" into the control plane's own directory.
+  const denies = statements.filter((s) => s.Effect === "Deny").flatMap(actionsOf);
+  assert.ok(denies.includes("cognito-idp:*"), "no Deny on the admin pool");
+});
+
+test("naming the linked pools in context replaces the account-wide wildcard (#23)", () => {
+  // Subscriber pools belong to the operator and are linked at runtime, so their
+  // ARNs cannot be enumerated at synth. Naming them is what turns "every pool in
+  // the account" into the two that are actually linked.
+  const t = template({}, { subscriberPoolIds: ["us-east-1_aaa", "us-east-1_bbb"] });
+  const resources = policyFor(t, "SubscriberAccountFn")
+    .filter((s) => s.Effect !== "Deny")
+    .filter((s) => actionsOf(s).some((a) => a.startsWith("cognito-idp:")))
+    .flatMap((s) => (Array.isArray(s.Resource) ? s.Resource : [s.Resource]));
+
+  const rendered = JSON.stringify(resources);
+  assert.match(rendered, /us-east-1_aaa/);
+  assert.match(rendered, /us-east-1_bbb/);
+  assert.doesNotMatch(rendered, /userpool\/\*/, "the wildcard must be gone once pools are named");
 });
