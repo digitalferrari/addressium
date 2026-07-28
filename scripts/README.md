@@ -15,17 +15,47 @@ gets. Admin credentials never leave the account owner's hands.
 This is the same path whether you're setting up a throwaway test account or a
 production install.
 
-## Usage
+## Two ways to bootstrap
+
+### Recommended: the CloudFormation stack
+
+`infra/bootstrap/addressium-bootstrap.yaml` — deploy it from the console or the
+CLI. No local tooling required beyond a browser.
 
 ```bash
-# Account owner, once, with admin credentials:
-./scripts/aws-bootstrap.sh \
-  --admin-email you@example.com \
-  --domain mail.example.com
-
-# See what it would do without touching anything:
-./scripts/aws-bootstrap.sh --admin-email you@example.com --dry-run
+aws cloudformation deploy \
+  --template-file infra/bootstrap/addressium-bootstrap.yaml \
+  --stack-name addressium-dev-bootstrap \
+  --capabilities CAPABILITY_NAMED_IAM \
+  --parameter-overrides AdminEmail=you@example.com Stage=dev
 ```
+
+Prefer this because it is **state**, not a one-shot action. When a later release
+needs a new permission, that is a stack *update* — with a diff, a rollback, and a
+clean uninstall. A script can only create and hope.
+
+Then finish the one step CloudFormation can't do (it is itself a stack):
+
+```bash
+npx cdk bootstrap aws://<account>/<region> \
+  --custom-permissions-boundary addressium-dev-boundary
+```
+
+### Alternative: the shell script
+
+`aws-bootstrap.sh` does the same work plus the SES identity and inbound-mail
+setup, which the template deliberately leaves out (they are per-domain and
+change independently of IAM). Use it when you want the whole test environment in
+one command:
+
+```bash
+./scripts/aws-bootstrap.sh --admin-email you@example.com --domain mail.example.com
+./scripts/aws-bootstrap.sh --admin-email you@example.com --dry-run   # preview
+```
+
+Its limitation is the point made above: it has no state, so re-running after the
+script itself changes is convergence-by-hope. Treat it as a convenience for
+disposable test accounts, and the template as the real install path.
 
 Then hand over the credentials it prints, and the deployer runs:
 
@@ -38,6 +68,21 @@ Teardown (non-prod only — `prod` is refused by design):
 ```bash
 ./scripts/aws-teardown.sh --stage dev --region us-east-1
 ```
+
+## On storing deploy credentials in Secrets Manager
+
+A natural idea that cannot work: **reading Secrets Manager requires AWS
+credentials**, so storing AWS credentials there is circular. And anyone running
+`cdk deploy` from their own CLI is already authenticated, so there is nothing to
+fetch.
+
+Secrets Manager is the right home for *application* secrets — the reCAPTCHA key,
+the AI provider key, the webhook signing secret — which is exactly how the app
+already uses it: passed by ARN, resolved at cold start, never in the template.
+That is a different problem from authentication.
+
+The deployment answer is no static secret at all: assume a role, get credentials
+that expire.
 
 ## How the scoping actually works
 
