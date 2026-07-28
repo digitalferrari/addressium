@@ -68,7 +68,7 @@ export interface HttpEvent {
   requestContext?: {
     /** "METHOD /path" as registered in API Gateway; drives router dispatch. */
     routeKey?: string;
-    http?: { method?: string };
+    http?: { method?: string; sourceIp?: string; userAgent?: string };
     authorizer?: { jwt?: { claims?: Record<string, string | undefined> } };
   };
 }
@@ -120,6 +120,20 @@ const scheduler = () =>
     launchArn: env("LAUNCH_FN_ARN"),
   }));
 
+/**
+ * Request provenance for a consent record (#220).
+ *
+ * API Gateway puts the caller's address in `requestContext.http.sourceIp`.
+ * Nothing read it before, so every consent record carried a hardcoded
+ * `"0.0.0.0"` — an assertion that was simply false. Absent stays absent here:
+ * an omitted field is honest, a fabricated one is not.
+ */
+function provenance(event: HttpEvent): { sourceIp?: string; userAgent?: string } {
+  const ip = event.requestContext?.http?.sourceIp;
+  const ua = event.requestContext?.http?.userAgent ?? event.headers?.["user-agent"];
+  return { ...(ip ? { sourceIp: ip } : {}), ...(ua ? { userAgent: ua } : {}) };
+}
+
 /** POST /signup — public, double opt-in (§4.2). */
 export async function signupHandler(event: HttpEvent): Promise<HttpResult> {
   try {
@@ -145,7 +159,7 @@ export async function signupHandler(event: HttpEvent): Promise<HttpResult> {
       if (!ok) return json(400, { error: "captcha verification failed" });
     }
 
-    const res = await signup(stores(), await confirmSigner(), clock, raw);
+    const res = await signup(stores(), await confirmSigner(), clock, raw, provenance(event));
 
     // Send the double opt-in confirmation email (transactional, §4.2).
     const list = await stores().lists.get(res.subscription.orgId, res.subscription.listId);
@@ -183,7 +197,7 @@ export async function signupBatchHandler(event: HttpEvent): Promise<HttpResult> 
       if (!ok) return json(400, { error: "captcha verification failed" });
     }
 
-    const res = await signupMany(stores(), await confirmSigner(), clock, raw);
+    const res = await signupMany(stores(), await confirmSigner(), clock, raw, provenance(event));
     if (res.lists.length > 0) {
       const org = await stores().organizations.get(res.subscriber.orgId);
       const confirmUrl = `${env("CONFIRM_URL_BASE")}?token=${encodeURIComponent(res.confirmationToken)}`;
@@ -200,7 +214,7 @@ export async function signupBatchHandler(event: HttpEvent): Promise<HttpResult> 
 export async function confirmHandler(event: HttpEvent): Promise<HttpResult> {
   try {
     const token = event.queryStringParameters?.token ?? "";
-    const subs = await confirmOptInAny(stores(), await confirmSigner(), clock, token);
+    const subs = await confirmOptInAny(stores(), await confirmSigner(), clock, token, provenance(event));
 
     // After the double opt-in is verified, ensure the subscriber has an account
     // in the org's linked pool, so their magic-link tokens can carry the pool

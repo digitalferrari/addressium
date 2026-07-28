@@ -48,8 +48,48 @@ export type EventType =
 
 export interface Consent {
   timestamp: string; // ISO-8601
-  ip: string;
-  sourceUrl: string;
+  /**
+   * The requester's IP, when it is genuinely known. OMITTED otherwise — this
+   * used to be hardcoded `"0.0.0.0"`, and a consent record asserting an address
+   * that is false is worse evidence than one that admits the field is missing
+   * (#220).
+   */
+  ip?: string;
+  userAgent?: string;
+  sourceUrl?: string;
+}
+
+/**
+ * Per-subscription proof of consent (#220, GDPR Art. 7(1) — "the controller
+ * shall be able to demonstrate").
+ *
+ * Consent lives on the SUBSCRIBER too, but that record answers "did this person
+ * ever agree to anything", not "did they agree to THIS newsletter". A reader who
+ * opted into one list in 2019 and another in 2026 has two different consents,
+ * and only the per-list record can answer a dispute about either.
+ *
+ * Written once at signup and completed at confirmation; nothing else may
+ * overwrite it. `updatedAt` cannot serve this purpose because every later status
+ * change — unsubscribe, erase, import — rewrites it.
+ */
+export interface SubscriptionConsent {
+  /** When this list was requested. */
+  requestedAt: string;
+  /** When double opt-in completed. Absent means never confirmed. */
+  confirmedAt?: string;
+  /** Omitted when unknown; never fabricated. */
+  requestIp?: string;
+  confirmIp?: string;
+  userAgent?: string;
+  sourceUrl?: string;
+  /**
+   * How we claim the right to mail them: `explicit` is double opt-in evidence,
+   * `implicit` an existing relationship (an import, #223). Absent on records
+   * written before this field existed — read as unknown, never as explicit.
+   */
+  basis?: "explicit" | "implicit";
+  /** Import batch that created this row, when it came from a file (#223). */
+  importBatchId?: string;
 }
 
 // ---- tenancy & identity ----
@@ -243,6 +283,12 @@ export interface Subscription {
   listId: ListId;
   status: SubscriptionStatus;
   updatedAt: string;
+  /**
+   * Immutable proof of consent for THIS list (#220). Optional so records
+   * written before it existed still read; absent means "no provenance", which
+   * is a fact worth surfacing rather than papering over.
+   */
+  consent?: SubscriptionConsent;
 }
 
 export interface Segment {

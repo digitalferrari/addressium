@@ -11,7 +11,7 @@
  * addressium subscriber keyed by a local id, independent of any Cognito pool.
  */
 import { randomUUID } from "node:crypto";
-import { schemas, type List, type Subscriber, type Subscription } from "@addressium/core";
+import { schemas, type Consent, type List, type Subscriber, type Subscription } from "@addressium/core";
 import type { Clock, ConfirmationTokenSigner, Stores } from "./ports.js";
 
 export interface SignupResult {
@@ -45,23 +45,47 @@ async function clearOrRejectSuppression(stores: Stores, orgId: string, email: st
   for (const s of suppressions) await stores.suppression.remove(s.orgId, s.email, s.scope);
 }
 
+/** Provenance of one signup request, as far as the caller could establish it. */
+export interface RequestContext {
+  /** The requester's IP. Omit rather than guess — see Consent.ip (#220). */
+  sourceIp?: string;
+  userAgent?: string;
+  sourceUrl?: string;
+}
+
+function consentRecord(clock: Clock, ctx: RequestContext): Consent {
+  // Built UNCONDITIONALLY. This used to be gated on sourceUrl being present, so
+  // every server-side or embedded signup that did not pass one produced a fully
+  // mailable subscriber with no provenance whatsoever (#220). A timestamp alone
+  // is thin evidence, but it is evidence; nothing is none.
+  return {
+    timestamp: clock.now().toISOString(),
+    ...(ctx.sourceIp ? { ip: ctx.sourceIp } : {}),
+    ...(ctx.userAgent ? { userAgent: ctx.userAgent } : {}),
+    ...(ctx.sourceUrl ? { sourceUrl: ctx.sourceUrl } : {}),
+  };
+}
+
 async function findOrCreateSubscriber(
   stores: Stores,
   clock: Clock,
   orgId: string,
   email: string,
   attributes: Record<string, string> | undefined,
-  sourceUrl: string | undefined,
+  ctx: RequestContext,
 ): Promise<Subscriber> {
   const existing = await stores.subscribers.findByEmail(orgId, email);
+  // A returning subscriber keeps their original subscriber-level consent — but
+  // the per-subscription record below captures fresh provenance for the new
+  // list, which is what a dispute about THAT list needs.
   if (existing) return existing;
   const subscriber: Subscriber = {
     orgId,
     sub: randomUUID(),
     email,
     attributes: attributes ?? {},
-    source: sourceUrl,
-    consent: sourceUrl ? { timestamp: clock.now().toISOString(), ip: "0.0.0.0", sourceUrl } : undefined,
+    source: ctx.sourceUrl,
+    consent: consentRecord(clock, ctx),
     status: "active",
     entitlement: "free",
   };
@@ -69,8 +93,34 @@ async function findOrCreateSubscriber(
   return subscriber;
 }
 
-async function pendingSubscription(stores: Stores, clock: Clock, orgId: string, sub: string, listId: string): Promise<Subscription> {
-  const subscription: Subscription = { orgId, subscriberId: sub, listId, status: "pending", updatedAt: clock.now().toISOString() };
+async function pendingSubscription(
+  stores: Stores,
+  clock: Clock,
+  orgId: string,
+  sub: string,
+  listId: string,
+  ctx: RequestContext = {},
+): Promise<Subscription> {
+  const now = clock.now().toISOString();
+  const existing = await stores.subscriptions.get(orgId, sub, listId);
+  const subscription: Subscription = {
+    orgId,
+    subscriberId: sub,
+    listId,
+    status: "pending",
+    updatedAt: now,
+    // Re-requesting a list records the NEW request but keeps the original
+    // confirmation evidence, if any — a re-signup does not un-prove the first
+    // opt-in, and it must not silently inherit a confirmedAt it did not earn.
+    consent: {
+      ...(existing?.consent ?? {}),
+      requestedAt: now,
+      ...(ctx.sourceIp ? { requestIp: ctx.sourceIp } : {}),
+      ...(ctx.userAgent ? { userAgent: ctx.userAgent } : {}),
+      ...(ctx.sourceUrl ? { sourceUrl: ctx.sourceUrl } : {}),
+      basis: "explicit",
+    },
+  };
   await stores.subscriptions.put(subscription);
   return subscription;
 }
@@ -80,6 +130,7 @@ export async function signup(
   signer: ConfirmationTokenSigner,
   clock: Clock,
   raw: unknown,
+  ctx: RequestContext = {},
 ): Promise<SignupResult> {
   const input = schemas.signupSchema.parse(raw);
   const email = input.email.trim().toLowerCase();
@@ -89,8 +140,9 @@ export async function signup(
   if (list.visibility === "closed") throw new Error("list is closed to signups");
 
   await clearOrRejectSuppression(stores, input.orgId, email);
-  const subscriber = await findOrCreateSubscriber(stores, clock, input.orgId, email, input.attributes, input.sourceUrl);
-  const subscription = await pendingSubscription(stores, clock, input.orgId, subscriber.sub, input.listId);
+  const provenance: RequestContext = { ...ctx, sourceUrl: ctx.sourceUrl ?? input.sourceUrl };
+  const subscriber = await findOrCreateSubscriber(stores, clock, input.orgId, email, input.attributes, provenance);
+  const subscription = await pendingSubscription(stores, clock, input.orgId, subscriber.sub, input.listId, provenance);
 
   const exp = Math.floor(clock.now().getTime() / 1000) + CONFIRM_TTL_SECONDS;
   const confirmationToken = signer.sign({ orgId: input.orgId, sub: subscriber.sub, listId: input.listId, exp });
@@ -107,6 +159,7 @@ export async function signupMany(
   signer: ConfirmationTokenSigner,
   clock: Clock,
   raw: unknown,
+  ctx: RequestContext = {},
 ): Promise<SignupManyResult> {
   const input = schemas.signupManySchema.parse(raw);
   const email = input.email.trim().toLowerCase();
@@ -120,11 +173,14 @@ export async function signupMany(
   if (lists.length === 0) throw new Error("no open lists to subscribe to");
 
   await clearOrRejectSuppression(stores, input.orgId, email);
-  const subscriber = await findOrCreateSubscriber(stores, clock, input.orgId, email, input.attributes, input.sourceUrl);
+  const provenance: RequestContext = { ...ctx, sourceUrl: ctx.sourceUrl ?? input.sourceUrl };
+  const subscriber = await findOrCreateSubscriber(stores, clock, input.orgId, email, input.attributes, provenance);
 
   const subscriptions: Subscription[] = [];
   for (const list of lists) {
-    subscriptions.push(await pendingSubscription(stores, clock, input.orgId, subscriber.sub, list.listId));
+    subscriptions.push(
+      await pendingSubscription(stores, clock, input.orgId, subscriber.sub, list.listId, provenance),
+    );
   }
 
   const exp = Math.floor(clock.now().getTime() / 1000) + CONFIRM_TTL_SECONDS;
@@ -138,6 +194,7 @@ export async function confirmOptIn(
   signer: ConfirmationTokenSigner,
   clock: Clock,
   token: string,
+  ctx: RequestContext = {},
 ): Promise<Subscription> {
   const { orgId, sub, listId } = signer.verify(token);
   if (!listId) throw new Error("token has no list");
@@ -145,7 +202,22 @@ export async function confirmOptIn(
   if (!subscription) throw new Error("no such subscription");
   if (subscription.status === "unsubscribed") throw new Error("subscription was unsubscribed");
 
-  const confirmed: Subscription = { ...subscription, status: "confirmed", updatedAt: clock.now().toISOString() };
+  const now = clock.now().toISOString();
+  const confirmed: Subscription = {
+    ...subscription,
+    status: "confirmed",
+    updatedAt: now,
+    // The evidence a dispute actually needs. `updatedAt` cannot serve: an
+    // unsubscribe, an erase or an import all rewrite it, destroying the only
+    // trace of when confirmation happened (#220).
+    consent: {
+      requestedAt: subscription.consent?.requestedAt ?? now,
+      ...subscription.consent,
+      confirmedAt: now,
+      ...(ctx.sourceIp ? { confirmIp: ctx.sourceIp } : {}),
+      basis: "explicit",
+    },
+  };
   await stores.subscriptions.put(confirmed);
   return confirmed;
 }
@@ -159,6 +231,7 @@ export async function confirmOptInAny(
   signer: ConfirmationTokenSigner,
   clock: Clock,
   token: string,
+  ctx: RequestContext = {},
 ): Promise<Subscription[]> {
   const claims = signer.verify(token);
   const listIds = claims.listIds ?? (claims.listId ? [claims.listId] : []);
@@ -167,7 +240,18 @@ export async function confirmOptInAny(
   for (const listId of listIds) {
     const subscription = await stores.subscriptions.get(claims.orgId, claims.sub, listId);
     if (!subscription || subscription.status === "unsubscribed") continue;
-    const next: Subscription = { ...subscription, status: "confirmed", updatedAt: now };
+    const next: Subscription = {
+      ...subscription,
+      status: "confirmed",
+      updatedAt: now,
+      consent: {
+        requestedAt: subscription.consent?.requestedAt ?? now,
+        ...subscription.consent,
+        confirmedAt: now,
+        ...(ctx.sourceIp ? { confirmIp: ctx.sourceIp } : {}),
+        basis: "explicit",
+      },
+    };
     await stores.subscriptions.put(next);
     confirmed.push(next);
   }

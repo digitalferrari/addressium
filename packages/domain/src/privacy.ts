@@ -37,10 +37,28 @@ export async function eraseSubscriber(
   if (!subscriber) return false;
   const now = clock.now().toISOString();
 
-  // Unsubscribe everywhere.
+  // Unsubscribe everywhere, and strip the identifying half of each
+  // subscription's consent record (#220). The timestamps and the basis stay:
+  // they are the org's evidence that it was once entitled to mail this address,
+  // which an erasure request does not retroactively undo. The IP, user agent
+  // and source URL are personal data and go.
   const subs = await stores.subscriptions.listBySubscriber(orgId, subscriber.sub);
   for (const s of subs) {
-    await stores.subscriptions.put({ ...s, status: "unsubscribed", updatedAt: now });
+    await stores.subscriptions.put({
+      ...s,
+      status: "unsubscribed",
+      updatedAt: now,
+      ...(s.consent
+        ? {
+            consent: {
+              requestedAt: s.consent.requestedAt,
+              ...(s.consent.confirmedAt ? { confirmedAt: s.consent.confirmedAt } : {}),
+              ...(s.consent.basis ? { basis: s.consent.basis } : {}),
+              ...(s.consent.importBatchId ? { importBatchId: s.consent.importBatchId } : {}),
+            },
+          }
+        : {}),
+    });
   }
 
   // Suppression tombstone (blocks re-add; see signup()).
