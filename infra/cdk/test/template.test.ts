@@ -456,3 +456,126 @@ test("the drip machine waits before step 0, retries, and outlives 30 days (#201)
   assert.ok(Array.isArray(step.Retry) && step.Retry.length > 0, "a transient blip must not end the sequence");
   assert.ok(Array.isArray(step.Catch) && step.Catch.length > 0, "a permanent failure must be visible");
 });
+
+/**
+ * Flatten a CloudFormation string value to something assertable.
+ *
+ * The CSP contains the Hosted-UI origin and `AWS::Region`, so CDK renders it as
+ * an `Fn::Join` of literals and refs. Asserting on the raw object would silently
+ * pass whatever it was handed — `String({})` is `"[object Object]"`, which
+ * contains none of the directives and matches none of the negative patterns.
+ */
+function flatten(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (Array.isArray(value)) return value.map(flatten).join("");
+  if (value && typeof value === "object") {
+    const join = (value as { "Fn::Join"?: [string, unknown[]] })["Fn::Join"];
+    if (join) return join[1].map(flatten).join(join[0]);
+    // A Ref/GetAtt: keep the logical id so an origin can still be identified.
+    return Object.values(value as Record<string, unknown>).map(flatten).join("");
+  }
+  return "";
+}
+
+/** The CSP each site's response-headers policy sets, keyed by construct id. */
+function cspBySite(t: Template): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [id, p] of Object.entries(t.findResources("AWS::CloudFront::ResponseHeadersPolicy"))) {
+    const cfg = (p.Properties as { ResponseHeadersPolicyConfig: Record<string, unknown> })
+      .ResponseHeadersPolicyConfig;
+    const items =
+      ((cfg.CustomHeadersConfig as { Items?: { Header: string; Value: unknown }[] } | undefined)
+        ?.Items ?? []);
+    const csp = items.find((h) => h.Header.toLowerCase() === "content-security-policy");
+    if (csp) out[id] = flatten(csp.Value);
+  }
+  return out;
+}
+
+test("both SPA distributions ship CSP and HSTS (#197)", () => {
+  // The console renders operator-authored HTML in a GrapesJS editor and in a
+  // preview iframe. With no CSP, any XSS there reads sessionStorage and walks
+  // off with the id token — a full operator session for its whole lifetime,
+  // with no refresh flow to revoke and no server-side session to end.
+  const t = template();
+  const policies = Object.entries(t.findResources("AWS::CloudFront::ResponseHeadersPolicy"));
+  assert.equal(policies.length, 2, "one policy per distribution (admin + public)");
+
+  for (const [id, p] of policies) {
+    const sec = (p.Properties as { ResponseHeadersPolicyConfig: Record<string, any> })
+      .ResponseHeadersPolicyConfig.SecurityHeadersConfig;
+    assert.ok(
+      (sec?.StrictTransportSecurity?.AccessControlMaxAgeSec ?? 0) >= 31_536_000,
+      `${id}: HSTS must be at least a year`,
+    );
+    assert.equal(sec?.ContentTypeOptions?.Override, true, `${id}: no MIME sniffing`);
+    assert.equal(sec?.FrameOptions?.FrameOption, "DENY", `${id}: not framable`);
+  }
+
+  const csps = cspBySite(t);
+  assert.equal(Object.keys(csps).length, 2, "both policies set a CSP header");
+  for (const [id, csp] of Object.entries(csps)) {
+    for (const directive of [
+      "default-src 'none'",
+      "script-src 'self'",
+      "frame-ancestors 'none'",
+      "base-uri 'none'",
+      "object-src 'none'",
+    ]) {
+      assert.ok(csp.includes(directive), `${id}: missing ${directive} — got ${csp}`);
+    }
+    // `script-src` must never be loosened: 'unsafe-inline' or 'unsafe-eval'
+    // there gives back exactly the execution the policy exists to deny.
+    const scriptSrc = /script-src ([^;]*)/.exec(csp)?.[1] ?? "";
+    assert.doesNotMatch(scriptSrc, /unsafe-(inline|eval)/, `${id}: script-src was loosened`);
+
+    // `connect-src` must stay an allowlist. A bare `*` or `https:` lets injected
+    // code post the token to its own collector, which is the whole point of the
+    // header. A host-scoped wildcard is the documented fallback (see
+    // `apiAppUrl`), so only the open forms are rejected.
+    const connectSrc = /connect-src ([^;]*)/.exec(csp)?.[1] ?? "";
+    assert.ok(connectSrc, `${id}: connect-src is set`);
+    for (const open of ["*", "https:", "http:", "data:"]) {
+      assert.ok(!connectSrc.split(/\s+/).includes(open), `${id}: connect-src allows ${open}`);
+    }
+  }
+
+  // A policy attached to nothing sets no headers at all.
+  for (const [id, d] of Object.entries(t.findResources("AWS::CloudFront::Distribution"))) {
+    const cfg = (d.Properties as { DistributionConfig: Record<string, any> }).DistributionConfig;
+    assert.ok(
+      cfg.DefaultCacheBehavior?.ResponseHeadersPolicyId,
+      `${id}: the default behaviour must reference the policy`,
+    );
+  }
+});
+
+test("the admin CSP reaches the Hosted UI; the public one does not (#197)", () => {
+  // The PKCE exchange POSTs straight to Cognito's /oauth2/token, so the console
+  // needs that origin. The subscriber and public sites never authenticate an
+  // operator, and an unnecessary connect-src entry is an exfiltration path that
+  // costs nothing to close.
+  const csps = cspBySite(template());
+  const admin = Object.entries(csps).find(([id]) => id.startsWith("AdminSite"))?.[1];
+  const pub = Object.entries(csps).find(([id]) => id.startsWith("PublicSite"))?.[1];
+  assert.ok(admin && pub, "both sites have a CSP");
+  assert.match(admin, /auth\..*amazoncognito\.com/, "the console can reach the Hosted UI");
+  assert.doesNotMatch(pub, /amazoncognito/, "the public site cannot");
+  // Both talk to the API.
+  assert.match(admin, /execute-api/);
+  assert.match(pub, /execute-api/);
+});
+
+test("apiAppUrl pins connect-src to one exact origin (#197)", () => {
+  // The default is region-scoped rather than api-scoped, because naming the API
+  // from a distribution closes a dependency cycle with the API's CORS allowlist.
+  // An operator who has an endpoint or a custom domain can close that gap.
+  const csps = cspBySite(template({ apiAppUrl: "https://api.example.com/" }));
+  for (const [id, csp] of Object.entries(csps)) {
+    const connectSrc = /connect-src ([^;]*)/.exec(csp)?.[1] ?? "";
+    // Trailing slash stripped: a browser reports an origin without one, so
+    // "https://api.example.com/" would never match the request it is guarding.
+    assert.ok(connectSrc.split(/\s+/).includes("https://api.example.com"), `${id}: ${connectSrc}`);
+    assert.ok(!connectSrc.includes("execute-api"), `${id}: the wildcard must be replaced`);
+  }
+});

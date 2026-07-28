@@ -477,7 +477,12 @@ function Templates({ org }: { org: string }) {
               <p className="err" style={{ margin: "6px 0 0" }}>{preview.errors.length} MJML issue(s): {preview.errors[0]}</p>
             )}
             {preview && (
-              <iframe title="preview" srcDoc={preview.html} style={{ width: "100%", height: 320, marginTop: 8, border: "1px solid #ddd", background: "#fff" }} />
+              // `sandbox` with no allow-* tokens: the preview is operator-authored
+              // HTML rendered inside the console's own origin, so without it a
+              // pasted <script> runs with the session tokens in reach. Email
+              // clients don't run scripts either, so this also makes the preview
+              // a more honest one (#197).
+              <iframe title="preview" sandbox="" srcDoc={preview.html} style={{ width: "100%", height: 320, marginTop: 8, border: "1px solid #ddd", background: "#fff" }} />
             )}
           </div>
         )}

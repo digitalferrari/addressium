@@ -88,6 +88,16 @@ export interface ControlPlaneStackProps extends StackProps {
   /** Public URL of the subscriber/public site. Defaults to its distribution. */
   publicAppUrl?: string;
   /**
+   * Public origin of the HTTP API, used as the `connect-src` entry in the SPAs'
+   * CSP (#197). It cannot default to `api.apiEndpoint`: the API's CORS allowlist
+   * already points at the two distributions, so naming the API from a
+   * distribution closes a CloudFormation dependency cycle and synth fails.
+   * Absent, the CSP falls back to `https://*.execute-api.<region>.amazonaws.com`
+   * — bounded to API Gateway in this region, but not to THIS api. Set it (with
+   * a custom domain, or the endpoint from a first deploy) to tighten that.
+   */
+  apiAppUrl?: string;
+  /**
    * An SNS topic the OPERATOR owns, for infrastructure alarms (#222, compendium
    * #22/#32/#67). When set, no topic is created here and no ARN is exported —
    * alert routing is account-wide plumbing addressium does not take over.
@@ -362,7 +372,7 @@ export class ControlPlaneStack extends Stack {
       // of the console, so retain in every stage (#190).
       removalPolicy: RemovalPolicy.RETAIN,
     });
-    adminPool.addDomain("AdminHostedUi", {
+    const adminHostedUi = adminPool.addDomain("AdminHostedUi", {
       cognitoDomain: { domainPrefix: `${props.adminHostedUiDomainPrefix}-${props.stage}` },
     });
     const adminClient = new UserPoolClient(this, "AdminClient", {
@@ -1332,8 +1342,33 @@ export class ControlPlaneStack extends Stack {
     // ---- frontends (static SPAs on S3 + CloudFront, §4.1–4.2) ----
     const prod = props.stage === "prod";
     // Assign the hoisted bindings the Cognito callback URLs and CORS resolve from.
-    adminSite = new StaticSite(this, "AdminSite", { prod, ...(props.cloudfrontWebAclArn ? { webAclId: props.cloudfrontWebAclArn } : {}) }); // apps/admin-web
-    publicSite = new StaticSite(this, "PublicSite", { prod, ...(props.cloudfrontWebAclArn ? { webAclId: props.cloudfrontWebAclArn } : {}) }); // apps/subscriber-web + public-web
+    //
+    // `connect-src` has to name every origin the SPA legitimately talks to (#197):
+    // the HTTP API for data, and — for the console — the Cognito Hosted UI, whose
+    // /oauth2/token endpoint the PKCE exchange POSTs to directly. `baseUrl()`
+    // carries no trailing slash, matching how a browser reports an origin.
+    //
+    // `api.apiEndpoint` is deliberately NOT used: the API's CORS allowlist
+    // already resolves from these distributions, so referencing it here makes
+    // the two resources depend on each other and synth fails on the cycle. The
+    // wildcard is region-scoped rather than `https:` so exfiltration is at least
+    // confined to API Gateway; `apiAppUrl` replaces it with the exact origin.
+    const apiOrigin = props.apiAppUrl
+      ? stripSlash(props.apiAppUrl)
+      : `https://*.execute-api.${this.region}.amazonaws.com`;
+    const webAcl = props.cloudfrontWebAclArn ? { webAclId: props.cloudfrontWebAclArn } : {};
+    adminSite = new StaticSite(this, "AdminSite", {
+      prod,
+      ...webAcl,
+      connectOrigins: [apiOrigin, adminHostedUi.baseUrl()],
+    }); // apps/admin-web
+    publicSite = new StaticSite(this, "PublicSite", {
+      prod,
+      ...webAcl,
+      // The subscriber and public sites are unauthenticated — they never touch
+      // the admin pool, so the Hosted UI is deliberately not reachable from here.
+      connectOrigins: [apiOrigin],
+    }); // apps/subscriber-web + public-web
 
     // ---- outputs ----
     new CfnOutput(this, "AdminPoolId", { value: adminPool.userPoolId });

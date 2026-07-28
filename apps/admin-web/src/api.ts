@@ -2,9 +2,22 @@
  * Thin client for the addressium HTTP API. Attaches the Cognito access token as
  * a Bearer; the API Gateway JWT authorizer + server-side RBAC are the boundary.
  */
-import { getTokens } from "./auth.js";
+import { clearTokens, getTokens, login } from "./auth.js";
 
 const BASE = import.meta.env.VITE_API_BASE ?? "";
+
+/**
+ * Marks that this tab has already bounced through Cognito for one 401 (#197).
+ *
+ * Not every 401 means "expired". A disabled operator, a revoked client, or a
+ * clock skew produces one too — and Cognito's SSO cookie would hand back a fresh
+ * token instantly, so an unguarded redirect becomes an infinite loop between the
+ * console and the Hosted UI with nothing on screen. One automatic re-auth per
+ * tab; after that the operator lands on the sign-in card and can read the error.
+ */
+const REAUTH_KEY = "addressium.reauth";
+
+export class UnauthorizedError extends Error {}
 
 async function call<T>(method: string, path: string, body?: unknown): Promise<T> {
   const tokens = getTokens();
@@ -21,7 +34,22 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
     },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
+  // 401 is the authorizer rejecting the token; 403 is RBAC rejecting the CALLER,
+  // which re-authenticating would not fix. Only the first routes to login.
+  if (res.status === 401) {
+    clearTokens();
+    if (!sessionStorage.getItem(REAUTH_KEY)) {
+      sessionStorage.setItem(REAUTH_KEY, "1");
+      void login();
+    }
+    // Thrown, not swallowed: several screens `.catch(() => undefined)`, and an
+    // expired session used to show them a blank panel with no prompt (#197).
+    throw new UnauthorizedError(`${method} ${path} → 401: session expired`);
+  }
   if (!res.ok) throw new Error(`${method} ${path} → ${res.status}: ${await res.text()}`);
+  // A call got through, so the session is good and the next 401 deserves its own
+  // redirect rather than being mistaken for a loop.
+  sessionStorage.removeItem(REAUTH_KEY);
   return (await res.json()) as T;
 }
 

@@ -361,12 +361,51 @@ delivery of the event stream is an integrity control.
 
 ## 6. Frontend hardening
 
-Strict **Content-Security-Policy** (no inline where avoidable, `frame-ancestors`
-locked), **HSTS**, `X-Content-Type-Options: nosniff`, `Referrer-Policy`,
-`Permissions-Policy`; Cognito **Authorization Code + PKCE** (no implicit flow);
-short-lived tokens with refresh, avoiding long-lived token storage in
-`localStorage`. Public one-click unsubscribe is a **signed POST** (RFC 8058) — the
-token authorizes the cross-origin request, so no ambient-authority CSRF exists.
+Both SPA distributions carry a CloudFront `ResponseHeadersPolicy`
+(`infra/cdk/lib/static-site.ts`, #197), asserted in `infra/cdk/test/template.test.ts`:
+
+| Header | Value | Why |
+| --- | --- | --- |
+| `content-security-policy` | `default-src 'none'`, `script-src 'self'`, `frame-ancestors 'none'`, `base-uri 'none'`, `object-src 'none'`, allowlisted `connect-src` | See below |
+| `strict-transport-security` | 2 years, `includeSubDomains; preload` | The redirect-to-HTTPS behaviour doesn't protect the *first* request |
+| `x-content-type-options` | `nosniff` | A user-uploaded asset must not be sniffed into a script |
+| `referrer-policy` | `strict-origin-when-cross-origin` | An OAuth callback or magic-link URL must never leave in a `Referer` |
+| `permissions-policy` | camera/mic/geolocation/etc. all `()` | Neither app uses them |
+
+**Why the CSP is shaped the way it is.** The console renders operator-authored
+HTML in the GrapesJS editor and in a `srcdoc` preview iframe, which inherits the
+parent policy — `script-src 'self'` is what stops a pasted `<script>` in a
+template from executing with the operator's tokens in reach (the preview iframe
+also carries `sandbox=""`). Three directives are deliberately looser and each is
+load-bearing: `style-src 'unsafe-inline'` (GrapesJS writes inline styles as
+blocks are dragged, and email HTML is inline-styled by definition — there is no
+nonce path through a static S3 origin), `img-src https:` (editorial images come
+from the publisher's own CDN, unknown at synth), and `frame-src 'self'` (the
+`about:srcdoc` preview).
+
+**`connect-src` is an allowlist, with a known gap.** It names the API origin and,
+for the console only, the Cognito Hosted UI (the PKCE exchange POSTs to
+`/oauth2/token` directly). It cannot default to the API's own endpoint token: the
+API's CORS allowlist already resolves from the two distributions, so referencing
+the API from a distribution closes a CloudFormation dependency cycle and synth
+fails. The default is therefore
+`https://*.execute-api.<region>.amazonaws.com` — bounded to API Gateway in this
+region, but not to *this* API. **Set the `apiAppUrl` stack prop** (a custom
+domain, or the endpoint printed by the first deploy) to pin it to one origin.
+
+Auth is Cognito **Authorization Code + PKCE** (no implicit flow). Tokens live in
+`sessionStorage`, not `localStorage`, so they die with the tab. There is **no
+refresh flow**: `expires_in` is stored as an absolute timestamp, an expired token
+shows the sign-in card instead of blank panels, and a `401` from the API clears
+the token and bounces once through the Hosted UI (once per tab — Cognito's SSO
+cookie would otherwise make a non-expiry `401` loop forever). A `403` is an RBAC
+verdict and never triggers re-auth. The consequence worth stating plainly: an id
+token stolen from a compromised tab is valid for its full lifetime, with no
+server-side session to revoke — which is why the CSP above matters more here than
+it would on a page with a revocable session.
+
+Public one-click unsubscribe is a **signed POST** (RFC 8058) — the token
+authorizes the cross-origin request, so no ambient-authority CSRF exists.
 
 ## 7. Supply chain & release integrity
 

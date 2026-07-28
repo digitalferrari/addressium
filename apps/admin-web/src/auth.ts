@@ -35,6 +35,11 @@ export function getTokens(): Tokens | null {
   }
 }
 
+/** Drop the stored tokens without ending the Cognito session (see `logout`). */
+export function clearTokens(): void {
+  sessionStorage.removeItem(KEY);
+}
+
 function b64url(bytes: Uint8Array): string {
   return btoa(String.fromCharCode(...bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }

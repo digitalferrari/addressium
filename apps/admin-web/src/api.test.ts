@@ -3,7 +3,15 @@
  * the right method + path + body, since the screens depend on them.
  */
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import { api } from "./api.js";
+import { api, UnauthorizedError } from "./api.js";
+import { login } from "./auth.js";
+
+// `login()` navigates to the Cognito Hosted UI, which jsdom refuses. Everything
+// else in auth.js stays real, so the token read/clear paths are the shipped ones.
+vi.mock("./auth.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./auth.js")>()),
+  login: vi.fn(async () => undefined),
+}));
 
 let fetchMock: ReturnType<typeof vi.fn>;
 
@@ -15,7 +23,11 @@ beforeEach(() => {
   });
   vi.stubGlobal("fetch", fetchMock);
 });
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.unstubAllGlobals();
+  sessionStorage.clear();
+  vi.mocked(login).mockClear();
+});
 
 function lastCall() {
   const [url, init] = fetchMock.mock.calls.at(-1)!;
@@ -76,6 +88,47 @@ test("a corrupt token blob does not throw — it self-heals", async () => {
   } finally {
     sessionStorage.removeItem("addressium.tokens");
   }
+});
+
+test("a 401 drops the dead token and sends the operator back to Cognito (#197)", async () => {
+  // The old behaviour: a generic Error into `.catch(() => undefined)`, so an
+  // expired session showed empty panels and no way to notice why.
+  sessionStorage.setItem("addressium.tokens", JSON.stringify({ idToken: "stale" }));
+  fetchMock.mockResolvedValueOnce({ ok: false, status: 401, text: async () => "Unauthorized" });
+  await expect(api.campaigns("acme")).rejects.toBeInstanceOf(UnauthorizedError);
+  expect(sessionStorage.getItem("addressium.tokens")).toBeNull();
+  expect(login).toHaveBeenCalledTimes(1);
+});
+
+test("a persistent 401 redirects ONCE, not in a loop (#197)", async () => {
+  // Cognito's SSO cookie re-issues a token instantly, so a 401 with a non-expiry
+  // cause (disabled operator, revoked client) would bounce forever on an
+  // unguarded redirect — a blank screen that never settles.
+  fetchMock.mockResolvedValue({ ok: false, status: 401, text: async () => "Unauthorized" });
+  await expect(api.campaigns("acme")).rejects.toBeInstanceOf(UnauthorizedError);
+  await expect(api.lists("acme")).rejects.toBeInstanceOf(UnauthorizedError);
+  await expect(api.segments("acme")).rejects.toBeInstanceOf(UnauthorizedError);
+  expect(login).toHaveBeenCalledTimes(1);
+});
+
+test("a 403 is an RBAC verdict, not an expiry — no re-auth (#197)", async () => {
+  // Re-authenticating returns the same claims and the same 403. Bouncing the
+  // operator through the Hosted UI would only hide which capability they lack.
+  sessionStorage.setItem("addressium.tokens", JSON.stringify({ idToken: "good" }));
+  fetchMock.mockResolvedValueOnce({ ok: false, status: 403, text: async () => "forbidden" });
+  await expect(api.team("acme")).rejects.toThrow(/403/);
+  expect(login).not.toHaveBeenCalled();
+  expect(sessionStorage.getItem("addressium.tokens")).not.toBeNull();
+});
+
+test("a successful call re-arms the redirect for the next expiry (#197)", async () => {
+  fetchMock.mockResolvedValueOnce({ ok: false, status: 401, text: async () => "Unauthorized" });
+  await expect(api.campaigns("acme")).rejects.toBeInstanceOf(UnauthorizedError);
+  // Signed back in.
+  await api.campaigns("acme");
+  fetchMock.mockResolvedValueOnce({ ok: false, status: 401, text: async () => "Unauthorized" });
+  await expect(api.campaigns("acme")).rejects.toBeInstanceOf(UnauthorizedError);
+  expect(login).toHaveBeenCalledTimes(2);
 });
 
 test("alertConfig() GETs the org's deliverability thresholds", async () => {
