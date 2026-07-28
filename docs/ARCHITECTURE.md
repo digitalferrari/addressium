@@ -834,16 +834,16 @@ per §9.2 — the external ops topic and the CloudWatch dashboard, both
   rotations, org provisioning, manual unsubscribes) is recorded **immutably**
   with member + org + timestamp, into a dedicated S3 bucket under **Object
   Lock**.
-- **The target Object Lock mode is GOVERNANCE, not COMPLIANCE** (compendium #9)
-  **[Decided r2 — not yet built]**. Both make a written object immutable for its
-  retention window; the difference is recoverability. Under GOVERNANCE a
-  sufficiently privileged principal can still remove an object with
-  `s3:BypassGovernanceRetention`, so a misconfiguration — wrong retention, wrong
-  bucket, an accidental flood — stays fixable. COMPLIANCE cannot be undone by
-  anyone, including AWS, for the full window. For a system that has never been
-  deployed, an unrecoverable mistake is the larger risk. **The deployed default
-  is COMPLIANCE** with a 2,555-day (7-year) default retention and a `Retain`
-  removal policy; changing it to GOVERNANCE is the r2 target.
+- **The Object Lock mode is GOVERNANCE, not COMPLIANCE** (compendium #9, #219).
+  Both make a written object immutable for its retention window; the difference
+  is recoverability. Under GOVERNANCE a sufficiently privileged principal can
+  still remove an object with `s3:BypassGovernanceRetention`, so a
+  misconfiguration — wrong retention, wrong bucket, an accidental flood — stays
+  fixable, and it is the escape hatch erasure (§4.19) depends on. COMPLIANCE
+  cannot be undone by anyone, including AWS, for the full window. The deployed
+  default is a 2,555-day (7-year) retention with a `Retain` removal policy. Both
+  the mode and `auditRetentionYears` are **set-once**: they fix what is stamped
+  on every object written from then on, and cannot be relaxed afterwards.
 
 ### 4.20 A/B subject testing — future, not built
 

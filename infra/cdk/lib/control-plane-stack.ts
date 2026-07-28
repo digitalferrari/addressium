@@ -173,8 +173,21 @@ export class ControlPlaneStack extends Stack {
       ],
     });
     // Audit log backed by S3 Object Lock (WORM) — history can't be rewritten
-    // even by an admin (§4.19, docs/SECURITY.md §4.3, #29). COMPLIANCE mode +
-    // a default retention makes every written object immutable for the window.
+    // even by an admin (§4.19, docs/SECURITY.md §4.3, #29).
+    //
+    // GOVERNANCE, not COMPLIANCE (#9 [CHANGED r2], #219). Both make an object
+    // immutable for the window; the difference is whether a mistake is
+    // recoverable. Under GOVERNANCE a principal holding
+    // s3:BypassGovernanceRetention can still delete — break-glass, and the
+    // escape hatch GDPR erasure (#164) depends on. Under COMPLIANCE nobody can,
+    // including AWS: a record written with the wrong tenant's PII would be
+    // undeletable for the full window, and every dev stack would leave an
+    // indestructible bucket behind (the bucket is RETAIN, so it outlives the
+    // stack). This mode CANNOT be relaxed once an object has been written under
+    // it, which is why it had to land before the first real deploy.
+    //
+    // `auditRetentionYears` is likewise set-once: it fixes the retention stamped
+    // on every object written from here on.
     const auditRetentionYears = Number(
       (this.node.tryGetContext("auditRetentionYears") as string | undefined) ?? 7,
     );
@@ -182,7 +195,7 @@ export class ControlPlaneStack extends Stack {
       blockPublicAccess: BlockPublicAccess.BLOCK_ALL,
       enforceSSL: true,
       objectLockEnabled: true,
-      objectLockDefaultRetention: ObjectLockRetention.compliance(
+      objectLockDefaultRetention: ObjectLockRetention.governance(
         Duration.days(365 * auditRetentionYears),
       ),
       removalPolicy: RemovalPolicy.RETAIN,

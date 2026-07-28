@@ -102,7 +102,7 @@ Cognito users", "can send mail", and "holds the webhook signing secret".
 | **Step Functions** | Drip steps wait days. Lambda cannot wait; Step Functions can, for fractions of a cent. |
 | **KMS (asymmetric, per org)** | Signs magic-link tokens. Per-org so one key's compromise cannot forge another org's tokens. The public half is published as JWKS, verifiable by any JWT library. |
 | **Cognito** | Operator login, MFA required, self-signup disabled. `custom:role` / `custom:orgs` claims drive server-side RBAC. |
-| **S3** | Rendered-body archive (powers click maps), audit log under Object Lock, analytics archive. The lock mode that deploys today is COMPLIANCE with a 7-year default retention; GOVERNANCE is **[Decided r2 — not yet built]**. |
+| **S3** | Rendered-body archive (powers click maps), audit log under Object Lock (GOVERNANCE, 7-year default retention), analytics archive. |
 | **CloudFront + OAC** | SPA delivery over HTTPS from private buckets. |
 
 ### Services addressium does **not** create **[Decided r2 — not yet built]**

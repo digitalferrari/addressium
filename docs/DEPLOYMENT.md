@@ -413,14 +413,13 @@ WAF association nor alert targets.
 - **Audit trail.** Sensitive actions are written to the WORM (S3 Object Lock)
   audit bucket named by `AuditBucketName`, with a default retention of
   `auditRetentionYears` (7 → 2555 days) and a RETAIN removal policy.
-  The intended mode is **GOVERNANCE** (#9): a privileged principal can still
-  remove an object with `s3:BypassGovernanceRetention`, so a mistake — a bad
-  retention setting, a test run, an object written by accident — is recoverable.
-  COMPLIANCE cannot be undone by anyone, including AWS. **[Decided r2 — not yet
-  built]:** what deploys today is **COMPLIANCE** with a 2555-day default
-  retention. Every object the audit trail writes is genuinely immutable for seven
-  years, and the bucket cannot be emptied or deleted until the last one expires.
-  Set `auditRetentionYears` deliberately before the first deploy.
+  The mode is **GOVERNANCE** (#9, #219): a privileged principal can still remove
+  an object with `s3:BypassGovernanceRetention`, so a mistake — a bad retention
+  setting, a test run, an object written by accident — is recoverable, and a
+  non-prod stack can be torn down. COMPLIANCE cannot be undone by anyone,
+  including AWS. Treat the bypass permission as break-glass and grant it
+  deliberately. Set `auditRetentionYears` before the first deploy: it is stamped
+  on every object written from then on and cannot be shortened afterwards.
 - **Logs.** 20 log groups, one per application handler, retention 90 days when
   `stage` is exactly `"prod"` and **7 days otherwise**. The test is literal string
   equality, so a `staging` or `prod-eu` stage silently gets 7-day retention.

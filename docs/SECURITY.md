@@ -410,17 +410,16 @@ A living checklist mapped to our controls (full ASVS tracked separately):
   history cannot be rewritten (#29). The *mode* is a separate open item, below.
 - ~~CI: pin all actions to SHAs, wire OIDC-to-AWS deploy role.~~ **Done** —
   every `uses:` pinned by SHA; OIDC `deploy` job assumes a scoped role on tags (#27).
-- **Switch the audit bucket's Object Lock from COMPLIANCE to GOVERNANCE**
-  (#9 **[CHANGED r2]**) **[Decided r2 — not yet built]**. The code and the
-  decision currently disagree, and the doc says so rather than papering over it:
-  the CDK sets **COMPLIANCE** with a 2555-day (7-year) default retention
-  (`ObjectLockRetention.compliance(...)`, `auditRetentionYears` defaulting to 7),
-  while r2 calls for **GOVERNANCE**. The reason to prefer GOVERNANCE is that a
-  sufficiently privileged principal can still remove an object with
-  `s3:BypassGovernanceRetention`, so a mistake — a wrong retention window, the
-  wrong object written to the wrong bucket — stays recoverable. COMPLIANCE
-  cannot be undone by anyone, **including AWS**. This has to land *before* the
-  first real deploy: an object already written under COMPLIANCE cannot be
-  relaxed afterwards, and the audit bucket is `RETAIN`, so the mistake outlives
-  the stack.
+- ~~Switch the audit bucket's Object Lock from COMPLIANCE to GOVERNANCE.~~
+  **Done** (#9 **[CHANGED r2]**, #219) — the CDK now sets
+  `ObjectLockRetention.governance(...)`, verified as `Mode: GOVERNANCE` in a
+  fresh `cdk synth`. Under GOVERNANCE a sufficiently privileged principal can
+  still remove an object with `s3:BypassGovernanceRetention`, so a mistake — a
+  wrong retention window, the wrong object written to the wrong bucket — stays
+  recoverable, and it is the escape hatch GDPR erasure depends on. COMPLIANCE
+  cannot be undone by anyone, **including AWS**. This had to land *before* the
+  first real deploy: an object already written under COMPLIANCE could never be
+  relaxed, and the bucket is `RETAIN`, so the mistake would outlive the stack.
+  **Grant `s3:BypassGovernanceRetention` as break-glass only**, to a named
+  principal, and record who holds it.
 - Formal, full ASVS L2 line-by-line review before a 1.0 release.
