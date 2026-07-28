@@ -11,6 +11,9 @@ import {
   CreateEmailIdentityCommand,
   GetEmailIdentityCommand,
   CreateConfigurationSetCommand,
+  CreateConfigurationSetEventDestinationCommand,
+  UpdateConfigurationSetEventDestinationCommand,
+  type EventDestinationDefinition,
 } from "@aws-sdk/client-sesv2";
 import {
   CognitoIdentityProviderClient,
@@ -23,6 +26,9 @@ import type {
   SigningKey,
   SubscriberPoolSpec,
 } from "@addressium/domain";
+
+/** Stable name so re-provisioning updates the same destination (#208). */
+const EVENT_DESTINATION_NAME = "addressium-sns";
 
 export class AwsProvisioningProviders implements ProvisioningProviders {
   constructor(
@@ -80,6 +86,7 @@ export class AwsProvisioningProviders implements ProvisioningProviders {
     } catch (e) {
       if ((e as { name?: string }).name !== "AlreadyExistsException") throw e;
     }
+    await this.ensureEventDestination(configSet);
 
     let dkimTokens: string[] = [];
     let verified = false;
@@ -99,5 +106,64 @@ export class AwsProvisioningProviders implements ProvisioningProviders {
       dkimTokens = created.DkimAttributes?.Tokens ?? [];
     }
     return { configSet, dkimTokens, verificationStatus: verified ? "verified" : "pending" };
+  }
+
+  /**
+   * Point the org's configuration set at the shared SES-events SNS topic.
+   *
+   * A configuration set with NO event destination publishes nothing — so
+   * without this the entire event plane is dead at the source: no opens,
+   * clicks, bounces or complaints ever reach the handler, counters stay zero,
+   * suppression never auto-triggers, and the deliverability halt can never fire
+   * (#208). Creating the config set alone was never enough.
+   *
+   * Idempotent: re-provisioning an existing org must not fail, so an
+   * already-present destination is updated rather than re-created.
+   */
+  private async ensureEventDestination(configSet: string): Promise<void> {
+    const topicArn = process.env.SES_EVENTS_TOPIC_ARN;
+    if (!topicArn) {
+      // Loud, because silence here is exactly the failure mode being fixed.
+      console.error("provisioning: SES_EVENTS_TOPIC_ARN unset — event plane will be dead", {
+        configSet,
+      });
+      return;
+    }
+    const destination: EventDestinationDefinition = {
+      Enabled: true,
+      SnsDestination: { TopicArn: topicArn },
+      // All types SES can publish. `DELIVERY` matters for accurate delivered
+      // counts; `REJECT`/`RENDERING_FAILURE`/`DELIVERY_DELAY` are recorded so a
+      // silent drop is visible even before a domain recorder exists for them.
+      MatchingEventTypes: [
+        "SEND",
+        "DELIVERY",
+        "BOUNCE",
+        "COMPLAINT",
+        "REJECT",
+        "OPEN",
+        "CLICK",
+        "RENDERING_FAILURE",
+        "DELIVERY_DELAY",
+      ],
+    };
+    try {
+      await this.ses.send(
+        new CreateConfigurationSetEventDestinationCommand({
+          ConfigurationSetName: configSet,
+          EventDestinationName: EVENT_DESTINATION_NAME,
+          EventDestination: destination,
+        }),
+      );
+    } catch (e) {
+      if ((e as { name?: string }).name !== "AlreadyExistsException") throw e;
+      await this.ses.send(
+        new UpdateConfigurationSetEventDestinationCommand({
+          ConfigurationSetName: configSet,
+          EventDestinationName: EVENT_DESTINATION_NAME,
+          EventDestination: destination,
+        }),
+      );
+    }
   }
 }

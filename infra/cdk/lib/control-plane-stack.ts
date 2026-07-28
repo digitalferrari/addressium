@@ -186,6 +186,18 @@ export class ControlPlaneStack extends Stack {
       deadLetterQueue: { queue: sendDlq, maxReceiveCount: 5 },
     });
     const sesEvents = new Topic(this, "SesEventsTopic");
+    // SES publishes engagement events here via each org's configuration-set
+    // event destination. Without this policy SES is denied and the event plane
+    // stays dead even once the destination exists (#208). SourceAccount stops
+    // another account's SES pointing at this topic.
+    sesEvents.addToResourcePolicy(
+      new PolicyStatement({
+        principals: [new ServicePrincipal("ses.amazonaws.com")],
+        actions: ["SNS:Publish"],
+        resources: [sesEvents.topicArn],
+        conditions: { StringEquals: { "AWS:SourceAccount": Stack.of(this).account } },
+      }),
+    );
     // Ops alerts topic (#92): infra-level CloudWatch alarms (DLQ depth, queue
     // age, Lambda errors/throttles) publish here. Subscribe your ops channel;
     // this is the same escalation path as the domain-layer deliverability alerts.
@@ -591,6 +603,71 @@ export class ControlPlaneStack extends Stack {
       });
       return f;
     };
+    // ---- provisioning + tokens (#198) ----
+    // Both services existed in the repo but were NEVER deployed: no Lambda, no
+    // route, no IAM. That made "Add organization" impossible (so no org could
+    // have a KMS key, SES identity or config set) and left publishers with no
+    // JWKS endpoint to verify magic-link tokens against.
+    const provisioningFn = fn("ProvisioningFn", svc("services/provisioning/src/index.ts"), "handler", {
+      ...apiEnv,
+      // Lets provisioning attach the SES event destination (#208) — without it
+      // a new org's config set publishes nothing and the event plane is dead.
+      SES_EVENTS_TOPIC_ARN: sesEvents.topicArn,
+    });
+    table.grantReadWriteData(provisioningFn);
+    provisioningFn.addToRolePolicy(
+      new PolicyStatement({
+        // Per-org resources are created at runtime, so their ARNs cannot be
+        // enumerated here; these are creation calls, which are inherently
+        // account-scoped. The KMS key is tagged app=addressium so downstream
+        // grants can scope to it.
+        actions: [
+          "kms:CreateKey",
+          "kms:CreateAlias",
+          "kms:TagResource",
+          "ses:CreateConfigurationSet",
+          "ses:CreateConfigurationSetEventDestination",
+          "ses:UpdateConfigurationSetEventDestination",
+          "ses:CreateEmailIdentity",
+          "ses:GetEmailIdentity",
+          "ses:TagResource",
+          "cognito-idp:CreateUserPool",
+          "cognito-idp:DescribeUserPool",
+        ],
+        resources: ["*"],
+      }),
+    );
+    // Same reasoning as ConfirmFn (#167): creation APIs need a broad resource,
+    // so deny the control-plane pool explicitly rather than trusting scope.
+    provisioningFn.addToRolePolicy(
+      new PolicyStatement({
+        effect: Effect.DENY,
+        actions: ["cognito-idp:*"],
+        resources: [adminPool.userPoolArn],
+      }),
+    );
+    api.addRoutes({
+      path: "/orgs",
+      methods: [HttpMethod.POST],
+      integration: new HttpLambdaIntegration("ProvisioningInt", provisioningFn),
+      authorizer: adminAuth, // handler additionally requires identity:manage
+    });
+
+    // Public JWKS so publisher sites can verify magic-link tokens (§4.10).
+    const tokensFn = fn("TokensFn", svc("services/tokens/src/index.ts"), "handler", apiEnv);
+    table.grantReadData(tokensFn);
+    tokensFn.addToRolePolicy(
+      new PolicyStatement({
+        actions: ["kms:GetPublicKey"],
+        resources: [Stack.of(this).formatArn({ service: "kms", resource: "key", resourceName: "*" })],
+      }),
+    );
+    api.addRoutes({
+      path: "/orgs/{org}/.well-known/jwks.json",
+      methods: [HttpMethod.GET],
+      integration: new HttpLambdaIntegration("TokensInt", tokensFn),
+    });
+
     adminRoute("OrgMetaFn", "orgMetaHandler", HttpMethod.GET, "/orgs/{org}");
     adminRoute("SetupStateFn", "setupStateHandler", HttpMethod.GET, "/orgs/{org}/setup");
     adminRoute("ListsGetFn", "listsHandler", HttpMethod.GET, "/orgs/{org}/lists");
