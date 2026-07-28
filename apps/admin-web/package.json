@@ -16,8 +16,8 @@
     "grapesjs": "^0.23.2",
     "grapesjs-mjml": "^1.0.8",
     "mjml-browser": "^4.15.3",
-    "react": "^19.2.7",
-    "react-dom": "^19.2.7"
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8"
   },
   "devDependencies": {
     "@types/react": "^19.2.17",
