@@ -322,9 +322,11 @@ Node 20+, npm workspaces.
 ```bash
 npm install
 npm run build
-npm test          # 254 tests: in-memory + real DynamoDB API via dynalite
-                  # 250 pass; 4 skip without LocalStack
-npm run test:web  # 8 component tests
+npm test          # 724 tests: in-memory + real DynamoDB API via dynalite
+                  # 720 pass; 4 skip without LocalStack
+npm run test:web  # component tests for the three SPAs
+npm run dev       # the API on :4000 over dynalite — no AWS, no credentials
+npm run test:e2e  # the live smoke suite (needs a real account — never yet run)
 ```
 
 Integration tests run the full journey — signup → double opt-in → send →
@@ -356,14 +358,28 @@ call.
 
 **Honest state, because a README that reads "done" is worse than useless:**
 
-- **Nothing has ever been deployed.** No AWS account has run this.
-- The SES event plane was broken at three independent layers until recently. The
-  fix is verified against the synthesized CloudFormation template, **never
-  against real SES traffic**.
-- `deploy:check` is validated against change-set fixtures, never against real
-  CloudFormation.
-- The version marker is readable, but nothing writes it on deploy yet.
-- GDPR erasure does not yet reach the S3 archive.
+- **Nothing has ever been deployed.** No AWS account has run this, and that is
+  the single largest thing not known about this codebase. A large class of
+  defects here were invisible to `npm test` — the SES event plane was dead at
+  three independent layers and every unit test passed.
+- What `npm test` *can* now see is much wider than it was: `npm run dev` runs the
+  full public journey — signup → confirmation mail → confirm → send → one-click
+  unsubscribe — against the **real** SES/SQS/Scheduler adapters, over local
+  stand-ins spoken to over the wire. It has already caught two live defects.
+- What it still cannot see is anything where **AWS itself** has to behave: SES
+  publishing to SNS, a real SES-shaped event payload, a mailbox provider issuing
+  the one-click POST, a real Cognito JWT, EventBridge firing on consecutive days,
+  real bounces tripping the halt gate. `npm run test:e2e` is written for exactly
+  those and **has never been run**.
+- `deploy:check` gates every deploy and now fails **closed** on a change-set
+  shape it cannot interpret — but it has still never seen a real
+  `describe-change-set` payload, so the first symptom of a shape mismatch will be
+  "every deploy is blocked", not a silent miss.
+- The version marker is readable, but nothing writes it on deploy yet, so
+  `GET /version` cannot tell you whether you are running the build you deployed.
+- There is **no upgrade path**. An install is pinned to whatever commit was
+  cloned, and there is no channel to tell anyone a fix exists. Designed, not
+  built — see Upgrades above for why that waits for a first real install.
 - **Bulk export returns inline rather than streaming to S3.** Fine for an
   ordinary list; an org large enough to exceed a Lambda response is exactly the
   org most likely to be migrating.
@@ -376,8 +392,13 @@ call.
 - The audit log is still dead code: the WORM bucket is provisioned and correctly
   moded, and nothing has ever written an object to it.
 
-**1.0 is gated on** the end-to-end suite passing against a real AWS account, GDPR
-erasure completing, and one install running for 30 days.
+**1.0 is gated on** `npm run test:e2e` passing against a real AWS account and one
+install running for 30 days. That gate is the whole of it — everything else on
+this list is either done or deliberately deferred, and the first live deployment
+is what turns the rest of this README from "asserted" into "observed".
+
+The runbook for that first deployment is in
+[`docs/DEPLOYMENT.md` §11](docs/DEPLOYMENT.md).
 
 Do not migrate a real list onto this yet. A mail system that has never sent an
 email can cost you a sending reputation that takes months to rebuild.

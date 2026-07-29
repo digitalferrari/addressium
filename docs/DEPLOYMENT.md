@@ -540,3 +540,101 @@ doing anything.
 > however hard you try. The admin Cognito pool is RETAIN. Non-prod site buckets do
 > auto-delete. Deleting the survivors is a separate, deliberate act — find them
 > by name from the stack outputs you noted in §4, and be certain before you do it.
+
+
+---
+
+## 11. The first live deployment
+
+This is the 1.0 gate, and it has not been done. Nothing in this repository has
+ever run in an AWS account, which is why the README's Status section leads with
+it. Everything below is the operator's part; the code side — the smoke suite,
+the deploy guard, the scoped policy — is written and waiting.
+
+### Use a dedicated, disposable account
+
+Not your main one. Blast radius, clean teardown, and its own bill. Expect **under
+$2/month plus the domain** (~$12–15/yr): SES is $0.10 per 1,000 messages, a
+Route 53 hosted zone is $0.50/month, and DynamoDB/Lambda/S3 are pennies at this
+volume. Leave `enableAnalytics` and `enableOpenSearchMirror` **off** — both are
+opt-in and both carry standing cost.
+
+**Set a $10/month AWS Budget with an email alert first**, before anything else.
+A budget alarm you set after the surprise is a receipt, not a control.
+
+### The safety model: two independent layers
+
+1. **SES sandbox — AWS-enforced. Do NOT request production access.** A new
+   account can only send to *verified* identities, so AWS itself refuses
+   everything else. This is the strongest guarantee available and it is free.
+   `npm run test:e2e` calls `GetAccount` and **aborts** if production access is
+   enabled, because application-level care is no substitute for the provider
+   refusing.
+2. **The dev-org allowlist.** Create the test org `environment: "dev"` with
+   `devAllowlist` containing only your verified address. `recipientAllowedForDev`
+   is fail-closed: a dev org with an empty allowlist sends to nobody.
+
+Either layer alone stops mail reaching a stranger. Both means a bug in one is
+still contained.
+
+### Credentials
+
+An IAM user with access keys, no console login, using
+`infra/bootstrap/smoke-iam-policy.json`. The Allow list is necessarily broad —
+CDK creates roles, keys, queues and identities — so the guardrail is the
+explicit **Deny** on the four ways to put standing cost on the account:
+`ses:CreateDedicatedIpPool`, `ses:PutDedicatedIpInPool`, `aoss:CreateCollection`
+/ `es:CreateDomain`, and `ses:PutAccountDetails` — the last being how the sandbox
+gets removed.
+
+Set them as **environment variables in the Claude Code environment config**, not
+in a chat message (it lands in transcript history) and not in Secrets Manager
+(reading that needs credentials — chicken and egg).
+
+### Region and DNS
+
+`us-east-1`. It matches the config default and supports **SES inbound receipt
+rules**, which exist only in `us-east-1`, `us-west-2` and `eu-west-1` — and the
+smoke suite reads delivered mail out of S3 via an inbound rule rather than a
+third-party mailbox, because that preserves full headers. `List-Unsubscribe` /
+`List-Unsubscribe-Post` correctness is precisely what needs checking, and a
+friendly webmail API hides exactly that.
+
+```
+MX  @             10 inbound-smtp.us-east-1.amazonaws.com
+MX  bounce.<dom>  10 feedback-smtp.us-east-1.amazonaws.com
+```
+
+The second is the custom MAIL FROM record (§4.11). Skipping it fails **silently**
+— `BehaviorOnMxFailure` is `USE_DEFAULT_VALUE`, so SES falls back to the
+`amazonses.com` return path and SPF simply stops aligning. Provisioning returns
+every record with a "why" note for this reason.
+
+### The run
+
+```bash
+npm run deploy        # deploy:check runs first and cannot be skipped
+npm run test:e2e      # the ten steps
+npx cdk destroy       # non-prod is RemovalPolicy.DESTROY, so teardown is clean
+```
+
+Before the first real deploy, rehearse `deploy:check` across three change
+classes on a throwaway stack — a no-op (exits 0), a stateless edit (exits 0), and
+a deliberate partition-key change (must exit **non-zero** naming `KeySchema`).
+Do the third on a stack holding nothing you care about: the whole point of the
+check is that such a change destroys data if it goes through. Replace the
+synthetic fixtures in `packages/integration-tests/test/deploy-check.test.ts` with
+the three real payloads.
+
+Note the guard fails **closed** on a shape it cannot interpret, so a mismatch
+between the assumed and actual `describe-change-set` payload will present as
+"every deploy is blocked", not as a silent miss.
+
+### Bounce and complaint handling
+
+Use the SES simulator — `bounce@simulator.amazonses.com` and
+`complaint@simulator.amazonses.com`. They work in the sandbox, cost nothing, and
+exercise suppression and the deliverability halt gate **without** damaging a real
+sending reputation or needing a second mailbox. Add both to the org's
+`devAllowlist` for the run, or the allowlist refuses them before the gate is
+reached.
