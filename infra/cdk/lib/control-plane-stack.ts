@@ -1399,6 +1399,32 @@ export class ControlPlaneStack extends Stack {
     api.addRoutes({ path: "/orgs/{org}/usage", methods: [HttpMethod.GET], integration: usageInt, authorizer: adminAuth });
     api.addRoutes({ path: "/orgs/{org}/usage/{period}", methods: [HttpMethod.GET], integration: usageInt, authorizer: adminAuth });
 
+    // Metering writers (#199). The Usage screen read a permanent $0 because
+    // NOTHING wrote a usage record — `usageIngestHandler` was wired to no route
+    // and no schedule, so the GETs above always answered `null`.
+    //
+    // Two writers, split by what each can actually know. The scheduled one fills
+    // email volume from our own event log; the invoke-only one takes the AWS-side
+    // figures (storage, dedicated IPs, Athena scan) from a job in the operator's
+    // account that can read Cost Explorer. They merge rather than overwrite, so
+    // neither erases the other's half.
+    const usageMeterFn = fn("UsageMeterFn", reportingEntry, "usageMeterHandler", apiEnv);
+    table.grantReadWriteData(usageMeterFn);
+    new Rule(this, "UsageMeterSchedule", {
+      // 04:00 UTC daily — after the 03:00 analytics export, and the current
+      // period accrues, so this month's figure is current rather than blank
+      // until the month ends.
+      schedule: Schedule.cron({ minute: "0", hour: "4" }),
+      targets: [new LambdaFunction(usageMeterFn)],
+    });
+    const usageIngestFn = fn("UsageIngestFn", reportingEntry, "usageIngestHandler", apiEnv);
+    table.grantReadWriteData(usageIngestFn);
+    new CfnOutput(this, "UsageIngestFunctionName", {
+      value: usageIngestFn.functionName,
+      description:
+        "Invoke with {orgId, period, storageBytes, dedicatedIps, athenaBytesScanned} to feed AWS-side usage (#199)",
+    });
+
     // reportBatchItemFailures is required for the handler's `batchItemFailures`
     // return value to mean anything. Without it one throw failed the WHOLE batch
     // and redelivered the other 9 messages — re-sending already-delivered mail,
@@ -1815,6 +1841,7 @@ export class ControlPlaneStack extends Stack {
         analyticsStream,
         transformFn: analyticsTransformFn,
         exportFn: analyticsSnapshotFn,
+        eventRetentionDays: analyticsEventRetentionDays,
         alarm,
       });
       new CfnOutput(this, "AnalyticsBucketName", { value: analyticsBucket.bucketName });

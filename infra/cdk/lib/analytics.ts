@@ -42,6 +42,12 @@ export interface AnalyticsWiringProps {
   /** Nightly full-table export Lambda (services/analytics-export `exportHandler`). */
   exportFn: IFunction;
   /**
+   * How long the bucket keeps fact rows — the same number as the `archive-events`
+   * lifecycle rule, so the partition projection covers exactly the days that
+   * still have data (#199).
+   */
+  eventRetentionDays: number;
+  /**
    * Registers an alarm with the stack's SNS action and its dashboard (#186).
    *
    * Passed in rather than rebuilt here: an alarm this file created privately
@@ -52,7 +58,8 @@ export interface AnalyticsWiringProps {
 }
 
 export function wireAnalytics(scope: Construct, props: AnalyticsWiringProps): void {
-  const { stage, table, analyticsBucket, analyticsStream, transformFn, exportFn, alarm } = props;
+  const { stage, table, analyticsBucket, analyticsStream, transformFn, exportFn, eventRetentionDays, alarm } =
+    props;
   const account = Stack.of(scope).account;
   const bucket = analyticsBucket.bucketName;
 
@@ -197,7 +204,12 @@ export function wireAnalytics(scope: Construct, props: AnalyticsWiringProps): vo
         "projection.enabled": "true",
         "projection.org_id.type": "injected",
         "projection.event_date.type": "date",
-        "projection.event_date.range": "2024-01-01,NOW",
+        // Tracks the bucket's retention rather than a fixed start date (#199).
+        // A hardcoded `2024-01-01,NOW` grew to ~940 projected days, and partition
+        // projection ENUMERATES the range: a query with no `event_date` bound had
+        // to resolve every one of them, most pointing at prefixes the lifecycle
+        // rule had already expired. The range now ends where the data does.
+        "projection.event_date.range": `NOW-${eventRetentionDays}DAYS,NOW`,
         "projection.event_date.format": "yyyy-MM-dd",
         "projection.event_date.interval": "1",
         "projection.event_date.interval.unit": "DAYS",
@@ -221,21 +233,107 @@ export function wireAnalytics(scope: Construct, props: AnalyticsWiringProps): vo
   });
   eventsTable.addDependency(db);
 
+  // ---- dimension tier: nightly full-table point-in-time export → S3 ----
+  //
+  // The export lands under `entities/export_date=YYYY-MM-DD/` (#199). It used to
+  // land under a flat `entities/`, which made it unqueryable in two separate
+  // ways: nothing catalogued it at all, and even with a table over the prefix,
+  // 30 nights of retained exports would UNION into 30 copies of every row with
+  // no way to say "the latest snapshot". Partitioning by export day makes
+  // `WHERE export_date = '…'` mean "one consistent snapshot".
+  //
+  // DynamoDB nests its own `AWSDynamoDB/<export-id>/data/*.json.gz` beneath the
+  // prefix we give it. Athena reads a table location recursively, so the data
+  // files resolve; the export's `manifest-*.json` siblings resolve too and
+  // produce rows with a NULL `item`, which is why every query below filters
+  // `WHERE item.pk IS NOT NULL`.
+  const entitiesTable = new CfnTable(scope, "AnalyticsEntitiesTable", {
+    catalogId: account,
+    databaseName: dbName,
+    tableInput: {
+      name: "entities",
+      tableType: "EXTERNAL_TABLE",
+      partitionKeys: [{ name: "export_date", type: "string" }],
+      parameters: {
+        classification: "json",
+        "projection.enabled": "true",
+        "projection.export_date.type": "date",
+        // Matches the 30-day `expire-entity-snapshots` lifecycle rule on the
+        // bucket: projecting a range wider than the data's retention just makes
+        // Athena enumerate prefixes that were expired away.
+        "projection.export_date.range": "NOW-30DAYS,NOW",
+        "projection.export_date.format": "yyyy-MM-dd",
+        "projection.export_date.interval": "1",
+        "projection.export_date.interval.unit": "DAYS",
+        "storage.location.template": `s3://${bucket}/entities/export_date=\${export_date}/`,
+      },
+      storageDescriptor: {
+        location: `s3://${bucket}/entities/`,
+        inputFormat: "org.apache.hadoop.mapred.TextInputFormat",
+        outputFormat: "org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat",
+        serdeInfo: {
+          serializationLibrary: "org.openx.data.jsonserde.JsonSerDe",
+          // The manifests are JSON but a different shape. Skipping them beats
+          // failing the query, and `item IS NOT NULL` filters the rows they
+          // produce.
+          parameters: { "ignore.malformed.json": "true" },
+        },
+        // `DYNAMODB_JSON` writes one `{"Item":{…}}` per line, with every
+        // attribute wrapped in its type tag. The single-key structs below unwrap
+        // the table's key attributes; `data` is the domain entity and its shape
+        // differs per item type, so it is exposed as a map of scalars — a nested
+        // attribute (an `attributes` map, say) reads back NULL rather than
+        // failing the query, which is the right trade for an ad-hoc join tier.
+        columns: [
+          {
+            name: "item",
+            type: [
+              "struct<",
+              "pk:struct<s:string>,",
+              "sk:struct<s:string>,",
+              "gsi1pk:struct<s:string>,",
+              "gsi1sk:struct<s:string>,",
+              "data:struct<m:map<string,struct<s:string,n:string,bool:boolean>>>",
+              ">",
+            ].join(""),
+          },
+        ],
+      },
+    },
+  });
+  entitiesTable.addDependency(db);
+
   // ---- query: an Athena workgroup with its own results prefix ----
   new CfnWorkGroup(scope, "AnalyticsWorkgroup", {
     name: `addressium-${stage}`,
     workGroupConfiguration: {
-      resultConfiguration: { outputLocation: `s3://${bucket}/athena-results/` },
+      // Without this the guardrails below are SUGGESTIONS (#199): a client may
+      // override both the scan cutoff and the results location per query, so the
+      // cost cap this file claimed to provide could be turned off by the same
+      // person it exists to protect against — and query output could be steered
+      // out of the analytics bucket entirely.
+      enforceWorkGroupConfiguration: true,
+      resultConfiguration: {
+        outputLocation: `s3://${bucket}/athena-results/`,
+        // Athena results are a materialised copy of whatever the query selected —
+        // i.e. tenant PII, sitting in S3 for the 14 days the lifecycle rule keeps
+        // them. SSE_S3 matches the analytics bucket's own default encryption, so
+        // this adds no key grant for query authors.
+        encryptionConfiguration: { encryptionOption: "SSE_S3" },
+      },
       // Cost guardrail: a single query may scan at most 10 GB, so a missing
       // partition filter or a runaway JOIN can't quietly run up an Athena bill.
       bytesScannedCutoffPerQuery: 10 * 1024 * 1024 * 1024,
-      // Publish per-query DataScannedInBytes to CloudWatch so the metering job
-      // can attribute Athena spend per org (§11).
+      // Workgroup-level `ProcessedBytes` / `TotalExecutionTime`. Note what this
+      // is NOT (#199): Athena's CloudWatch metrics are dimensioned by WORKGROUP,
+      // and there is one workgroup per stage, so this cannot attribute scan cost
+      // to an org. The `athenaBytesScanned` field on a usage record is an
+      // operator-supplied figure (see `usageIngestHandler`), not something the
+      // stack derives — the earlier comment here claimed otherwise.
       publishCloudWatchMetricsEnabled: true,
     },
   });
 
-  // ---- dimension tier: nightly full-table point-in-time export → S3 ----
   table.grant(exportFn, "dynamodb:ExportTableToPointInTime");
   analyticsBucket.grantWrite(exportFn);
   new Rule(scope, "AnalyticsExportSchedule", {

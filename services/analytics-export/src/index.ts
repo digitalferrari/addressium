@@ -96,21 +96,25 @@ export async function handler(event: FirehoseTransformEvent): Promise<{ records:
  * subscriptions, campaigns, lists) that reporting joins against; the streamed
  * event tier above keeps the fact table fresh.
  */
-export async function exportHandler(): Promise<{ ok: true; exportArn: string | undefined }> {
+export async function exportHandler(): Promise<{ ok: true; exportArn: string | undefined; prefix: string }> {
   const { DynamoDBClient, ExportTableToPointInTimeCommand } = await import("@aws-sdk/client-dynamodb");
+  const { entitiesExportPrefix } = await import("@addressium/domain");
   const tableArn = process.env.TABLE_ARN;
   const bucket = process.env.ANALYTICS_BUCKET;
   if (!tableArn || !bucket) throw new Error("missing TABLE_ARN / ANALYTICS_BUCKET");
   const client = new DynamoDBClient({});
+  // Partitioned by export day (#199). A flat `entities/` prefix piled 30 retained
+  // snapshots into one location, so nothing could query a single consistent one.
+  const prefix = entitiesExportPrefix(new Date());
   const res = await client.send(
     new ExportTableToPointInTimeCommand({
       TableArn: tableArn,
       S3Bucket: bucket,
-      S3Prefix: "entities/",
+      S3Prefix: prefix,
       ExportFormat: "DYNAMODB_JSON",
     }),
   );
-  return { ok: true, exportArn: res.ExportDescription?.ExportArn };
+  return { ok: true, exportArn: res.ExportDescription?.ExportArn, prefix };
 }
 
 /**

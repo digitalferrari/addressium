@@ -1092,7 +1092,7 @@ in the repo:
 
 | Context flag | What it adds |
 |---|---|
-| `enableAnalytics` | DynamoDB → Kinesis → Firehose → S3 (`events/org_id=…/event_date=…/`), a **Glue** table with partition projection (no crawler), an **Athena** workgroup, and two Lambdas — the Firehose transform and the on-demand table export |
+| `enableAnalytics` | DynamoDB → Kinesis → Firehose → S3 (`events/org_id=…/event_date=…/`), **two Glue tables** with partition projection (no crawler) — `events` and `entities` — an **Athena** workgroup, and two Lambdas: the Firehose transform and the nightly table export |
 | `enableOpenSearchMirror` | DynamoDB Streams → an **OpenSearch Serverless** collection and its indexer Lambda, the segmentation escape hatch (§5) |
 
 A default synth contains **zero** Kinesis, Firehose, Glue, Athena and OpenSearch
@@ -1107,6 +1107,37 @@ bound scan cost. Facts run seconds-to-minutes behind (Firehose buffering) and
 dimension snapshots up to a day — that lag is the price of keeping the analytics
 plane off the sending path. Reporting weights **clicks** over MPP-inflated opens
 (§4.22).
+
+**The guardrails are enforced, and the dimension tier is queryable (#199).**
+Three things about that paragraph used to be aspirational:
+
+- The workgroup set a 10 GB `bytesScannedCutoffPerQuery` but left
+  `enforceWorkGroupConfiguration` at its `false` default, so any client could
+  override both the cutoff and the results location — the cost cap was a
+  suggestion, and query output (a materialised copy of whatever the query
+  selected, i.e. tenant PII) could be steered out of the analytics bucket
+  entirely. It is enforced now, and results are encrypted with `SSE_S3`.
+- Only `events` was catalogued. The nightly point-in-time export — documented
+  here as "the dimension data reporting joins against" — produced data **nobody
+  could query**: pure export and storage cost with no capability attached. There
+  is now an `entities` Glue table over it. Because the bucket retains 30
+  snapshots, the export writes to `entities/export_date=YYYY-MM-DD/` and the
+  table is partitioned on that day; a query that does not pin `export_date`
+  returns every row thirty times. `item.pk IS NOT NULL` drops the rows the
+  export's own `manifest-*.json` files produce.
+- The events projection ran `2024-01-01,NOW` — about 940 days, and partition
+  projection *enumerates* its range rather than discovering partitions, so a
+  query with no `event_date` bound had to resolve every one of them, most
+  pointing at prefixes the lifecycle rule had already expired. The range now
+  tracks `analyticsEventRetentionDays`, so it ends where the data does. Four of
+  the five shipped queries had no date bound at all; every query in
+  `queries.sql` now takes an explicit window and anti-joins the erasure
+  tombstones.
+
+One thing that is **not** fixed, because it cannot be: Athena's CloudWatch
+metrics are dimensioned by **workgroup**, and there is one workgroup per stage.
+Per-org attribution of scan cost is not something this stack can derive. §11 says
+what happens instead.
 
 **When the pipeline breaks, someone is paged (#186).** Three gaps used to
 compound into silent data loss: the transform's `catch` discarded the error
@@ -1535,8 +1566,10 @@ link can ever grant, not from assuming it stays private:
   the reason for the decision. Two components add cost only when opted in, and
   both are **off by default**: the OpenSearch mirror (§5) and the reporting
   read-model (§4.23 — Kinesis, Firehose, Athena scan at ~$5/TB, and the lake's
-  own S3). The Athena workgroup carries a per-query bytes-scanned cutoff so a bad
-  query cannot run up a bill. All of these drivers are metered per org (§11).
+  own S3). The Athena workgroup carries an **enforced** per-query bytes-scanned
+  cutoff so a bad query cannot run up a bill — enforced meaning the client cannot
+  raise it, which it could until #199. Most of these drivers are metered per org
+  (§11); Athena scan is the exception, and §11 says why.
 
 ### 9.1 Bootstrapping the admin pool & first login
 
@@ -1697,16 +1730,39 @@ signing secret".
   client previews) or rely on test sends in v1.
 - **Per-org billing/usage metering** *(implemented)*: a per-org/period cost
   model (`estimateCost`/`recordUsage`) meters **email** (SES), **storage** (S3)
-  and **dedicated IPs**; a scheduled job feeds the AWS-metric drivers and the
-  admin **Usage & cost** screen surfaces the breakdown + history. Rates are
-  per-deployment overridable (`CostRates`). The model also carries an **Athena
-  bytes-scanned** line, which is **zero in a default deployment** — the Athena
-  tier only exists when `enableAnalytics` is set (§4.23), so that driver meters
-  an opt-in component and should be presented as such rather than as a standing
-  cost. Kinesis/Firehose throughput and the lake's own S3 storage are folded into
-  the streaming/storage lines and are likewise zero by default. Separately, the
-  model **prices a per-recipient transactional event+counter write that is not
-  yet implemented** (§4.5) — treat that line as a forecast, not a bill.
+  and **dedicated IPs**, and the admin **Usage & cost** screen surfaces the
+  breakdown + history. Rates are per-deployment overridable (`CostRates`).
+
+  **Two writers, split by what each can know (#199).** The screen used to read a
+  permanent $0 — not because the cost model was wrong, but because *nothing ever
+  wrote a usage record*: `usageIngestHandler` existed and was wired to no route
+  and no schedule, so the GET routes always answered `null`. The claim above that
+  "a scheduled job feeds the AWS-metric drivers" was, until then, false.
+
+  - `usageMeterHandler` runs **daily at 04:00 UTC** over every org and fills in
+    **email volume** from the append-only event log. Period-scoped, deliberately:
+    campaign counters are *lifetime* totals, so folding them into a month charges
+    for every email the org has ever sent, again, every month.
+  - `usageIngestHandler` is **invoke-only** and takes the AWS-side figures —
+    storage bytes, dedicated IPs, Athena bytes scanned — from a metering job in
+    the operator's own account that can read Cost Explorer. It is not behind an
+    API route because those numbers do not come from a console user. The stack
+    publishes its name as the `UsageIngestFunctionName` output.
+
+  The two **merge** rather than overwrite. A nightly job that wrote
+  `storageBytes: 0` would erase the operator's real figures every night and put
+  the screen back to $0 — the same defect, running on a schedule.
+
+  The **Athena bytes-scanned** line is **zero in a default deployment**: the
+  Athena tier only exists when `enableAnalytics` is set (§4.23). It is also the
+  one driver the stack cannot derive even when the tier IS on — Athena's
+  CloudWatch metrics are dimensioned by workgroup and there is one workgroup per
+  stage, so an operator who wants that line populated must supply it through
+  `usageIngestHandler`. Kinesis/Firehose throughput and the lake's own S3 storage
+  are folded into the streaming/storage lines and are likewise zero by default.
+  Separately, the model **prices a per-recipient transactional event+counter
+  write that is not yet implemented** (§4.5) — treat that line as a forecast, not
+  a bill.
 - **Backups**: point-in-time recovery, deletion protection and a `RETAIN` removal
   policy are on the DynamoDB table in **every** stage, not just prod — and PITR
   is deliberately not called a backup (#190). It is a 35-day continuous window

@@ -19,6 +19,7 @@ import { App, Stack } from "aws-cdk-lib";
 import { Match, Template } from "aws-cdk-lib/assertions";
 import { ControlPlaneStack, STAGES, parseStage } from "../lib/control-plane-stack.js";
 import { HTML_BODY_ROUTES, makeCloudFrontWebAcl, makeRegionalWebAcl } from "../lib/waf.js";
+import { entitiesExportPrefix } from "@addressium/domain";
 
 /**
  * `props` become stack props; `context` becomes app context, which is where the
@@ -1180,4 +1181,113 @@ test("every Lambda runs a supported runtime (#235)", () => {
   // the others' tests never exercised.
   assert.equal(runtimes.size, 1, `mixed runtimes: ${[...runtimes].join(", ")}`);
   assert.equal([...runtimes][0], "nodejs22.x", "must match `engines` and CI's node-version");
+});
+
+// ---------------------------------------------------------------------------
+// #199 — Athena guardrails, the dimension tier, and the metering writers
+// ---------------------------------------------------------------------------
+
+test("the Athena cost cap is ENFORCED, not suggested (#199)", () => {
+  // `bytesScannedCutoffPerQuery` was set but `enforceWorkGroupConfiguration`
+  // was not, and it defaults to false. Every guardrail in the workgroup was
+  // therefore overridable per query by the same client it exists to bound: the
+  // 10 GB cutoff could be raised, and the results location could be pointed
+  // anywhere — steering query output, which is a materialised copy of tenant
+  // PII, straight out of the analytics bucket.
+  const t = template({}, { enableAnalytics: "true" });
+  const wg = Object.values(t.findResources("AWS::Athena::WorkGroup"))[0];
+  assert.ok(wg, "no workgroup");
+  const cfg = (wg!.Properties as { WorkGroupConfiguration: Record<string, any> }).WorkGroupConfiguration;
+  assert.equal(cfg.EnforceWorkGroupConfiguration, true);
+  assert.equal(cfg.BytesScannedCutoffPerQuery, 10 * 1024 * 1024 * 1024);
+});
+
+test("Athena query results are encrypted at rest (#199)", () => {
+  // Results are whatever the query selected, written to S3 and kept for the 14
+  // days the lifecycle rule allows. That is tenant PII in a second place.
+  const t = template({}, { enableAnalytics: "true" });
+  const wg = Object.values(t.findResources("AWS::Athena::WorkGroup"))[0]!;
+  const result = (wg.Properties as { WorkGroupConfiguration: Record<string, any> }).WorkGroupConfiguration
+    .ResultConfiguration;
+  assert.ok(result.EncryptionConfiguration, "results inherit whatever the bucket happens to do");
+  assert.equal(result.EncryptionConfiguration.EncryptionOption, "SSE_S3");
+});
+
+test("the dimension tier is catalogued, not just exported (#199)", () => {
+  // The nightly point-in-time export ran forever and produced data NOBODY could
+  // query: only `events` was in the Glue catalog. Pure export and storage cost
+  // with zero capability.
+  const t = template({}, { enableAnalytics: "true" });
+  const tables = Object.values(t.findResources("AWS::Glue::Table"));
+  const names = tables.map((x) => (x.Properties as { TableInput: { Name: string } }).TableInput.Name);
+  assert.deepEqual(names.sort(), ["entities", "events"]);
+
+  const entities = tables.find(
+    (x) => (x.Properties as { TableInput: { Name: string } }).TableInput.Name === "entities",
+  )!;
+  const input = (entities.Properties as { TableInput: Record<string, any> }).TableInput;
+  // Partitioned by export day. Without this the 30 retained snapshots union into
+  // 30 copies of every row, with no predicate meaning "the latest one".
+  assert.deepEqual(input.PartitionKeys, [{ Name: "export_date", Type: "string" }]);
+  assert.equal(input.Parameters["projection.enabled"], "true");
+  assert.equal(input.Parameters["projection.export_date.type"], "date");
+});
+
+test("the export writes to the partition the catalog projects (#199)", () => {
+  // Two halves that must agree: the Lambda's S3 prefix and the Glue table's
+  // `storage.location.template`. If they drift, the table resolves partitions
+  // that hold nothing and every query returns zero rows — silently.
+  const t = template({}, { enableAnalytics: "true" });
+  const entities = Object.values(t.findResources("AWS::Glue::Table")).find(
+    (x) => (x.Properties as { TableInput: { Name: string } }).TableInput.Name === "entities",
+  )!;
+  const tmpl = flatten(
+    (entities.Properties as { TableInput: Record<string, any> }).TableInput.Parameters[
+      "storage.location.template"
+    ],
+  );
+  assert.match(tmpl, /\/entities\/export_date=\$\{export_date\}\/$/);
+  // …and the domain helper the Lambda calls produces exactly that shape.
+  assert.equal(entitiesExportPrefix(new Date("2026-07-27T03:00:00Z")), "entities/export_date=2026-07-27/");
+});
+
+test("the event partition projection tracks retention, not a fixed epoch (#199)", () => {
+  // Projection ENUMERATES its range rather than discovering partitions. A
+  // hardcoded `2024-01-01,NOW` had grown to ~940 projected days, most of them
+  // pointing at prefixes the lifecycle rule had already expired — so an
+  // unbounded query paid to resolve partitions that could not contain data.
+  const t = template({}, { enableAnalytics: "true", analyticsEventRetentionDays: "45" });
+  const events = Object.values(t.findResources("AWS::Glue::Table")).find(
+    (x) => (x.Properties as { TableInput: { Name: string } }).TableInput.Name === "events",
+  )!;
+  const range = (events.Properties as { TableInput: Record<string, any> }).TableInput.Parameters[
+    "projection.event_date.range"
+  ];
+  // The SAME number the bucket expires on, so the projection ends where the data does.
+  assert.equal(range, "NOW-45DAYS,NOW");
+});
+
+test("something actually writes a usage record (#199)", () => {
+  // The Usage screen was permanently $0 — not because the cost model was wrong,
+  // but because `usageIngestHandler` was wired to no route and no schedule, so
+  // the GET routes always answered `null`.
+  const t = template({});
+  const fns = t.findResources("AWS::Lambda::Function");
+  const meter = Object.keys(fns).find((k) => k.startsWith("UsageMeterFn"));
+  assert.ok(meter, "nothing computes usage on a schedule");
+
+  const rules = Object.values(t.findResources("AWS::Events::Rule"));
+  const scheduled = rules.find((r) =>
+    ((r.Properties as { Targets?: { Arn?: unknown }[] }).Targets ?? []).some((tg) =>
+      flatten(tg.Arn).includes("UsageMeterFn"),
+    ),
+  );
+  assert.ok(scheduled, "the meter exists but nothing invokes it");
+  assert.ok((scheduled!.Properties as { ScheduleExpression?: string }).ScheduleExpression);
+
+  // And the AWS-side half stays invoke-only — it takes Cost Explorer figures
+  // from the operator's account, not from a console user, so it is reachable by
+  // name rather than by an authenticated route.
+  assert.ok(Object.keys(fns).some((k) => k.startsWith("UsageIngestFn")));
+  assert.ok("UsageIngestFunctionName" in (t.toJSON().Outputs ?? {}), "and no way to find it");
 });

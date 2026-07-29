@@ -410,12 +410,23 @@ narrower than it sounds is worse than one that is absent:
 
   ```sql
   WITH erased AS (
-    SELECT DISTINCT org_id, subscriber_id FROM events WHERE event_type = 'erased'
+    SELECT DISTINCT org_id, subscriber_id FROM events
+    WHERE event_type = 'erased'
+      -- At least as wide as the fact window below: someone erased in July must
+      -- be excluded from January's rows too.
+      AND event_date BETWEEN :from_date AND :to_date
   )
   SELECT e.* FROM events e
   LEFT JOIN erased x ON e.org_id = x.org_id AND e.subscriber_id = x.subscriber_id
   WHERE x.subscriber_id IS NULL AND e.event_type <> 'erased'
+    -- REQUIRED (#199). Partition projection enumerates its range rather than
+    -- discovering partitions, and the workgroup enforces a 10 GB scan cutoff, so
+    -- an unbounded query does not run slowly — past a modest amount of history
+    -- it fails outright.
+    AND e.event_date BETWEEN :from_date AND :to_date
   ```
+
+  `docs/reporting/queries.sql` applies this shape to every shipped query.
 
   The rows themselves then age out: `events/` expires at **730 days** by default
   (`-c analyticsEventRetentionDays=…`), `entities/` — the nightly full-table

@@ -86,6 +86,24 @@ export function eventFromImage(image: Record<string, DdbAttr> | undefined): Enga
 }
 
 /**
+ * The S3 prefix one nightly dimension export writes to (#199).
+ *
+ * Partitioned by export day, because the exports are RETAINED — the bucket keeps
+ * 30 of them. A flat `entities/` prefix meant a Glue table over it would union
+ * every snapshot into 30 duplicate copies of every row, with no predicate that
+ * could say "the most recent one". `export_date=YYYY-MM-DD` makes one snapshot
+ * addressable, which is the difference between a queryable dimension tier and
+ * paying to store one.
+ *
+ * DynamoDB nests `AWSDynamoDB/<export-id>/` beneath whatever prefix it is given,
+ * so two exports on the same day coexist rather than overwriting; a query
+ * wanting exactly one snapshot filters on the export id in the object key.
+ */
+export function entitiesExportPrefix(now: Date): string {
+  return `entities/export_date=${now.toISOString().slice(0, 10)}/`;
+}
+
+/**
  * Flatten an erasure tombstone into a lake row (#164).
  *
  * `campaign_id` is empty rather than null: it is a partition-adjacent column the

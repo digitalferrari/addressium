@@ -6,7 +6,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import type { EngagementEvent } from "@addressium/core";
-import { eventFromImage, eventPartitionDate, toEventAnalyticsRow } from "@addressium/domain";
+import { entitiesExportPrefix, eventFromImage, eventPartitionDate, toEventAnalyticsRow } from "@addressium/domain";
 
 const click: EngagementEvent = {
   orgId: "summit", campaignId: "ledger-jul20", subscriberId: "s1",
@@ -67,4 +67,21 @@ test("eventFromImage omits linkId when absent (open/sent)", () => {
   const ev = eventFromImage(image({ type: { S: "open" }, linkId: undefined }));
   assert.equal(ev?.linkId, undefined);
   assert.equal(ev?.type, "open");
+});
+
+// ---- dimension-tier partitioning (#199) ----
+
+test("the nightly export lands under a date-partitioned prefix", () => {
+  // A flat `entities/` prefix was unqueryable in a way a Glue table alone would
+  // not have fixed: the bucket RETAINS 30 snapshots, so a table over the prefix
+  // unions 30 copies of every row with no predicate that means "the latest one".
+  assert.equal(entitiesExportPrefix(new Date("2026-07-27T03:00:00.000Z")), "entities/export_date=2026-07-27/");
+});
+
+test("the export partition is the UTC day, not the local one", () => {
+  // 03:00 UTC is the previous evening in the Americas. Storage is UTC (§4.21),
+  // and a snapshot filed under yesterday's partition is one an operator asking
+  // for today's data will not find.
+  assert.equal(entitiesExportPrefix(new Date("2026-07-27T00:00:00.000Z")), "entities/export_date=2026-07-27/");
+  assert.equal(entitiesExportPrefix(new Date("2026-07-27T23:59:59.999Z")), "entities/export_date=2026-07-27/");
 });
