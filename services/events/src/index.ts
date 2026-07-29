@@ -24,6 +24,7 @@ import {
   recordBounce,
   recordClick,
   recordComplaint,
+  recordDelivered,
   recordOpen,
 } from "@addressium/domain";
 
@@ -58,6 +59,10 @@ async function apply(notif: Notification) {
       eventId: notif.eventId,
     });
     return { ok: true, linkId };
+  }
+  if (notif.eventType === "Delivery") {
+    await recordDelivered(s, clock, notif.orgId, notif.campaignId, notif.subscriberId, notif.eventId);
+    return { ok: true };
   }
   if (notif.eventType === "Open") {
     await recordOpen(s, clock, notif.orgId, notif.campaignId, notif.subscriberId, notif.eventId);

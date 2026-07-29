@@ -16,7 +16,7 @@ import { SES_TAG, decodeTag } from "./ses.js";
 
 /** Our internal, already-resolved shape (direct invoke and tests). */
 export interface Notification {
-  eventType: "Open" | "Click" | "Bounce" | "Complaint";
+  eventType: "Open" | "Click" | "Bounce" | "Complaint" | "Delivery";
   orgId: string;
   campaignId: string;
   subscriberId: string;
@@ -118,6 +118,12 @@ const ACTIONABLE: Record<string, Notification["eventType"] | undefined> = {
   Click: "Click",
   Bounce: "Bounce",
   Complaint: "Complaint",
+  // SES has published this since the event destination went in (#208) and
+  // nothing consumed it, so `delivered` counters never left zero and every
+  // delivery rate read 0% (#210). Both spellings: the event-publishing schema
+  // says `Delivery`, the older SNS notification schema says `Delivery` too but
+  // arrives under `notificationType`, which `normalize` already folds together.
+  Delivery: "Delivery",
 };
 
 /**

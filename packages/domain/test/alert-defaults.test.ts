@@ -9,10 +9,11 @@
  */
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { Campaign, EngagementEvent, List } from "@addressium/core";
+import type { AlertConfig, Campaign, EngagementEvent, HotCounters, List } from "@addressium/core";
 import {
   DEFAULT_ALERT_RULES,
   checkDeliverability,
+  evaluateAlerts,
   defaultAlertConfig,
   memStores,
   provisionOrganization,
@@ -204,4 +205,43 @@ test("the end-to-end default path halts a provisioned org's bad campaign", async
   const result = await checkDeliverability(stores, new CapturePublisher(), clock, ORG, "c1");
   assert.equal(result.halted, true, "auto-halt must work on an untouched org");
   assert.equal((await stores.campaigns.get(ORG, "c1"))?.status, "halted");
+});
+
+// ---- the two #210 correctness items ----
+
+test("the reputation metric can actually breach a threshold", async () => {
+  // It returned a hardcoded 0, so a rule configured against it could NEVER
+  // fire — an alert visible in the console that is structurally incapable of
+  // firing is worse than an absent one, because its presence reads as coverage.
+  const clean: HotCounters = {
+    sent: 1000, delivered: 1000, opens: 0, clicks: 0, bounces: 0, complaints: 0, unsubscribes: 0,
+  };
+  const bad: HotCounters = {
+    sent: 1000, delivered: 900, opens: 0, clicks: 0, bounces: 100, complaints: 5, unsubscribes: 0,
+  };
+  const config: AlertConfig = {
+    orgId: "o",
+    notifyTargets: [],
+    // Read as percentage points of severity, where 5 is the industry danger
+    // line (5% bounces, or 0.1% complaints — the score weights them equal).
+    // A halt at 30 is already six times past that.
+    rules: [{ metric: "reputation", warnAt: 5, haltAt: 30, enabled: true }],
+  };
+  assert.deepEqual(evaluateAlerts(config, clean), [], "a clean send must not breach");
+  const breaches = evaluateAlerts(config, bad);
+  assert.equal(breaches.length, 1, "a 10% bounce + 0.5% complaint send must breach");
+  assert.equal(breaches[0]!.level, "halt");
+  assert.ok(breaches[0]!.value > 0, "the metric is still hardcoded to zero");
+});
+
+test("reputation weights complaints far above bounces", async () => {
+  // 5% bounces is survivable; 0.5% complaints is not. The score has to rank them
+  // that way or it is measuring the wrong thing.
+  const mk = (bounces: number, complaints: number): HotCounters => ({
+    sent: 1000, delivered: 1000 - bounces, opens: 0, clicks: 0, bounces, complaints, unsubscribes: 0,
+  });
+  const config: AlertConfig = { orgId: "o", notifyTargets: [], rules: [{ metric: "reputation", warnAt: 1, haltAt: 1000, enabled: true }] };
+  const bouncy = evaluateAlerts(config, mk(20, 0))[0]!.value;
+  const complainy = evaluateAlerts(config, mk(0, 20))[0]!.value;
+  assert.ok(complainy > bouncy, `complaints (${complainy}) must outweigh bounces (${bouncy})`);
 });

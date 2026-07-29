@@ -44,6 +44,37 @@ export async function recordOpen(
 }
 
 /**
+ * Record a DELIVERY (#210).
+ *
+ * SES has published `Delivery` since the event destination went in (#208) — the
+ * config set subscribes to it — but nothing consumed it, so `HotCounters.delivered`
+ * never moved off zero. Every delivery rate in the product therefore read 0%,
+ * and the bounce rate it is compared against was computed over a denominator
+ * that did not exist. A reporting number that is always wrong is worse than an
+ * absent one, because a dashboard shows it without comment.
+ *
+ * Idempotent through `eventId` like every other event: SNS is at-least-once, and
+ * a redelivered notification must not inflate the count it is supposed to fix.
+ */
+export async function recordDelivered(
+  stores: Stores,
+  clock: Clock,
+  orgId: string,
+  campaignId: string,
+  subscriberId: string,
+  eventId?: string,
+): Promise<void> {
+  await stores.events.append({
+    orgId,
+    campaignId,
+    subscriberId,
+    type: "delivered",
+    at: clock.now().toISOString(),
+    eventId,
+  });
+}
+
+/**
  * Does a clicked URL correspond to this link's template? (#201)
  *
  * `urlTemplate` is stored UNRENDERED — `https://x.com/a?u={{email}}` — while the

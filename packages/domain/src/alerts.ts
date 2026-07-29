@@ -31,8 +31,31 @@ function metricValue(metric: AlertBreach["metric"], counters: HotCounters): numb
       // Absolute count of hard failures (bounces + complaints) for this window.
       return counters.bounces + counters.complaints;
     case "reputation":
-      // No live reputation signal in the hot path; treated as informational.
-      return 0;
+      /**
+       * A 0-100 health score, worse as it climbs — the same direction as every
+       * other metric here, so one comparison works for all of them (#210).
+       *
+       * It used to return a hardcoded 0, which meant the rule could never breach
+       * any threshold above zero: an operator could configure a reputation alert,
+       * see it in the console, and it would never fire. An alert that cannot fire
+       * is worse than an absent one, because its presence is read as coverage.
+       *
+       * This is derived from OUR counters, not from SES's account-level
+       * reputation dashboard — that is per-account and lags by hours, so it can
+       * neither be attributed to an org nor act in time to stop a send. What this
+       * measures is the same thing SES would eventually punish, from data we hold
+       * per campaign and in real time.
+       *
+       * Read as percentage points, so a threshold is legible: the weights place
+       * **5% bounces and 0.1% complaints at the same score of 5**, which is the
+       * industry equivalence — those are the two levels at which a provider
+       * starts acting. That makes complaints fifty times heavier per event, which
+       * they are.
+       *
+       * Capped at 100. Past that the number stops meaning anything; a send that
+       * bad is already halted.
+       */
+      return Math.min(100, r.bounceRate * 100 + r.complaintRate * 5000);
   }
 }
 

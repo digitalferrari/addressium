@@ -68,9 +68,25 @@ test("legacy notificationType and the internal shape both normalize", () => {
 test("an untagged or non-actionable event resolves to undefined, not a bad guess", () => {
   // Sent before tagging existed, or not one of ours.
   assert.equal(normalize({ eventType: "Bounce", mail: { tags: {} } }), undefined);
-  // Types we don't act on yet must not be mistaken for actionable ones.
-  assert.equal(normalize({ eventType: "Delivery", mail: { tags } }), undefined);
+  // Types we don't act on must not be mistaken for actionable ones. `Delivery`
+  // used to be in this list and is now ingested (#210) — see below.
+  assert.equal(normalize({ eventType: "RenderingFailure", mail: { tags } }), undefined);
+  assert.equal(normalize({ eventType: "DeliveryDelay", mail: { tags } }), undefined);
   assert.equal(normalize(null), undefined);
+});
+
+test("Delivery is ingested, so delivery rates are not permanently 0% (#210)", () => {
+  // SES has published this since the event destination went in (#208) — the
+  // config set subscribes to it — and nothing consumed it. So
+  // `HotCounters.delivered` never left zero, every delivery rate read 0%, and
+  // the bounce rate it is compared against had a denominator that did not
+  // exist. A reporting number that is always wrong is worse than an absent one,
+  // because a dashboard shows it without comment.
+  const n = normalize({ eventType: "Delivery", mail: { messageId: "m1", timestamp: "2026-07-28T10:00:00.000Z", tags } });
+  assert.ok(n, "Delivery still resolves to nothing");
+  assert.equal(n.eventType, "Delivery");
+  assert.equal(n.subscriberId, "s001");
+  assert.ok(n.eventId, "no eventId — a redelivery would double-count");
 });
 
 test("the same notification delivered twice yields one stable eventId (#183)", () => {
