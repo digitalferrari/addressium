@@ -1,0 +1,61 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "DeployTheStack",
+      "Comment": "CDK synthesises to CloudFormation, which then assumes the CDK execution roles to create everything. This is the deploy identity, not the runtime one — the stack's own Lambdas get far narrower roles that CDK writes.",
+      "Effect": "Allow",
+      "Action": [
+        "cloudformation:*",
+        "ssm:GetParameter",
+        "ssm:GetParameters"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "AssumeCdkRoles",
+      "Comment": "cdk bootstrap creates these. Scoped by name so this identity cannot assume an unrelated role in the account.",
+      "Effect": "Allow",
+      "Action": "sts:AssumeRole",
+      "Resource": "arn:aws:iam::*:role/cdk-*"
+    },
+    {
+      "Sid": "ResourcesTheStackCreates",
+      "Effect": "Allow",
+      "Action": [
+        "dynamodb:*",
+        "lambda:*",
+        "s3:*",
+        "iam:*",
+        "cognito-idp:*",
+        "ses:*",
+        "sns:*",
+        "sqs:*",
+        "kms:*",
+        "scheduler:*",
+        "events:*",
+        "states:*",
+        "logs:*",
+        "cloudwatch:*",
+        "secretsmanager:*",
+        "apigateway:*",
+        "backup:*",
+        "backup-storage:*"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "NeverBuyStandingCapacity",
+      "Comment": "The smoke account is meant to cost under $2/month. These four are the ways to accidentally spend real money on it: a dedicated IP is ~$25/month each and cannot be un-bought for the month, OpenSearch Serverless bills per OCU whether or not it is queried, and SES production access removes the sandbox, which is this test's outer safety layer. Denied explicitly rather than merely left ungranted, because the Allow above is broad.",
+      "Effect": "Deny",
+      "Action": [
+        "ses:CreateDedicatedIpPool",
+        "ses:PutDedicatedIpInPool",
+        "ses:PutAccountDetails",
+        "aoss:CreateCollection",
+        "es:CreateDomain"
+      ],
+      "Resource": "*"
+    }
+  ]
+}

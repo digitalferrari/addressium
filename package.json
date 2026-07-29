@@ -24,7 +24,8 @@
     "teardown:aws": "./scripts/aws-teardown.sh",
     "deploy:check": "./scripts/deploy-check.sh",
     "predeploy": "./scripts/deploy-check.sh",
-    "dev": "npm run build && node scripts/dev-server.mjs"
+    "dev": "npm run build && node scripts/dev-server.mjs",
+    "test:e2e": "node scripts/smoke-e2e.mjs"
   },
   "devDependencies": {
     "@testing-library/dom": "^10.4.0",
