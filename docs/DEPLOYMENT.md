@@ -345,12 +345,13 @@ already runs something, addressium **consumes** it via configuration rather than
 creating a competing copy. WAF and ops alerting are both in that category. This
 section is the runbook compendium §3 promises.
 
-> **As built, the stack still creates both.** `lib/waf.ts` builds a REGIONAL and
-> a CLOUDFRONT WebACL, the stack associates the REGIONAL one with the API stage
-> and sets the CLOUDFRONT one as `webAclId` on both distributions —
-> unconditionally, in every stage — and it creates its own `OpsAlertsTopic`.
-> Removing them is **[Decided r2 — not yet built]**. Read the rest of this
-> section as the target, and mind the conflict note at the end.
+> **The stack creates neither** (#225). A default synth contains zero
+> `AWS::WAFv2::WebACL` resources; you create the ACLs and pass their ARNs, and
+> the stack does the association. `infra/cdk/lib/waf.ts` is a **reference
+> implementation** of the rules described below — nothing in the stack calls it,
+> but it is exported, it is what addressium is tested against, and it is the
+> configuration to copy rather than derive. Ops alerting is the same shape: a
+> topic you own, or one created for you from `opsAlertEmail`.
 
 ### 8.1 REGIONAL WebACL — the HTTP API
 
@@ -390,20 +391,37 @@ Record the resulting WebACL ARNs as `apiWebAclArn` and `cloudfrontWebAclArn` in
 unset and no association is made — `npm run deploy:check` warns, naming which
 surface is exposed.
 
-> **Rules you must exclude, or the console breaks (#188).** The AWS managed rule
-> sets reject the request bodies this application legitimately sends. Exclude
-> `SizeRestrictions_BODY` and `CrossSiteScripting_BODY` on the routes that carry
-> HTML — saving a campaign or a template posts an entire email body — and
-> exclude `/signup/batch` from any CAPTCHA rule, since it is called by the
-> subscriber site rather than by a person. Enable `URL_DECODE` and
-> `NORMALIZE_PATH` transformations, and turn on WAF logging: a WAF that blocks
-> template saving with no log is indistinguishable from a broken deploy.
+### 8.4 Five things that break this application if you get them wrong (#188)
+
+Copy `infra/cdk/lib/waf.ts` and you get all of these. Build the ACL by hand and
+each one is a defect waiting for the first person who tries to save a newsletter.
+
+| # | What | Why |
+| --- | --- | --- |
+| 1 | Set **`SizeRestrictions_BODY`** and **`CrossSiteScripting_BODY`** to **Count** on `AWSManagedRulesCommonRuleSet` (REGIONAL ACL only) | The first blocks bodies over 8 KB; the second blocks bodies containing markup. Saving a campaign or template posts an entire HTML email, so attached with no exclusions they break `POST /campaigns` and `POST /templates` — the two requests the console cannot work without |
+| 2 | Add your own **oversize-body block** scoped to everything *except* `/campaigns`, `/templates`, `/campaigns/schedule` | Counting rule 1 turns body-size protection off for **every** route, including the unauthenticated ones where a multi-megabyte body is pure denial-of-wallet |
+| 3 | Match `/signup` with **`EXACTLY`**, not `STARTS_WITH`, in any CAPTCHA rule | `STARTS_WITH` also catches `/signup/batch`, which the subscriber site calls server-to-server. A CAPTCHA challenge to a non-browser client is a broken endpoint |
+| 4 | Add **`URL_DECODE`** and **`NORMALIZE_PATH`** to every URI transformation, not just `LOWERCASE` | Without them `/%73ignup` and `/foo/../signup` both slip past. A CAPTCHA any script steps around by percent-encoding one character is decoration |
+| 5 | Add a **scoped rate rule on `/signup*`**, far below the global one | A global 2000-per-5-minutes ceiling permits 2000 signups per IP per 5 minutes. Signup is the route that costs money when abused: every submission sends real mail to an attacker-chosen address, on the org's own SES reputation |
+
+**Turn on logging** (`CfnLoggingConfiguration`) for both ACLs, redacting the
+`authorization` header. Without it there is no abuse forensics and no evidence to
+tune a rule from — and a WAF that blocks template saving with no log is
+indistinguishable from a broken deploy, which is the shape every defect above
+would take in production. The destination log group name **must** begin with
+`aws-waf-logs-`; WAF rejects anything else.
+
+**The trade rule 1 makes, stated plainly:** on those three routes the request
+body is not WAF-inspected. What remains is the application's own defence — zod
+validation at the boundary, `sanitizeEmailHtml` on raw HTML, and the CSP on the
+rendered output. That is deliberate. The alternative is a console that cannot
+save a newsletter.
 
 > **A resource carries only one WebACL.** That is why addressium creates none:
 > ours would displace yours, and the next `cdk deploy` would silently put ours
 > back (#225).
 
-### 8.4 Alert routing
+### 8.5 Alert routing
 
 Set `opsAlertTopicArn` (or `opsAlertEmail`) in config — see §3. If you supplied
 only an email, the `OpsAlertsTopicArn` output names the topic that was created
@@ -420,13 +438,14 @@ association, and there is still no `doctor` command.
   own `AlertConfig.snsTopicArn` — operator-supplied already, per org — and a
   `halt`-level breach flips the campaign to `halted` so the sender stops. Set
   that topic when you provision the org; with none set, nothing is published.
-- **Infrastructure alarms.** 24 CloudWatch alarms, identical in every stage: 2 on
-  the send queue and its DLQ, 20 on errors and throttles across 10 Lambda
-  functions, 2 on DynamoDB throttles and system errors. All 24 publish to a
-  single topic, which should be **yours** (#32) — **[Decided r2 — not yet
-  built]**; today it is the stack's own `OpsAlertsTopic`, so subscribe your ops
-  channel/email to the `OpsAlertsTopicArn` output. There is no CloudWatch
-  **dashboard** yet (#29), also **[Decided r2 — not yet built]**.
+- **Infrastructure alarms.** 26 CloudWatch alarms in a default synth: the send
+  queue and its DLQ, errors and throttles across every handler, DynamoDB
+  throttles and system errors. With the analytics tier on there are more — both
+  analytics Lambdas plus two on the Firehose pipeline itself (#186). All publish
+  to one topic: yours if you set `opsAlertTopicArn`, otherwise the one created
+  from `opsAlertEmail`, whose ARN is the `OpsAlertsTopicArn` output. A CloudWatch
+  **dashboard** is created (#229) — its URL is the `OpsDashboardUrl` output, and
+  it shows the same alarm set the health endpoint derives its badge from.
 - **The send DLQ.** `SendDlqUrl` is where poison send descriptors land, and
   `SendDlqNotEmptyAlarm` is what tells you. Drain it deliberately; nothing
   redrives it for you.

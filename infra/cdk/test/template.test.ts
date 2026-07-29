@@ -15,9 +15,10 @@
  */
 import assert from "node:assert/strict";
 import test from "node:test";
-import { App } from "aws-cdk-lib";
+import { App, Stack } from "aws-cdk-lib";
 import { Match, Template } from "aws-cdk-lib/assertions";
 import { ControlPlaneStack, STAGES, parseStage } from "../lib/control-plane-stack.js";
+import { HTML_BODY_ROUTES, makeCloudFrontWebAcl, makeRegionalWebAcl } from "../lib/waf.js";
 
 /**
  * `props` become stack props; `context` becomes app context, which is where the
@@ -826,4 +827,151 @@ test("none of the analytics wiring exists when the tier is off (#186)", () => {
   assert.ok(!alarms.some((a) => a.startsWith("Analytics")), `stray analytics alarms: ${alarms}`);
   const fns = Object.keys(t.findResources("AWS::Lambda::Function"));
   assert.ok(!fns.some((f) => f.startsWith("AnalyticsReplayFn")));
+});
+
+// ---- the reference WebACLs (#188) ----
+//
+// Nothing in the stack builds these — addressium creates no WebACL (#225), the
+// operator supplies one. They are tested anyway BECAUSE of that: this file is
+// what an operator copies, so a defect here ships to every install by hand
+// instead of by deploy, which is worse rather than better.
+
+function referenceAcls() {
+  const app = new App();
+  const stack = new Stack(app, "waf-stack", { env: { account: "111122223333", region: "us-east-1" } });
+  makeRegionalWebAcl(stack, "ApiAcl");
+  makeCloudFrontWebAcl(stack, "SiteAcl");
+  return Template.fromStack(stack);
+}
+
+const aclRules = (t: Template, scope: "REGIONAL" | "CLOUDFRONT") => {
+  const acl = Object.values(t.findResources("AWS::WAFv2::WebACL")).find(
+    (a) => (a.Properties as { Scope: string }).Scope === scope,
+  )!;
+  return (acl.Properties as { Rules: Record<string, any>[] }).Rules;
+};
+
+test("the managed rules that break template saving are COUNT, not BLOCK (#188)", () => {
+  // `SizeRestrictions_BODY` blocks bodies over 8KB and `CrossSiteScripting_BODY`
+  // blocks bodies containing markup — which is exactly what an email template
+  // IS. Attached with no exclusions, they break `POST /campaigns` and
+  // `POST /templates`: the two requests the console cannot work without.
+  const common = aclRules(referenceAcls(), "REGIONAL").find(
+    (r) => r.Name === "AWSManagedRulesCommonRuleSet",
+  )!;
+  const overrides = common.Statement.ManagedRuleGroupStatement.RuleActionOverrides ?? [];
+  const byName = Object.fromEntries(overrides.map((o: Record<string, any>) => [o.Name, o.ActionToUse]));
+  assert.ok(byName["SizeRestrictions_BODY"]?.Count, "SizeRestrictions_BODY still blocks");
+  assert.ok(byName["CrossSiteScripting_BODY"]?.Count, "CrossSiteScripting_BODY still blocks");
+  // COUNT rather than removed, so the rules keep emitting metrics and an
+  // operator can tune from evidence instead of guesswork.
+  assert.equal(common.OverrideAction?.None !== undefined, true);
+});
+
+test("body-size protection is restored everywhere it does not break things (#188)", () => {
+  // Counting `SizeRestrictions_BODY` turns it off for EVERY route, including the
+  // unauthenticated ones where a multi-megabyte body is pure denial-of-wallet.
+  const rules = aclRules(referenceAcls(), "REGIONAL");
+  const oversize = rules.find((r) => r.Name === "OversizeBodyOutsideHtmlRoutes");
+  assert.ok(oversize, "no replacement body-size rule — the hole is API-wide");
+  assert.ok(oversize.Action?.Block);
+  // It must run BEFORE the managed sets, so a large body is rejected without
+  // being handed to them.
+  const common = rules.find((r) => r.Name === "AWSManagedRulesCommonRuleSet")!;
+  assert.ok(oversize.Priority < common.Priority);
+
+  // …and it must exempt exactly the routes that carry email HTML.
+  const exempted = JSON.stringify(oversize.Statement);
+  for (const route of HTML_BODY_ROUTES) {
+    assert.ok(exempted.includes(route), `${route} would still be blocked`);
+  }
+});
+
+test("/signup/batch is not CAPTCHA-challenged (#188)", () => {
+  // It is called by the subscriber site's "all newsletters" page, not typed by a
+  // person. A CAPTCHA challenge to a non-browser client is a broken endpoint.
+  const captcha = aclRules(referenceAcls(), "REGIONAL").find((r) => r.Name === "SignupCaptcha")!;
+  const match = captcha.Statement.AndStatement.Statements.find(
+    (s: Record<string, any>) => s.ByteMatchStatement?.FieldToMatch?.UriPath,
+  );
+  assert.equal(
+    match.ByteMatchStatement.PositionalConstraint,
+    "EXACTLY",
+    "STARTS_WITH also catches /signup/batch",
+  );
+  assert.equal(match.ByteMatchStatement.SearchString, "/signup");
+});
+
+test("path matches survive encoded-path evasion (#188)", () => {
+  // With only LOWERCASE, `/%73ignup` never matched and neither did
+  // `/foo/../signup`. A CAPTCHA any scripted client steps around by
+  // percent-encoding one character is decoration.
+  for (const rule of aclRules(referenceAcls(), "REGIONAL")) {
+    for (const m of JSON.stringify(rule).matchAll(/"UriPath":\{\}[^}]*\}[^}]*?"TextTransformations":(\[[^\]]*\])/g)) {
+      const types = (JSON.parse(m[1]!) as { Type: string }[]).map((t) => t.Type);
+      assert.ok(types.includes("URL_DECODE"), `${rule.Name}: missing URL_DECODE`);
+      assert.ok(types.includes("NORMALIZE_PATH"), `${rule.Name}: missing NORMALIZE_PATH`);
+    }
+  }
+});
+
+test("signup carries its own, much tighter rate limit (#188)", () => {
+  // The global 2000-per-5-minutes rule permits 2000 signups per IP per 5
+  // minutes, which is a brake on a different and much larger problem. Signup is
+  // the route that costs money when abused.
+  const rules = aclRules(referenceAcls(), "REGIONAL");
+  const signup = rules.find((r) => r.Name === "SignupRateLimitPerIp");
+  assert.ok(signup, "signup shares the blunt global ceiling");
+  const global = rules.find((r) => r.Name === "RateLimitPerIp")!;
+  assert.ok(
+    signup.Statement.RateBasedStatement.Limit < global.Statement.RateBasedStatement.Limit,
+    "the scoped limit must actually be tighter",
+  );
+  // Scoped to the signup paths — including /signup/batch, which needs a rate
+  // limit even though it must not be CAPTCHA'd.
+  assert.ok(signup.Statement.RateBasedStatement.ScopeDownStatement);
+});
+
+test("both ACLs log, with credentials redacted (#188)", () => {
+  // No logging meant no abuse forensics and no evidence to tune a rule from — a
+  // WAF that blocks template saving with no log is indistinguishable from a
+  // broken deploy.
+  const t = referenceAcls();
+  const configs = Object.values(t.findResources("AWS::WAFv2::LoggingConfiguration"));
+  assert.equal(configs.length, 2, "one per ACL");
+  for (const c of configs) {
+    const props = c.Properties as Record<string, any>;
+    assert.ok(props.LogDestinationConfigs?.length);
+    // A WAF log is a request log; one containing bearer tokens is a credential
+    // store.
+    assert.ok(
+      JSON.stringify(props.RedactedFields ?? []).toLowerCase().includes("authorization"),
+      "authorization header is not redacted",
+    );
+  }
+  // WAF rejects any destination whose name does not start with `aws-waf-logs-`.
+  for (const g of Object.values(t.findResources("AWS::Logs::LogGroup"))) {
+    assert.match((g.Properties as { LogGroupName: string }).LogGroupName, /^aws-waf-logs-/);
+  }
+});
+
+test("the CloudFront ACL keeps the managed rules intact (#188)", () => {
+  // These distributions serve static built assets and take no request bodies, so
+  // there is nothing legitimate for the body rules to break. The exception
+  // belongs only where the application actually posts markup.
+  const common = aclRules(referenceAcls(), "CLOUDFRONT").find(
+    (r) => r.Name === "AWSManagedRulesCommonRuleSet",
+  )!;
+  assert.equal(
+    common.Statement.ManagedRuleGroupStatement.RuleActionOverrides,
+    undefined,
+    "the SPA ACL should not inherit the API's exceptions",
+  );
+});
+
+test("the stack still creates no WebACL of its own (#225 holds)", () => {
+  // The reference above is exported for an operator to use in THEIR app. If it
+  // ever gets wired into this stack it would displace whatever they associated,
+  // and the next deploy would put ours back silently.
+  assert.deepEqual(Object.keys(template().findResources("AWS::WAFv2::WebACL")), []);
 });
