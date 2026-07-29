@@ -39,6 +39,37 @@ the same owner.
 | **RBAC** | Developer Admin / Editor / Analyst / Support, org-scoped, enforced server-side via Cedar |
 | **Import & export** | CSV in, through an interactive field mapper. CSV/JSONL out including consent provenance, and the export re-imports through that same mapper — so leaving is a round trip, not just a download. |
 
+### What Pinpoint did that addressium does not
+
+The bar here is **feature fidelity plus a migration path**, not a wire-compatible
+API clone — the routes are console-shaped, and there are no Pinpoint REST paths
+or SDK compatibility. Against that bar the core list → campaign → send loop is
+faithful and in places better. These are the gaps, checked against the code
+rather than remembered:
+
+| Pinpoint capability | Here |
+|---|---|
+| **Endpoints** (subscribers) | Flat attributes only — no multi-valued attributes, metrics, or Location/Demographic model |
+| **Dynamic segments** | Attribute predicates only. The v1 engine **requires a base list** and throws on engagement predicates; the OpenSearch mirror is the escape hatch |
+| **Imported segments** | Not supported — import creates subscribers, not segments |
+| **Campaign scheduling** | No per-recipient local-time send, quiet hours, frequency caps, or campaign end dates |
+| **Journeys** | Linear drip only — no conditional splits, multivariate branches, holdout activities, goal exits or re-entry rules |
+| **Event-triggered campaigns** | No custom-event ingestion, no event-triggered entry |
+| **Transactional send API** | No `SendMessages` analogue. Transactional mail exists (§4.2, and `EmailClass` gates its eligibility) but has no public API |
+| **Templates** | No Handlebars, no version-history retention, no default substitutions. MJML compiles browser-side, so a drip step on an MJML template fails loudly rather than silently |
+| **Sending** | Per-recipient `SendEmail`; `SendBulkEmail` 50-destination batching is not implemented. No attachments |
+| **Suppression** | No import of an existing SES account-suppression list |
+| **Recommenders, SMS/push/voice/in-app** | Out of scope by design — see below |
+
+And the other direction, because a migration is a trade in both: double opt-in
+with per-list consent provenance, RFC 8058 one-click unsubscribe, hybrid
+suppression scoping, the per-link click map, DST-aware recurring scheduling, a
+send lifecycle whose idempotency claims survive pausing, Cedar-backed
+server-side RBAC, token redaction before analytics, an SSRF guard on feeds, and
+a preference centre reachable without a password.
+
+Anything in the first table that someone commits to building gets its own issue.
+
 **Deliberately not included:** SMS, push, voice, in-app, recommender models, or
 A/B testing. Pinpoint's surviving non-email channels moved to AWS End User
 Messaging; this is email only, on purpose.
@@ -158,11 +189,36 @@ Details: [`scripts/README.md`](scripts/README.md) ·
 ## Upgrades
 
 ```bash
-npm test                # 254 tests; 250 pass, 4 skip without LocalStack
+npm test                # 724 tests; 720 pass, 4 skip without LocalStack
 npm run deploy:check    # dry run — refuses anything that would destroy data
 npm run deploy          # in place; CloudFormation rolls back on failure
 curl $API/version       # running build; nothing writes the deploy marker yet
 ```
+
+### How you find out a fix exists
+
+You do not, yet, and that is worth stating plainly rather than leaving as an
+implied capability. An install today is "clone the repo and deploy", so it is
+pinned to whatever commit was cloned, there is no notification channel, and
+`curl $API/version` compares a running build against a marker nothing writes.
+
+The intended shape is designed and **deliberately not built yet** (#213):
+versioned, immutable release artifacts rather than a git checkout; a schema
+version marker with ordered idempotent migrations run by a deploy-time custom
+resource, refusing to skip a major version; and a CLI whose `status`, `doctor`
+and `upgrade` are the whole user-facing surface — `doctor` mattering most,
+because nearly everything that has broken in this repo was *configuration* no
+test could see (a missing event destination, an unverified identity, an absent
+MX record).
+
+Why not now: the argument for building a migration framework early is that
+shapes accumulate in the wild. **Nothing has ever been deployed**, so there are
+zero installs and zero shapes — which makes right after the first real
+deployment (#212) the moment this is worth most, not before it. Building an
+upgrade path for installs that do not exist would be designing against guesses.
+Explicitly rejected either way: Terraform (a second IaC tool and a state
+distribution problem, for no gain over CDK), SAM (overlaps CDK), and storing
+deploy credentials in Secrets Manager (circular — reading it needs credentials).
 
 `deploy:check` creates a CloudFormation **change set** without executing it, and
 fails if any data-holding resource would be replaced or removed:
