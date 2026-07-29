@@ -1664,6 +1664,7 @@ const PUBLIC_ROUTES: Record<string, RouteHandler> = {
   "POST /signup": signupHandler,
   "POST /signup/batch": signupBatchHandler,
   "GET /confirm": confirmHandler,
+  "GET /unsubscribe": unsubscribeHandler,
   "POST /unsubscribe": unsubscribeHandler,
   "GET /orgs/{org}/lists/{list}/public": publicListHandler,
   "GET /orgs/{org}/directory": publicDirectoryHandler,

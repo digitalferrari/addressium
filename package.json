@@ -23,7 +23,8 @@
     "bootstrap:aws": "./scripts/aws-bootstrap.sh",
     "teardown:aws": "./scripts/aws-teardown.sh",
     "deploy:check": "./scripts/deploy-check.sh",
-    "predeploy": "./scripts/deploy-check.sh"
+    "predeploy": "./scripts/deploy-check.sh",
+    "dev": "npm run build && node scripts/dev-server.mjs"
   },
   "devDependencies": {
     "@testing-library/dom": "^10.4.0",
@@ -33,6 +34,7 @@
     "@types/node": "^26.1.2",
     "jsdom": "^30.0.0",
     "typescript": "^7.0.2",
-    "vitest": "^4.1.10"
+    "vitest": "^4.1.10",
+    "dynalite": "^4.0.0"
   }
 }

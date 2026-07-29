@@ -9,3 +9,5 @@ addressium.config.json
 coverage/
 .DS_Store
 *.log
+
+.dev-outbox/

@@ -1704,12 +1704,41 @@ KMS, EventBridge Scheduler) for anyone who wants them. The suite's fourth skip i
 a placeholder that is only registered when LocalStack is *unreachable*, so it is
 never un-skipped — it disappears instead, and the total drops from 254 to 253.
 
-**A local dev mode is not built** (compendium #61)
-**[Decided r2 — not yet built]**. The target is `npm run dev` running the *same*
-router on a port — the single biggest maintainability lever available, because it
-makes bugs reproducible without AWS. Today there is no `dev` script at the repo
-root and no HTTP server anywhere that mounts the router; the only `dev` scripts
-in the workspace are the three Vite frontends.
+**`npm run dev` — the API on a port, no AWS** (compendium #61, #232).
+`scripts/dev-server.mjs` starts an HTTP server on :4000 that mounts the **same
+route table** the Lambda router dispatches on, backed by dynalite and an on-disk
+mail outbox. No credentials, no egress, no Docker.
+
+Point a console at it with `VITE_API_BASE=http://localhost:4000`. Reproduce a
+scoped-role bug with `DEV_ROLE=analyst DEV_ORGS=summit npm run dev` — the four
+roles are the ones in `packages/rbac`.
+
+*What is real*: every route handler, verbatim, and everything they call —
+domain, adapters, Cedar RBAC, zod validation, CORS. *What is faked*: DynamoDB
+(dynalite, in-process, with the same key schema and all three GSIs as the CDK
+stack), Secrets Manager (a literal value), SES (NDJSON in `.dev-outbox/`).
+
+**It cannot drift, and that is enforced.** The route table is imported from
+`ROUTE_KEYS`, the patterns are compiled from those strings, and dispatch goes
+through the same `adminRouter`/`publicRouter` the Lambda uses. A new route is
+reachable locally with no change to the dev server.
+`packages/integration-tests/test/dev-server.test.ts` fails if the file ever
+grows a route literal of its own, stops reading the exported table, reaches past
+the router to a handler, opens CORS to `*`, or ungates the local-secret path. A
+dev server that mirrors routes by hand rots within a week and is worse than
+none, because it answers confidently and wrongly.
+
+**Two gaps, both real (#232).** Neither is served locally yet:
+
+- **Routes that enqueue to SQS.** Launching a campaign writes to a queue the
+  sender drains, and there is no local queue. So the signup → confirm → opt-in
+  half of the journey works and the send half does not.
+- **`POST /orgs`.** Provisioning is its own Lambda outside the router table, so
+  the dev server cannot create an org — which blocks the journey at step one
+  until a fixture seeds one directly.
+
+Both are named rather than papered over: a dev server that quietly cannot do
+something is the failure mode this whole section is about.
 
 ### 9.4 Repository layout
 

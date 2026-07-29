@@ -19,6 +19,18 @@ const cache = new Map<string, string>();
 export async function getSecret(secretArn: string): Promise<string> {
   const cached = cache.get(secretArn);
   if (cached !== undefined) return cached;
+  // Local dev (#232): `npm run dev` has no Secrets Manager, so a value that is
+  // not an ARN is taken literally.
+  //
+  // Gated on BOTH conditions, and the gate is the point. Accepting any non-ARN
+  // would turn a production misconfiguration — a config file with a secret NAME
+  // where an ARN belongs — from a loud `InvalidParameterException` into a
+  // deployment that quietly signs every confirmation token with the string
+  // "confirm-secret". The env var is set only by the dev server.
+  if (process.env.ADDRESSIUM_LOCAL === "1" && !secretArn.startsWith("arn:")) {
+    cache.set(secretArn, secretArn);
+    return secretArn;
+  }
   const res = await client.send(new GetSecretValueCommand({ SecretId: secretArn }));
   const value = res.SecretString ?? "";
   cache.set(secretArn, value);
