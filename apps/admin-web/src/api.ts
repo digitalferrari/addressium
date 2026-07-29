@@ -455,7 +455,9 @@ export interface CreateOrgResult {
   orgId: string;
   setupComplete: boolean;
   alreadyExisted: boolean;
-  dns: { type: string; name: string; value: string }[];
+  /** `note` explains what breaks without the record — MAIL FROM and DMARC
+   * both fail quietly, so the row has to say so (#200). */
+  dns: { type: string; name: string; value: string; note?: string }[];
 }
 
 export const api = {

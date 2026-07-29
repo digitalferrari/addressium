@@ -1255,6 +1255,11 @@ export class ControlPlaneStack extends Stack {
           "ses:CreateEmailIdentity",
           "ses:GetEmailIdentity",
           "ses:TagResource",
+          // Deliverability (#200): the custom MAIL FROM that puts the envelope
+          // sender on the org's own domain so SPF aligns, and SES-side
+          // bounce/complaint suppression on the org's configuration set.
+          "ses:PutEmailIdentityMailFromAttributes",
+          "ses:PutConfigurationSetSuppressionOptions",
           // CreateUserPool is deliberately absent: pools are link-only (#18,
           // #226). Provisioning validates the operator's existing pool with
           // DescribeUserPool and never creates one.

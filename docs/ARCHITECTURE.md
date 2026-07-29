@@ -1372,9 +1372,49 @@ the rendered HTML by `plainTextFrom()` rather than authored twice (two bodies
 drift, and the one nobody looks at is the one that drifts). Links become
 `label <url>` so a text reader can still reach them — which matters most for the
 unsubscribe link. `SentMessage.text` had existed since the port was written with
-nothing ever setting it, so every newsletter went out HTML-only. This is one item
-of #200; the rest of that issue (MAIL FROM, account suppression, DMARC
-enforcement, `EmailClass`) is still open.
+nothing ever setting it, so every newsletter went out HTML-only.
+
+**Envelope-sender alignment (#200).** Provisioning now sets a custom MAIL FROM —
+`bounce.<domain>` — on each org's SES domain identity, and the returned DNS
+guidance carries the MX and SPF records for it. This is the difference between
+"we publish SPF" and "our SPF counts": SPF authenticates the **envelope** sender,
+so with SES's default return path the passing SPF record belongs to
+`amazonses.com`, is unaligned with the visible From, and DMARC discards it. DKIM
+alignment alone still carries DMARC, but it is a single leg — a forwarder that
+rewrites the body breaks the signature and takes the entire authentication result
+with it, where an aligned SPF pass would have survived.
+
+`BehaviorOnMxFailure` is `USE_DEFAULT_VALUE`, not `REJECT_MESSAGE`: an operator
+who has not published the MX record yet falls back to the amazonses.com return
+path rather than having the org's mail halt. The cost of that choice is that a
+forgotten record fails **quietly**, which is why the record's DNS row says so
+rather than sitting unlabelled among the DKIM CNAMEs.
+
+**DMARC is a path, not a record.** The `_dmarc` policy is now an org setting
+(`dmarcPolicy`), still defaulting to `p=none`, and the DNS row states plainly
+that `p=none` is monitor-only — receivers report failures and deliver the mail
+anyway, so a domain parked there has DMARC records and no DMARC protection. The
+default stays `none` because enforcing before reading the aggregate reports
+quarantines your own legitimate mail from senders you forgot about; `quarantine`
+and `reject` are one field change once those reports are clean.
+
+**From addresses are validated in code.** `saveList` refuses a `fromAddress`
+outside the org's own domains (subdomains allowed, since an SES domain identity
+covers them). Previously the address was taken verbatim and enforcement was left
+to SES — which defers the failure to send time on a scheduled campaign, and in a
+multi-tenant deployment is not enforcement at all: SES checks the *account's*
+verified identities, so two orgs in one account could each send as the other.
+
+**SES-side suppression.** Each org's configuration set carries
+`SuppressedReasons: [BOUNCE, COMPLAINT]`. addressium's own suppression store
+still gates every send; this catches what that store cannot — the window between
+a bounce arriving and our handler recording it, and any path that skips the
+check. Re-mailing an address SES already knows is dead is a direct reputation
+cost.
+
+Still open from #200 and split into its own issue: `EmailClass`
+(marketing/transactional separation), a second configuration set, class-aware
+eligibility, and the `ipMode` flag that no infrastructure implements.
 
 ---
 

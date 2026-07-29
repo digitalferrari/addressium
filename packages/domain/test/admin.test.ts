@@ -30,8 +30,27 @@ const listInput = {
   physicalAddress: "123 Main St",
 };
 
-test("saveList persists and lists newsletters per org", async () => {
+/**
+ * A minimal org, needed because saveList now validates the From address against
+ * the domains this org actually owns (#200).
+ */
+async function withOrg(domains = ["northwindtimes.example"]) {
   const stores = memStores();
+  await stores.organizations.put({
+    orgId: ORG,
+    name: "Summit",
+    domains,
+    sesConfigSet: "cs",
+    ipMode: "shared",
+    suppressionScope: "hybrid",
+    defaultTimezone: "UTC",
+    setupComplete: true,
+  });
+  return stores;
+}
+
+test("saveList persists and lists newsletters per org", async () => {
+  const stores = await withOrg();
   await saveList(stores, listInput);
   const all = await stores.lists.list(ORG);
   assert.equal(all.length, 1);
@@ -39,7 +58,7 @@ test("saveList persists and lists newsletters per org", async () => {
 });
 
 test("setListVisibility opens/closes and rejects unknown lists", async () => {
-  const stores = memStores();
+  const stores = await withOrg();
   await saveList(stores, listInput);
   const closed = await setListVisibility(stores, ORG, "ledger", "closed");
   assert.equal(closed.visibility, "closed");
@@ -163,4 +182,49 @@ test("a brand-new draft has no schedule to preserve", async () => {
   });
   assert.equal(fresh.schedule, undefined);
   assert.equal(fresh.status, "draft");
+});
+
+// ---- From-address ownership (#200) ----
+
+test("a From address on a domain the org does not own is REFUSED", async () => {
+  // It used to be taken verbatim, with enforcement left to SES. That defers the
+  // failure to SEND time on a scheduled campaign, as an opaque SES error — and
+  // in a multi-tenant deployment it is not even enforcement: two orgs verified
+  // in the same AWS account can each send as the other's domain, because SES
+  // checks the ACCOUNT's identities, not the tenant's.
+  const stores = await withOrg(["northwindtimes.example"]);
+  await assert.rejects(
+    () => saveList(stores, { ...listInput, fromAddress: "l@someoneelse.example" }),
+    /not on a domain this org owns/,
+  );
+});
+
+test("a subdomain of an owned domain is allowed", async () => {
+  // An SES domain identity covers its subdomains: verifying `example.com` lets
+  // you send as `news@mail.example.com`, and refusing that would block the
+  // normal marketing/transactional subdomain split.
+  const stores = await withOrg(["northwindtimes.example"]);
+  const list = await saveList(stores, { ...listInput, fromAddress: "l@news.northwindtimes.example" });
+  assert.equal(list.fromAddress, "l@news.northwindtimes.example");
+});
+
+test("a domain that merely ENDS WITH an owned one is refused", async () => {
+  // The suffix check is anchored on a leading dot. Without that anchor,
+  // `notnorthwindtimes.example` passes an `endsWith` against
+  // `northwindtimes.example` — a lookalike domain registered by anyone.
+  const stores = await withOrg(["northwindtimes.example"]);
+  await assert.rejects(
+    () => saveList(stores, { ...listInput, fromAddress: "l@notnorthwindtimes.example" }),
+    /not on a domain this org owns/,
+  );
+});
+
+test("the check is case-insensitive and covers the site domain too", async () => {
+  const stores = await withOrg(["northwindtimes.example", "Summit.Example"]);
+  await saveList(stores, { ...listInput, fromAddress: "l@SUMMIT.example" });
+});
+
+test("saving a list for an org that does not exist fails loudly", async () => {
+  const stores = memStores();
+  await assert.rejects(() => saveList(stores, listInput), /unknown org/);
 });

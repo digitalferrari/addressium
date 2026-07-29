@@ -417,6 +417,14 @@ export const createOrgSchema = z
      * plumbing (§4.9).
      */
     magicLinks: z.boolean().default(false),
+    /**
+     * DMARC enforcement to publish (#200). Defaults to `none` — monitor only —
+     * because turning on enforcement before you have read the aggregate reports
+     * quarantines or rejects your own legitimate mail from senders you forgot
+     * about. It is a starting point, not a resting point; the DNS guidance
+     * returned by provisioning says so.
+     */
+    dmarcPolicy: z.enum(["none", "quarantine", "reject"]).default("none"),
     dedicatedIp: z.boolean().default(false),
     suppressionScope: z.enum(["global", "org", "hybrid"]).default("hybrid"),
     /** `dev` marks a test silo (same workflows, labeled + excluded from cost rollups). */

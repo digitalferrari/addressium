@@ -55,6 +55,7 @@ const orgInput = {
   defaultTimezone: "UTC",
   magicLinks: false,
   dedicatedIp: false,
+  dmarcPolicy: "none" as const,
   suppressionScope: "hybrid" as const,
   environment: "prod" as const,
 };

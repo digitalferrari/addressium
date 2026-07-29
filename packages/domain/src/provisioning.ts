@@ -40,7 +40,31 @@ export interface SesIdentity {
   configSet: string;
   dkimTokens: string[];
   verificationStatus: "pending" | "verified";
+  /**
+   * The custom MAIL FROM subdomain (#200), e.g. `bounce.example.com`.
+   *
+   * Without one the envelope sender — the Return-Path, which is what SPF
+   * actually authenticates — stays on `amazonses.com`. SPF then passes for
+   * Amazon's domain rather than the publisher's, so it is not ALIGNED with the
+   * From header, and DMARC ignores it entirely. DKIM alignment alone would still
+   * carry DMARC, but a message has only that one leg to stand on: a forwarder
+   * that breaks the DKIM signature takes the whole authentication result with
+   * it, where an aligned SPF pass would have survived.
+   */
+  mailFromDomain?: string;
+  /** Region-specific MX host the MAIL FROM subdomain must point at. */
+  mailFromMxHost?: string;
 }
+
+/**
+ * DMARC enforcement level for the published `_dmarc` record (#200).
+ *
+ * `none` is monitor-only: it asks receivers to REPORT failures and to do nothing
+ * about them, so a domain published at `p=none` forever has DMARC records but no
+ * DMARC protection — anyone can spoof the domain and every receiver will still
+ * deliver it. It is the correct STARTING point and the wrong resting point.
+ */
+export type DmarcPolicy = "none" | "quarantine" | "reject";
 
 /** The AWS side effects, injected so provisioning stays testable. */
 export interface ProvisioningProviders {
@@ -51,9 +75,11 @@ export interface ProvisioningProviders {
 }
 
 export interface DnsRecord {
-  type: "CNAME" | "TXT";
+  type: "CNAME" | "TXT" | "MX";
   name: string;
   value: string;
+  /** Why this record exists and what breaks without it — shown in the console. */
+  note?: string;
 }
 
 export interface ProvisionResult {
@@ -75,21 +101,74 @@ export function slugifyOrgId(name: string): string {
   return slug;
 }
 
-function dnsRecords(domain: string, dkimTokens: string[]): DnsRecord[] {
+/** The custom MAIL FROM subdomain for a sending domain (#200). */
+export const mailFromDomainFor = (domain: string): string => `bounce.${domain}`;
+
+/** The MX host a custom MAIL FROM subdomain must point at, per region (#200). */
+export const mailFromMxHostFor = (region: string): string => `feedback-smtp.${region}.amazonses.com`;
+
+/**
+ * The records the operator publishes so mail from this domain authenticates
+ * (§4.11, #200).
+ *
+ * The MAIL FROM pair is the part that used to be missing. SPF authenticates the
+ * ENVELOPE sender, not the From header — so with SES's default return path the
+ * SPF that passes belongs to `amazonses.com`, is unaligned with the visible
+ * From, and contributes nothing to DMARC. Publishing an MX and an SPF record on
+ * a `bounce.` subdomain moves the envelope onto the publisher's own domain and
+ * makes that pass count.
+ */
+export function dnsRecords(
+  domain: string,
+  dkimTokens: string[],
+  opts: { dmarcPolicy?: DmarcPolicy; mailFromDomain?: string; mailFromMxHost?: string } = {},
+): DnsRecord[] {
   const dkim: DnsRecord[] = dkimTokens.map((t) => ({
     type: "CNAME",
     name: `${t}._domainkey.${domain}`,
     value: `${t}.dkim.amazonses.com`,
+    note: "DKIM. Signs the message body; the only authentication that survives most forwarding.",
   }));
-  return [
+  const policy = opts.dmarcPolicy ?? "none";
+  const records: DnsRecord[] = [
     ...dkim,
-    { type: "TXT", name: domain, value: "v=spf1 include:amazonses.com ~all" },
     {
       type: "TXT",
-      name: `_dmarc.${domain}`,
-      value: "v=DMARC1; p=none; rua=mailto:dmarc@" + domain,
+      name: domain,
+      value: "v=spf1 include:amazonses.com ~all",
+      note: "SPF for the From domain. Note this authenticates the ENVELOPE sender, which is why the MAIL FROM records below matter.",
     },
   ];
+  if (opts.mailFromDomain && opts.mailFromMxHost) {
+    records.push(
+      {
+        type: "MX",
+        name: opts.mailFromDomain,
+        value: `10 ${opts.mailFromMxHost}`,
+        // BehaviorOnMxFailure is USE_DEFAULT_VALUE, so a missing MX degrades to
+        // the amazonses.com return path rather than halting the org's mail. That
+        // is deliberate — but it also means a forgotten record fails QUIETLY,
+        // losing SPF alignment with nothing visibly broken.
+        note: "Custom MAIL FROM. Receives bounce/complaint reports for the envelope sender. Without it SES silently falls back to amazonses.com and SPF stops aligning.",
+      },
+      {
+        type: "TXT",
+        name: opts.mailFromDomain,
+        value: "v=spf1 include:amazonses.com ~all",
+        note: "SPF for the MAIL FROM subdomain. This is the record DMARC's SPF leg actually checks.",
+      },
+    );
+  }
+  records.push({
+    type: "TXT",
+    name: `_dmarc.${domain}`,
+    value: `v=DMARC1; p=${policy}; rua=mailto:dmarc@${domain}`,
+    note:
+      policy === "none"
+        ? "DMARC, MONITOR ONLY. p=none asks receivers to report failures and to do nothing about them — the domain is still spoofable. Read the rua reports until legitimate mail passes, then move to p=quarantine and finally p=reject."
+        : `DMARC, ENFORCING (p=${policy}). Confirm every legitimate sender for this domain — including anything outside addressium — passes DKIM or aligned SPF before leaving this in place.`,
+  });
+  return records;
 }
 
 export async function provisionOrganization(
@@ -111,7 +190,15 @@ export async function provisionOrganization(
   // Idempotent: re-running returns the existing org (never double-provisions).
   const existing = await stores.organizations.get(orgId);
   if (existing) {
-    return { org: existing, dns: dnsRecords(input.primaryDomain, []), alreadyExisted: true };
+    return {
+      org: existing,
+      dns: dnsRecords(input.primaryDomain, [], {
+        dmarcPolicy: existing.dmarcPolicy ?? "none",
+        mailFromDomain: existing.mailFromDomain ?? mailFromDomainFor(input.primaryDomain),
+        mailFromMxHost: mailFromMxHostFor(input.region),
+      }),
+      alreadyExisted: true,
+    };
   }
 
   // The pool link and the signing key exist ONLY to serve magic-link tokens, so
@@ -146,6 +233,8 @@ export async function provisionOrganization(
     ...(subscriberPoolId ? { subscriberPoolId } : {}),
     ...(magicLink ? { magicLink } : {}),
     sesConfigSet: ses.configSet,
+    ...(ses.mailFromDomain ? { mailFromDomain: ses.mailFromDomain } : {}),
+    dmarcPolicy: input.dmarcPolicy,
     ipMode: input.dedicatedIp ? "dedicated" : "shared",
     suppressionScope: input.suppressionScope,
     environment: input.environment,
@@ -185,5 +274,13 @@ export async function provisionOrganization(
     });
   }
 
-  return { org, dns: dnsRecords(input.primaryDomain, ses.dkimTokens), alreadyExisted: false };
+  return {
+    org,
+    dns: dnsRecords(input.primaryDomain, ses.dkimTokens, {
+      dmarcPolicy: input.dmarcPolicy,
+      ...(ses.mailFromDomain ? { mailFromDomain: ses.mailFromDomain } : {}),
+      ...(ses.mailFromMxHost ? { mailFromMxHost: ses.mailFromMxHost } : {}),
+    }),
+    alreadyExisted: false,
+  };
 }

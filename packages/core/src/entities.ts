@@ -35,6 +35,12 @@ export type DeploymentSuppressionScope = "global" | "org" | "hybrid";
 export type MergeTagSource = "profile" | "feed" | "system" | "token_claim";
 export type MergeTagScope = "per_recipient" | "per_campaign" | "token_claim";
 export type IpMode = "shared" | "dedicated";
+/**
+ * DMARC enforcement published in the org's `_dmarc` record (#200). `none` is
+ * monitor-only: receivers report failures and deliver the mail anyway, so a
+ * domain left there has DMARC records without DMARC protection.
+ */
+export type DmarcPolicy = "none" | "quarantine" | "reject";
 export type OrgEnvironment = "prod" | "dev";
 export type LinkClass = "editorial" | "advertising";
 export type EventType =
@@ -134,6 +140,21 @@ export interface Organization {
     audience: string;
   };
   sesConfigSet: string;
+  /**
+   * Custom MAIL FROM subdomain, e.g. `bounce.example.com` (#200). Absent on orgs
+   * provisioned before it existed, which keeps the SES default return path and
+   * therefore an SPF pass that DMARC will not count as aligned.
+   */
+  mailFromDomain?: string;
+  /**
+   * The DMARC policy published in the org's `_dmarc` record (#200).
+   *
+   * Optional because an org can be written straight to the store without going
+   * through provisioning; absent is read as `none` everywhere. `none` is
+   * monitor-only — the right place to START and the wrong place to stay, since
+   * at `p=none` the domain is still freely spoofable.
+   */
+  dmarcPolicy?: DmarcPolicy;
   ipMode: IpMode;
   suppressionScope: DeploymentSuppressionScope;
   /**

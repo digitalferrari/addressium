@@ -14,6 +14,8 @@ import {
   CreateConfigurationSetCommand,
   CreateConfigurationSetEventDestinationCommand,
   UpdateConfigurationSetEventDestinationCommand,
+  PutConfigurationSetSuppressionOptionsCommand,
+  PutEmailIdentityMailFromAttributesCommand,
   type EventDestinationDefinition,
 } from "@aws-sdk/client-sesv2";
 import {
@@ -26,6 +28,7 @@ import type {
   SigningKey,
   SubscriberPoolSpec,
 } from "@addressium/domain";
+import { mailFromDomainFor, mailFromMxHostFor } from "@addressium/domain";
 
 /** Stable name so re-provisioning updates the same destination (#208). */
 const EVENT_DESTINATION_NAME = "addressium-sns";
@@ -89,9 +92,32 @@ export class AwsProvisioningProviders implements ProvisioningProviders {
   async ensureSesDomainIdentity(orgId: string, domain: string): Promise<SesIdentity> {
     const configSet = `addressium-${orgId}`;
     try {
-      await this.ses.send(new CreateConfigurationSetCommand({ ConfigurationSetName: configSet }));
+      await this.ses.send(
+        new CreateConfigurationSetCommand({
+          ConfigurationSetName: configSet,
+          // Account-level suppression, scoped to this org's config set (#200).
+          //
+          // addressium already suppresses in its own store, so this is belt and
+          // braces — but the two catch different things. Ours only knows about
+          // bounces this deployment has SEEN and processed; SES's list is what
+          // stops a send at the API boundary, before it becomes a bounce, which
+          // covers the window between a bounce arriving and our handler
+          // recording it, and covers any path that bypasses our suppression
+          // check. Repeatedly mailing an address SES already knows is dead is a
+          // direct reputation cost.
+          SuppressionOptions: { SuppressedReasons: ["BOUNCE", "COMPLAINT"] },
+        }),
+      );
     } catch (e) {
       if ((e as { name?: string }).name !== "AlreadyExistsException") throw e;
+      // An org provisioned before #200 has a config set with no suppression
+      // options; re-provisioning must bring it up to date rather than skip it.
+      await this.ses.send(
+        new PutConfigurationSetSuppressionOptionsCommand({
+          ConfigurationSetName: configSet,
+          SuppressedReasons: ["BOUNCE", "COMPLAINT"],
+        }),
+      );
     }
     await this.ensureEventDestination(configSet);
 
@@ -112,7 +138,59 @@ export class AwsProvisioningProviders implements ProvisioningProviders {
       );
       dkimTokens = created.DkimAttributes?.Tokens ?? [];
     }
-    return { configSet, dkimTokens, verificationStatus: verified ? "verified" : "pending" };
+
+    const mailFromDomain = mailFromDomainFor(domain);
+    await this.ensureMailFrom(domain, mailFromDomain);
+
+    return {
+      configSet,
+      dkimTokens,
+      verificationStatus: verified ? "verified" : "pending",
+      mailFromDomain,
+      mailFromMxHost: mailFromMxHostFor(await this.region()),
+    };
+  }
+
+  /** The client's resolved region — needed for the MAIL FROM MX host (#200). */
+  private async region(): Promise<string> {
+    const r = this.ses.config.region;
+    return typeof r === "function" ? await r() : r;
+  }
+
+  /**
+   * Put the envelope sender on the publisher's own domain (#200).
+   *
+   * Without this the Return-Path stays `*.amazonses.com`. SPF authenticates the
+   * ENVELOPE sender, so the SPF that passes belongs to Amazon and is unaligned
+   * with the visible From — DMARC discards it, leaving DKIM as the message's
+   * only authentication leg. That is survivable until a forwarder rewrites the
+   * body and breaks the signature, at which point the message has nothing.
+   *
+   * `USE_DEFAULT_VALUE` rather than `REJECT_MESSAGE`: if the operator has not
+   * published the MX record yet, SES falls back to the amazonses.com return path
+   * instead of refusing to send. Choosing the other way would mean a DNS record
+   * the operator has not got to yet silently halts the org's entire mail flow.
+   * The trade is that a forgotten record degrades QUIETLY — which is why the DNS
+   * guidance calls it out rather than listing it as one row among many.
+   */
+  private async ensureMailFrom(domain: string, mailFromDomain: string): Promise<void> {
+    try {
+      await this.ses.send(
+        new PutEmailIdentityMailFromAttributesCommand({
+          EmailIdentity: domain,
+          MailFromDomain: mailFromDomain,
+          BehaviorOnMxFailure: "USE_DEFAULT_VALUE",
+        }),
+      );
+    } catch (e) {
+      // Not fatal: mail still sends on the default return path. Loud, because
+      // the whole point of this call is an alignment gap nothing else reports.
+      console.error("provisioning: could not set custom MAIL FROM — SPF will not align", {
+        domain,
+        mailFromDomain,
+        error: (e as Error).message,
+      });
+    }
   }
 
   /**

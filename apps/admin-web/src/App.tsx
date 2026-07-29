@@ -2203,10 +2203,20 @@ function AddOrganization() {
               : "Publish these DNS records — the org cannot send until SES verifies the domain."}
           </div>
           <table className="table">
-            <thead><tr><th>Type</th><th>Name</th><th>Value</th></tr></thead>
+            <thead><tr><th>Type</th><th>Name</th><th>Value</th><th>Why</th></tr></thead>
             <tbody>
+              {/* The `Why` column is load-bearing, not decoration (#200): a
+                  missing MAIL FROM MX record and a DMARC policy parked at
+                  p=none both fail SILENTLY — mail keeps flowing, and the
+                  protection everyone assumes is there is not. A table of
+                  eight indistinguishable rows is how that happens. */}
               {result.dns.map((r, i) => (
-                <tr key={i}><td>{r.type}</td><td><code>{r.name}</code></td><td><code>{r.value}</code></td></tr>
+                <tr key={i}>
+                  <td>{r.type}</td>
+                  <td><code>{r.name}</code></td>
+                  <td><code>{r.value}</code></td>
+                  <td className="muted">{r.note ?? ""}</td>
+                </tr>
               ))}
             </tbody>
           </table>

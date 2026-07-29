@@ -32,8 +32,47 @@ export const ZERO_COUNTERS: HotCounters = {
   unsubscribes: 0,
 };
 
-/** Create or replace a newsletter/list from a validated payload. */
+/** The domain part of an address, lowercased. Empty string if there isn't one. */
+const domainOf = (address: string): string => address.slice(address.lastIndexOf("@") + 1).toLowerCase();
+
+/**
+ * Is this address on one of the org's own domains, or a subdomain of one? (#200)
+ *
+ * Subdomains count because an SES domain identity covers them: verifying
+ * `example.com` lets you send as `news@mail.example.com`. The suffix check is
+ * anchored on a leading dot so `notexample.com` does not match `example.com`.
+ */
+export function fromAddressAllowed(address: string, orgDomains: string[]): boolean {
+  const from = domainOf(address);
+  if (!from) return false;
+  return orgDomains.some((d) => {
+    const owned = d.trim().toLowerCase();
+    return owned.length > 0 && (from === owned || from.endsWith(`.${owned}`));
+  });
+}
+
+/**
+ * Create or replace a newsletter/list from a validated payload.
+ *
+ * The From address is checked against the org's own domains (#200). It used to
+ * be taken verbatim, with enforcement left entirely to SES rejecting the send —
+ * which means the failure surfaces at SEND time, on a scheduled campaign, as an
+ * opaque SES error, rather than at the moment somebody typed the wrong domain
+ * into a form. Worse, in a multi-tenant deployment "SES will reject it" is only
+ * true across accounts: if two orgs in the same account both verified their
+ * domains, org A could set a From address on org B's verified domain and SES
+ * would happily send it.
+ */
 export async function saveList(stores: Stores, input: schemas.CreateListInput): Promise<List> {
+  const org = await stores.organizations.get(input.orgId);
+  if (!org) throw new Error(`unknown org ${input.orgId}`);
+  if (!fromAddressAllowed(input.fromAddress, org.domains)) {
+    throw new Error(
+      `fromAddress ${input.fromAddress} is not on a domain this org owns (${org.domains.join(", ")}). ` +
+        `Sending as a domain you have not verified fails DMARC and, where it is another tenant's ` +
+        `verified domain, sends as them.`,
+    );
+  }
   const list: List = {
     orgId: input.orgId,
     listId: input.listId,
