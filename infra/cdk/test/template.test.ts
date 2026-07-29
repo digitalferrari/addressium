@@ -1357,3 +1357,20 @@ test("the rotation function can move a staging label (#234)", () => {
   assert.ok(grants.includes("secretsmanager:UpdateSecretVersionStage"), "finishSecret cannot promote");
   assert.ok(grants.includes("secretsmanager:PutSecretValue"), "createSecret cannot stage");
 });
+
+test("the diversion alarm names BOTH causes, since one is not replayable (#236)", () => {
+  // `ExecuteProcessingFailure.Records` fires for a transform bug and for
+  // Firehose's 500-active-partition quota alike, and the two need opposite
+  // responses: the first is fixed and replayed, the second CANNOT be replayed —
+  // the replay function re-runs the same transform into the same partitions and
+  // hits the same wall — and needs a quota increase. An operator paged with only
+  // "replay them" will do the thing that cannot work.
+  const t = template({}, { enableAnalytics: "true" });
+  const alarm = Object.values(t.findResources("AWS::CloudWatch::Alarm")).find(
+    (a) => (a.Properties as { MetricName?: string }).MetricName === "ExecuteProcessingFailure.Records",
+  )!;
+  const desc = (alarm.Properties as { AlarmDescription: string }).AlarmDescription;
+  assert.match(desc, /partition/i, "the quota cause is not mentioned");
+  assert.match(desc, /replay/i, "the transform cause has no next step");
+  assert.match(desc, /CANNOT recover/i, "nothing warns that replay is useless for the quota case");
+});

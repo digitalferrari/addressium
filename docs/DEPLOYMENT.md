@@ -446,6 +446,34 @@ association, and there is still no `doctor` command.
   from `opsAlertEmail`, whose ARN is the `OpsAlertsTopicArn` output. A CloudWatch
   **dashboard** is created (#229) — its URL is the `OpsDashboardUrl` output, and
   it shows the same alarm set the health endpoint derives its badge from.
+- **The analytics tier has a tenant ceiling (#236).** Only relevant with
+  `enableAnalytics` on. Firehose allows **500 active dynamic partitions per
+  delivery stream**, and the fact tier partitions on `org_id` × `event_date` —
+  so the working set is roughly **the number of orgs that send on a given day**,
+  plus a little for records straddling a UTC midnight. One delivery stream
+  serves the whole deployment.
+
+  Past that line, records for the excess partitions divert to `events-errors/`.
+  Two things make this nastier than an ordinary limit:
+
+  - `AnalyticsTransformFailedAlarm` fires, but it says *"records are being
+    parked"*, which reads as a transform bug. An operator will go and look at
+    the Lambda, and the Lambda will be fine.
+  - **Replay does not recover it.** `replayHandler` re-runs the same transform
+    into the same partitions and hits the same wall. Every other diversion cause
+    has a working recovery path; this one does not.
+
+  It is also bursty rather than gradual: a deployment sitting at 300 orgs
+  crosses the line on the first day a few extra publications happen to send,
+  loses a slice of that day, and looks fine again tomorrow. Partial days are the
+  hardest analytics defect to notice.
+
+  **What to do.** The quota is a *soft* limit — raise it through AWS Support
+  before you approach it, not after. Watch the org count that actually sends
+  daily, not the org count you have. If you are heading past a few hundred
+  sending tenants, the partition key itself needs revisiting (#236); do not
+  reach for a larger `bufferingHints.intervalInSeconds`, which lengthens each
+  partition's active window and makes this **worse**.
 - **The send DLQ.** `SendDlqUrl` is where poison send descriptors land, and
   `SendDlqNotEmptyAlarm` is what tells you. Drain it deliberately; nothing
   redrives it for you.

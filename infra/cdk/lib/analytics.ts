@@ -177,8 +177,17 @@ export function wireAnalytics(scope: Construct, props: AnalyticsWiringProps): vo
         comparisonOperator: ComparisonOperator.GREATER_THAN_THRESHOLD,
         evaluationPeriods: 1,
         treatMissingData: TreatMissingData.NOT_BREACHING,
+        // The description names BOTH causes, because they need opposite
+        // responses and the metric cannot tell them apart (#236). A transform
+        // bug is fixed and then replayed; a partition-quota breach is NOT
+        // replayable — `replayHandler` re-runs the same transform into the same
+        // partitions and hits the same wall — and needs a quota increase. An
+        // operator paged at 3am with only "replay them" will do the thing that
+        // cannot work.
         alarmDescription:
-          "addressium: analytics records diverted to events-errors/ — replay them (#186)",
+          "addressium: analytics records diverted to events-errors/ (#186). Two causes: a transform " +
+          "failure (fix, then invoke the replay function), or Firehose's 500-active-partition quota " +
+          "with too many orgs sending in one day (#236) — replay CANNOT recover that, raise the quota.",
       }),
     );
   }

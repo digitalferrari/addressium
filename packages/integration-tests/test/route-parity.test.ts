@@ -71,6 +71,60 @@ test("the router declares no handler for a route CDK never registers", () => {
   assert.deepEqual(orphaned, [], `handlers with no route: ${orphaned.join(", ")}`);
 });
 
+/**
+ * Every `api.addRoutes({ path, methods: [...] })` call in the stack (#238).
+ *
+ * The public surface is wired differently from the admin one: each public route
+ * gets its OWN Lambda, pointed straight at a handler, rather than going through
+ * `publicRouter`. So `PUBLIC_ROUTES` is a manifest rather than a live dispatch
+ * table in production — but it IS live in `npm run dev` (#232), which mounts it,
+ * and it is the thing anyone reads to answer "what does the public API expose".
+ *
+ * Until this existed the parity test read only `adminRoute(...)`, so the public
+ * half could drift in either direction with nothing catching it. #234 proved
+ * that: it added `GET /unsubscribe` to CDK, and the manifest entry had to be
+ * added separately a commit later. Nothing failed in between.
+ */
+function publicRoutesDeclaredInCdk(): string[] {
+  const src = readFileSync(STACK, "utf8");
+  const out: string[] = [];
+  const re = /api\.addRoutes\(\{([\s\S]{0,600}?)\}\);/g;
+  for (let m = re.exec(src); m; m = re.exec(src)) {
+    const block = m[1]!;
+    // Admin routes carry `authorizer: adminAuth`; the helper-declared ones are
+    // already covered above. Anything left is the unauthenticated surface.
+    if (/authorizer:/.test(block)) continue;
+    const path = block.match(/path:\s*"([^"]+)"/)?.[1];
+    const methods = block.match(/methods:\s*\[([^\]]*)\]/)?.[1] ?? "";
+    if (!path) continue;
+    // Served by `services/tokens`, not the API — the JWKS handler needs
+    // kms:GetPublicKey, and giving the API Lambda that grant to keep one
+    // manifest tidy would be the wrong trade. Excluded by name so the exception
+    // is visible rather than being a hole in the regex.
+    if (path.endsWith("/.well-known/jwks.json")) continue;
+    for (const mm of methods.matchAll(/HttpMethod\.([A-Z]+)/g)) out.push(`${mm[1]} ${path}`);
+  }
+  return out;
+}
+
+test("every PUBLIC route in CDK has an entry in the router's table (#238)", () => {
+  const declared = publicRoutesDeclaredInCdk();
+  assert.ok(declared.length > 0, "regex must actually match the CDK public route calls");
+  const missing = declared.filter((r) => !ROUTE_KEYS.public.includes(r));
+  assert.deepEqual(
+    missing,
+    [],
+    `public routes absent from PUBLIC_ROUTES — unreachable in \`npm run dev\`, and the manifest ` +
+      `now lies about the public surface: ${missing.join(", ")}`,
+  );
+});
+
+test("PUBLIC_ROUTES declares no route CDK never registers (#238)", () => {
+  const declared = publicRoutesDeclaredInCdk();
+  const orphaned = ROUTE_KEYS.public.filter((r) => !declared.includes(r));
+  assert.deepEqual(orphaned, [], `manifest entries with no CDK route: ${orphaned.join(", ")}`);
+});
+
 test("admin and public dispatch tables are disjoint", () => {
   // The public router runs unauthenticated. If an admin routeKey leaked into
   // its table, that handler would be reachable without a JWT — the per-route

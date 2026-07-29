@@ -1668,6 +1668,12 @@ const PUBLIC_ROUTES: Record<string, RouteHandler> = {
   "POST /unsubscribe": unsubscribeHandler,
   "GET /orgs/{org}/lists/{list}/public": publicListHandler,
   "GET /orgs/{org}/directory": publicDirectoryHandler,
+  // The subscriber site reads branding to theme itself, unauthenticated. It was
+  // registered in CDK and missing from this manifest (#238) — so it worked in
+  // the deployed stack and was unreachable in `npm run dev`, which is exactly
+  // the drift the parity guard now catches.
+  "GET /orgs/{org}/branding": brandingHandler,
+
   "GET /version": versionHandler,
   "POST /webhooks/entitlement": entitlementSyncHandler,
   "POST /webhooks/identity": identitySyncHandler,
