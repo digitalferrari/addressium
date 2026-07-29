@@ -1073,6 +1073,36 @@ dimension snapshots up to a day — that lag is the price of keeping the analyti
 plane off the sending path. Reporting weights **clicks** over MPP-inflated opens
 (§4.22).
 
+**When the pipeline breaks, someone is paged (#186).** Three gaps used to
+compound into silent data loss: the transform's `catch` discarded the error
+without binding it, so a bundle break produced no log line anywhere; the delivery
+stream had no CloudWatch logging configuration at all; and neither analytics
+Lambda had an error or throttle alarm, because both were constructed at the
+bottom of the stack — after the alarm loop and after the dashboard. A field
+rename could send 100% of records to `events-errors/` while Athena kept answering
+from older partitions, just progressively emptier, and the gap surfaced weeks
+later as "why is last month blank?".
+
+Now: the error is bound and logged with its `recordId` (the handle Firehose files
+it under, so the log line points at the object to replay); the stream logs to its
+own group; both Lambdas are alarmed alongside every other handler; and two alarms
+watch the pipeline rather than its parts — Firehose `DeliveryToS3.DataFreshness`
+over an hour (delivery has stopped, whatever the cause) and
+`ExecuteProcessingFailure.Records` above zero (records are being parked). All of
+it is opt-in with the tier, so a default deploy pays for no alarms on a pipeline
+it does not have.
+
+**`events-errors/` can be replayed.** `replayHandler` reads the parked objects,
+recovers the original payload from each record's base64 `rawData`, re-runs the
+same transform, and writes the rows into the partitions Firehose would have used
+— so Athena's partition projection finds them with no catalog change. It is
+invoked **on demand, never on a schedule**: a replay is a response to a known,
+fixed defect, and running it automatically would re-run the same broken transform
+and file the records straight back, turning one incident into a loop. Records
+that still fail stay parked rather than being written unprocessed, the written
+key derives from the source object so a repeat run overwrites instead of
+duplicating, and the source is deleted only after its rows land.
+
 **GDPR erasure and the lake (#164).** Rows already written to `events/` are
 GZIP-compressed, dynamically partitioned, append-only objects. Rewriting them per
 request is neither cheap nor atomic, and a half-rewritten partition is worse than

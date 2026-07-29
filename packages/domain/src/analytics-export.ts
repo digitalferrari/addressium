@@ -124,3 +124,85 @@ export function erasureFromImage(image: Record<string, DdbAttr> | undefined): Er
   if (!orgId || !subscriberId || !erasedAt) return null;
   return { orgId, subscriberId, erasedAt };
 }
+
+/**
+ * One record Firehose parked under `events-errors/` (#186).
+ *
+ * Firehose writes its error output as newline-delimited JSON, one object per
+ * failed record, with the ORIGINAL payload base64-encoded in `rawData`. That is
+ * what makes replay possible at all: the datum is not lost, it is filed
+ * somewhere nothing reads.
+ */
+export interface FirehoseErrorRecord {
+  /** The original record, base64-decoded. */
+  rawData: string;
+  errorCode?: string;
+  errorMessage?: string;
+  attemptsMade?: number;
+}
+
+/**
+ * Parse a Firehose error-output object into its records (#186).
+ *
+ * Tolerant by design: a malformed line is SKIPPED rather than aborting the
+ * batch. An error-output file is by definition written during an incident, and
+ * refusing to replay ninety-nine good records because the hundredth is truncated
+ * is the wrong trade — the whole point of this path is to recover what can be
+ * recovered.
+ */
+export function parseFirehoseErrorOutput(body: string): FirehoseErrorRecord[] {
+  const out: FirehoseErrorRecord[] = [];
+  for (const line of body.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    try {
+      const parsed = JSON.parse(trimmed) as { rawData?: unknown; errorCode?: unknown; errorMessage?: unknown; attemptsMade?: unknown };
+      if (typeof parsed.rawData !== "string") continue;
+      out.push({
+        rawData: Buffer.from(parsed.rawData, "base64").toString("utf8"),
+        ...(typeof parsed.errorCode === "string" ? { errorCode: parsed.errorCode } : {}),
+        ...(typeof parsed.errorMessage === "string" ? { errorMessage: parsed.errorMessage } : {}),
+        ...(typeof parsed.attemptsMade === "number" ? { attemptsMade: parsed.attemptsMade } : {}),
+      });
+    } catch {
+      continue;
+    }
+  }
+  return out;
+}
+
+/**
+ * The S3 prefix a lake row belongs to — the same partitioning Firehose applies
+ * (#186), so a replayed row lands where a live one would and Athena's partition
+ * projection finds it without any catalog change.
+ */
+export function lakePartitionPrefix(row: EventAnalyticsRow): string {
+  return `events/org_id=${row.org_id}/event_date=${row.event_date}/`;
+}
+
+/**
+ * Group rows into the objects a replay should write (#186).
+ *
+ * Pure, so the partitioning is unit-tested rather than discovered against a live
+ * bucket during an incident — which is the only time this code runs.
+ */
+export function planReplayWrites(
+  rows: EventAnalyticsRow[],
+  suffix: string,
+): { key: string; body: string }[] {
+  const byPrefix = new Map<string, EventAnalyticsRow[]>();
+  for (const row of rows) {
+    const prefix = lakePartitionPrefix(row);
+    const bucket = byPrefix.get(prefix);
+    if (bucket) bucket.push(row);
+    else byPrefix.set(prefix, [row]);
+  }
+  return [...byPrefix.entries()].map(([prefix, group]) => ({
+    // Named for the source object, so a replay is traceable back to the error
+    // file it recovered — and so replaying the same file twice overwrites rather
+    // than duplicating, which on an append-only lake is the difference between
+    // a fix and a second incident.
+    key: `${prefix}replay-${suffix}.json`,
+    body: group.map((r) => JSON.stringify(r)).join("\n") + "\n",
+  }));
+}

@@ -742,3 +742,88 @@ test("a non-prod stage does not silently start billing for backups (#190)", () =
     [],
   );
 });
+
+test("both analytics Lambdas are alarmed like every other handler (#186)", () => {
+  // They were built at the very bottom of the stack, after the alarm loop AND
+  // after the dashboard — so neither had an error or throttle alarm. A transform
+  // failing on every record diverted the whole fact tier to `events-errors/`
+  // with nobody paged.
+  const t = template({}, { enableAnalytics: "true" });
+  const alarms = t.findResources("AWS::CloudWatch::Alarm");
+  for (const label of ["AnalyticsTransform", "AnalyticsSnapshot", "AnalyticsReplay"]) {
+    for (const kind of ["Errors", "Throttles"]) {
+      const id = Object.keys(alarms).find((k) => k.startsWith(`${label}${kind}Alarm`));
+      assert.ok(id, `${label} has no ${kind} alarm`);
+      const actions = (alarms[id!]!.Properties as { AlarmActions?: unknown[] }).AlarmActions;
+      assert.ok(actions?.length, `${label}${kind} alarms nobody`);
+    }
+  }
+});
+
+test("the pipeline itself is watched, not just its Lambdas (#186)", () => {
+  // The scenario: 100% of records fail, everything diverts to `events-errors/`,
+  // and Athena keeps answering from older partitions — just progressively
+  // emptier. Freshness catches "delivery stopped" whatever the cause; the
+  // processing-failure count catches records being parked.
+  const t = template({}, { enableAnalytics: "true" });
+  const alarms = t.findResources("AWS::CloudWatch::Alarm");
+  const byMetric = (name: string) =>
+    Object.values(alarms).find((a) => (a.Properties as { MetricName?: string }).MetricName === name);
+
+  const freshness = byMetric("DeliveryToS3.DataFreshness");
+  assert.ok(freshness, "nothing watches whether the fact tier is reaching S3");
+  assert.equal((freshness!.Properties as { Namespace: string }).Namespace, "AWS/Firehose");
+  assert.ok((freshness!.Properties as { AlarmActions?: unknown[] }).AlarmActions?.length);
+
+  const failures = byMetric("ExecuteProcessingFailure.Records");
+  assert.ok(failures, "nothing watches records landing in events-errors/");
+  // Threshold 0: any record parked is a record missing from every report until
+  // someone replays it.
+  assert.equal((failures!.Properties as { Threshold: number }).Threshold, 0);
+});
+
+test("the Firehose stream logs to CloudWatch (#186)", () => {
+  // It had no logging configuration at all, so a delivery or transformation
+  // failure produced no signal anywhere — the diversion to `events-errors/` was
+  // the only evidence, and nothing watched that either.
+  const t = template({}, { enableAnalytics: "true" });
+  const streams = Object.values(t.findResources("AWS::KinesisFirehose::DeliveryStream"));
+  assert.equal(streams.length, 1);
+  const cfg = (streams[0]!.Properties as { ExtendedS3DestinationConfiguration: Record<string, any> })
+    .ExtendedS3DestinationConfiguration;
+  assert.equal(cfg.CloudWatchLoggingOptions?.Enabled, true);
+  assert.ok(cfg.CloudWatchLoggingOptions?.LogGroupName);
+  assert.ok(cfg.CloudWatchLoggingOptions?.LogStreamName);
+});
+
+test("a replay function exists and can write the lake (#186)", () => {
+  // Records parked under `events-errors/` were unreachable: nothing reprocessed
+  // the prefix, so the diversion was permanent.
+  const t = template({}, { enableAnalytics: "true" });
+  const fns = t.findResources("AWS::Lambda::Function");
+  const replay = Object.keys(fns).find((k) => k.startsWith("AnalyticsReplayFn"));
+  assert.ok(replay, "no replay function");
+  assert.ok("AnalyticsReplayFunctionName" in (t.toJSON().Outputs ?? {}), "and no way to find it");
+
+  // It must be able to READ the error prefix and WRITE the events prefix —
+  // read-only would make it a diagnostic rather than a recovery.
+  const policies = Object.values(t.findResources("AWS::IAM::Policy"));
+  const grants = policies.flatMap((p) =>
+    ((p.Properties as { PolicyDocument: { Statement: Record<string, any>[] } }).PolicyDocument.Statement ?? [])
+      .flatMap((st) => (Array.isArray(st.Action) ? st.Action : [st.Action])),
+  );
+  assert.ok(grants.includes("s3:PutObject"), "replay cannot write recovered rows");
+  assert.ok(grants.includes("s3:DeleteObject*") || grants.includes("s3:DeleteObject"),
+    "replay cannot clear the source, so a second run would duplicate rows");
+});
+
+test("none of the analytics wiring exists when the tier is off (#186)", () => {
+  // The alarms and the replay function are opt-in with the tier they watch —
+  // otherwise a default deploy pays for alarms on a pipeline it does not have.
+  const t = template();
+  assert.deepEqual(Object.keys(t.findResources("AWS::KinesisFirehose::DeliveryStream")), []);
+  const alarms = Object.keys(t.findResources("AWS::CloudWatch::Alarm"));
+  assert.ok(!alarms.some((a) => a.startsWith("Analytics")), `stray analytics alarms: ${alarms}`);
+  const fns = Object.keys(t.findResources("AWS::Lambda::Function"));
+  assert.ok(!fns.some((f) => f.startsWith("AnalyticsReplayFn")));
+});

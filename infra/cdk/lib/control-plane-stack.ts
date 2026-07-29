@@ -1297,6 +1297,29 @@ export class ControlPlaneStack extends Stack {
       }),
     );
 
+    // Created HERE, before the alarm loop, so they are alarmed like every other
+    // handler (#186). They used to be built at the very bottom of the stack,
+    // after both the alarm loop and the dashboard — so neither analytics Lambda
+    // had an error or throttle alarm, and a transform that failed on every
+    // record diverted the entire fact tier to `events-errors/` with nobody paged.
+    let analyticsTransformFn: NodejsFunction | undefined;
+    let analyticsSnapshotFn: NodejsFunction | undefined;
+    let analyticsReplayFn: NodejsFunction | undefined;
+    if (enableAnalytics && analyticsStream) {
+      analyticsTransformFn = fn("AnalyticsExportFn", svc("services/analytics-export/src/index.ts"), "handler");
+      analyticsSnapshotFn = fn("AnalyticsSnapshotFn", svc("services/analytics-export/src/index.ts"), "exportHandler", {
+        TABLE_ARN: table.tableArn,
+        ANALYTICS_BUCKET: analyticsBucket.bucketName,
+      });
+      // Replays whatever Firehose parked under `events-errors/` (#186). Nothing
+      // reprocessed that prefix, so a transform bug was permanent data loss
+      // dressed up as a temporary diversion.
+      analyticsReplayFn = fn("AnalyticsReplayFn", svc("services/analytics-export/src/index.ts"), "replayHandler", {
+        ANALYTICS_BUCKET: analyticsBucket.bucketName,
+      });
+      analyticsBucket.grantReadWrite(analyticsReplayFn);
+    }
+
     // ---- infra alarms (#92) — page ops on a stuck/failing send pipeline ----
     const alarmAction = new SnsAction(opsAlerts);
     // Every alarm, kept so the dashboard and the health endpoint describe the
@@ -1360,7 +1383,11 @@ export class ControlPlaneStack extends Stack {
       ["Unsubscribe", unsubscribeFn],
       ["EntitlementWebhook", entitlementFn],
       ["IdentityWebhook", identityFn],
-    ] as const) {
+      // Present only when the analytics tier is on; filtered below.
+      ["AnalyticsTransform", analyticsTransformFn],
+      ["AnalyticsSnapshot", analyticsSnapshotFn],
+      ["AnalyticsReplay", analyticsReplayFn],
+    ].filter((e): e is [string, NodejsFunction] => Boolean(e[1]))) {
       alarm(`${label}ErrorsAlarm`, new Alarm(this, `${label}ErrorsAlarm`, {
         metric: f.metricErrors({ period: Duration.minutes(5) }),
         threshold: 0,
@@ -1624,21 +1651,23 @@ export class ControlPlaneStack extends Stack {
     });
 
     // ---- reporting read-model (§4.23) ----
-    if (enableAnalytics && analyticsStream) {
-      const transformFn = fn("AnalyticsExportFn", svc("services/analytics-export/src/index.ts"), "handler");
-      const snapshotFn = fn("AnalyticsSnapshotFn", svc("services/analytics-export/src/index.ts"), "exportHandler", {
-        TABLE_ARN: table.tableArn,
-        ANALYTICS_BUCKET: analyticsBucket.bucketName,
-      });
+    if (enableAnalytics && analyticsStream && analyticsTransformFn && analyticsSnapshotFn) {
       wireAnalytics(this, {
-        stage: props.stage,
+        stage,
         table,
         analyticsBucket,
         analyticsStream,
-        transformFn,
-        exportFn: snapshotFn,
+        transformFn: analyticsTransformFn,
+        exportFn: analyticsSnapshotFn,
+        alarm,
       });
       new CfnOutput(this, "AnalyticsBucketName", { value: analyticsBucket.bucketName });
+      if (analyticsReplayFn) {
+        new CfnOutput(this, "AnalyticsReplayFunctionName", {
+          value: analyticsReplayFn.functionName,
+          description: "Invoke to reprocess records parked under events-errors/ (#186)",
+        });
+      }
     } else {
       void analyticsBucket;
     }

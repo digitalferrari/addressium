@@ -17,7 +17,7 @@
  * bundler + base env); this helper wires Firehose, Glue, Athena and the export
  * schedule around them.
  */
-import { Stack } from "aws-cdk-lib";
+import { Duration, RemovalPolicy, Stack } from "aws-cdk-lib";
 import type { Construct } from "constructs";
 import type { Table } from "aws-cdk-lib/aws-dynamodb";
 import type { IStream } from "aws-cdk-lib/aws-kinesis";
@@ -28,6 +28,8 @@ import { CfnDatabase, CfnTable } from "aws-cdk-lib/aws-glue";
 import { CfnWorkGroup } from "aws-cdk-lib/aws-athena";
 import { Role, ServicePrincipal } from "aws-cdk-lib/aws-iam";
 import { Rule, Schedule } from "aws-cdk-lib/aws-events";
+import { LogGroup, LogStream, RetentionDays } from "aws-cdk-lib/aws-logs";
+import { Alarm, ComparisonOperator, Metric, TreatMissingData } from "aws-cdk-lib/aws-cloudwatch";
 import { LambdaFunction } from "aws-cdk-lib/aws-events-targets";
 
 export interface AnalyticsWiringProps {
@@ -39,10 +41,18 @@ export interface AnalyticsWiringProps {
   transformFn: IFunction;
   /** Nightly full-table export Lambda (services/analytics-export `exportHandler`). */
   exportFn: IFunction;
+  /**
+   * Registers an alarm with the stack's SNS action and its dashboard (#186).
+   *
+   * Passed in rather than rebuilt here: an alarm this file created privately
+   * would page nobody and would not appear on the ops dashboard, which is the
+   * exact failure mode this issue is about.
+   */
+  alarm?: (id: string, a: Alarm) => Alarm;
 }
 
 export function wireAnalytics(scope: Construct, props: AnalyticsWiringProps): void {
-  const { stage, table, analyticsBucket, analyticsStream, transformFn, exportFn } = props;
+  const { stage, table, analyticsBucket, analyticsStream, transformFn, exportFn, alarm } = props;
   const account = Stack.of(scope).account;
   const bucket = analyticsBucket.bucketName;
 
@@ -54,7 +64,23 @@ export function wireAnalytics(scope: Construct, props: AnalyticsWiringProps): vo
   analyticsStream.grantRead(firehoseRole);
   transformFn.grantInvoke(firehoseRole);
 
-  new CfnDeliveryStream(scope, "AnalyticsFirehose", {
+  /**
+   * Firehose's own logs (#186). The delivery stream had NO logging
+   * configuration, so a delivery or transformation failure produced no CloudWatch
+   * signal anywhere — the diversion to `events-errors/` was the only evidence,
+   * and nothing watched that either.
+   */
+  const firehoseLogs = new LogGroup(scope, "AnalyticsFirehoseLogs", {
+    retention: RetentionDays.ONE_MONTH,
+    removalPolicy: RemovalPolicy.DESTROY,
+  });
+  const firehoseLogStream = new LogStream(scope, "AnalyticsFirehoseLogStream", {
+    logGroup: firehoseLogs,
+    removalPolicy: RemovalPolicy.DESTROY,
+  });
+  firehoseLogs.grantWrite(firehoseRole);
+
+  const deliveryStream = new CfnDeliveryStream(scope, "AnalyticsFirehose", {
     deliveryStreamType: "KinesisStreamAsSource",
     kinesisStreamSourceConfiguration: {
       kinesisStreamArn: analyticsStream.streamArn,
@@ -71,6 +97,11 @@ export function wireAnalytics(scope: Construct, props: AnalyticsWiringProps): vo
       bufferingHints: { intervalInSeconds: 300, sizeInMBs: 64 },
       compressionFormat: "GZIP",
       dynamicPartitioningConfiguration: { enabled: true },
+      cloudWatchLoggingOptions: {
+        enabled: true,
+        logGroupName: firehoseLogs.logGroupName,
+        logStreamName: firehoseLogStream.logStreamName,
+      },
       processingConfiguration: {
         enabled: true,
         processors: [
@@ -89,6 +120,61 @@ export function wireAnalytics(scope: Construct, props: AnalyticsWiringProps): vo
       },
     },
   });
+
+  // ---- alarms on the pipeline itself (#186) ----
+  //
+  // The scenario these exist for: a field rename or a bundle break makes every
+  // record throw, 100% of traffic diverts to `events-errors/`, and Athena keeps
+  // answering from older partitions — just progressively emptier. Nobody is
+  // paged; you find out weeks later when someone asks why last month is blank.
+  if (alarm) {
+    // Freshness is the single best signal that delivery has stopped, whatever
+    // the cause: a transform failing, a permissions change, a throttle. One hour
+    // is comfortably past the 5-minute buffering interval, so normal operation
+    // never trips it.
+    alarm(
+      "AnalyticsFirehoseFreshnessAlarm",
+      new Alarm(scope, "AnalyticsFirehoseFreshnessAlarm", {
+        metric: new Metric({
+          namespace: "AWS/Firehose",
+          metricName: "DeliveryToS3.DataFreshness",
+          dimensionsMap: { DeliveryStreamName: deliveryStream.ref },
+          statistic: "Maximum",
+          period: Duration.minutes(5),
+        }),
+        threshold: Duration.hours(1).toSeconds(),
+        comparisonOperator: ComparisonOperator.GREATER_THAN_THRESHOLD,
+        evaluationPeriods: 2,
+        // NOT_BREACHING, deliberately: no data means no records are flowing,
+        // which for an opt-in analytics tier on a quiet deployment is normal.
+        // The failure this alarm is for produces records that are LATE, not
+        // absent.
+        treatMissingData: TreatMissingData.NOT_BREACHING,
+        alarmDescription: "addressium: analytics fact tier is not reaching S3",
+      }),
+    );
+    // Records the transform could not process at all. Threshold 0 — any record
+    // landing in the error prefix is a record missing from every report until
+    // someone replays it.
+    alarm(
+      "AnalyticsTransformFailedAlarm",
+      new Alarm(scope, "AnalyticsTransformFailedAlarm", {
+        metric: new Metric({
+          namespace: "AWS/Firehose",
+          metricName: "ExecuteProcessingFailure.Records",
+          dimensionsMap: { DeliveryStreamName: deliveryStream.ref },
+          statistic: "Sum",
+          period: Duration.minutes(5),
+        }),
+        threshold: 0,
+        comparisonOperator: ComparisonOperator.GREATER_THAN_THRESHOLD,
+        evaluationPeriods: 1,
+        treatMissingData: TreatMissingData.NOT_BREACHING,
+        alarmDescription:
+          "addressium: analytics records diverted to events-errors/ — replay them (#186)",
+      }),
+    );
+  }
 
   // ---- catalog: Glue database + events table (partition projection, no crawler) ----
   const dbName = `addressium_${stage}`;
