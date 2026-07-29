@@ -37,5 +37,8 @@
     "typescript": "^7.0.2",
     "vitest": "^4.1.10",
     "dynalite": "^4.0.0"
+  },
+  "allowScripts": {
+    "esbuild@0.25.12": true
   }
 }

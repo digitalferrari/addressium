@@ -602,12 +602,14 @@ export async function sendCampaign(
   let untokenized = 0;
 
   // Deliverability halt (§4.13, #165). checkDeliverability flips the campaign to
-  // "halted" on a bounce/complaint breach, but NOTHING in the send path read it,
-  // so a halted campaign ran to completion. Re-checked periodically inside the
-  // loop, because a breach detected mid-send must stop the remainder — not just
-  // the next campaign.
+  // "halted" on a bounce/complaint breach — or, for send ids with no Campaign
+  // record (recurring editions, drip, re-engagement), writes a halt MARKER,
+  // which is the only place those sends can be stopped. Re-checked periodically
+  // inside the loop, because a breach detected mid-send must stop the
+  // remainder — not just the next campaign.
   const isHalted = async () =>
-    (await stores.campaigns.get(input.orgId, input.campaignId))?.status === "halted";
+    (await stores.campaigns.get(input.orgId, input.campaignId))?.status === "halted" ||
+    (await stores.halts.isHalted(input.orgId, input.campaignId));
   if (await isHalted()) {
     return { sent: 0, suppressed: 0, skipped: true, halted: true };
   }

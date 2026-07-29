@@ -62,11 +62,11 @@ forwarded-email recipient, and a poisoned dependency in the supply chain.
 |---|---|---|
 | Public plane | Spoofing, DoS/denial-of-wallet, injection | Double opt-in, signed action tokens, zod input validation, in-app honeypot + opt-in reCAPTCHA on `/signup*` (#40); edge rate limits and a WAF CAPTCHA rule are **operator-supplied** (#225) — the stack creates no WebACL, so an unconfigured deploy is genuinely unprotected |
 | Magic-link / main site | **Tampering** (alg confusion, forged token), **EoP** (paywall→account) | RFC 8725 alg-pinning, per-org keys, lite scope, step-up on the main site |
-| Subscriber plane | Spoofing, info disclosure | Signed, single-purpose action tokens (confirm, RFC 8058 unsubscribe) scoped to one subscriber's `sub`; a per-org Cognito pool is **optional** and, under r2, reference-only **[Decided r2 — not yet built]** |
+| Subscriber plane | Spoofing, info disclosure | Signed, single-purpose action tokens (confirm, RFC 8058 unsubscribe) scoped to one subscriber's `sub`; a per-org Cognito pool is **optional** and link-only — addressium never creates one (#18, #226) |
 | Admin plane | **EoP**, repudiation | Server-side RBAC + org scope, TOTP MFA, immutable audit log |
 | Cross-org (tenancy) | **Info disclosure** (BOLA/BFLA) | Server-derived `orgId`, central authz, per-org keys, cross-tenant tests |
-| Feeds/webhooks | **SSRF**, spoofed callbacks | Egress allowlist + private-range blocking, signature verification |
-| Supply chain | Tampering (build), poisoned deps | SLSA provenance, signed releases, SBOM, pinned CI, OIDC-to-AWS |
+| Feeds/webhooks | **SSRF**, spoofed callbacks | Public-range-only egress (blocklist) + DNS pinning, signature verification |
+| Supply chain | Tampering (build), poisoned deps | SBOM, pinned CI, OIDC-to-AWS; SLSA provenance + signed releases planned (§7) |
 
 Two rows need reading carefully, because each mixes a control we ship with one we
 do not.
@@ -102,9 +102,13 @@ Cognito permission at all. The provisioner's grant is three enumerated actions,
 narrowed to exact pool ARNs when the operator names them at deploy time, with an
 explicit `Deny` on the admin pool. There is no subscriber login at all,
 and r2 does not call for one — the pool is the org's, not ours. The subscriber
-surface is four unauthenticated routes: directory, subscribe-to-all, confirm and
-unsubscribe, the last two reached by signed token. A tokenized preference centre
-is **[Decided r2 — not yet built]** — there is no preference route on the API.
+SPA surface is four unauthenticated routes: directory, subscribe-to-all, confirm
+and unsubscribe, the last two reached by signed token. The tokenized
+**preference centre** API is built (#74): `POST /preferences/request` issues a
+signed, `manage`-scoped link and `GET`/`POST /preferences` sit behind it with
+enumeration-safe 202s; the preference page in the SPA is still pending. The
+wider unauthenticated surface — signup, webhooks, JWKS, directory, branding,
+preferences — is enumerated in ARCHITECTURE §4.3.
 
 ---
 
@@ -283,8 +287,9 @@ vector.
 
 - **Double opt-in** means confirmation goes to the address itself — addressium
   cannot be weaponized to spam third parties.
-- **Per-org sending quotas + anomaly alerts** (complaint/bounce spikes → SNS,
-  auto-halt thresholds).
+- **Per-org bounce/complaint rate thresholds + anomaly alerts** (→ SNS,
+  auto-halt on breach, §4.18). There are no per-org **volume** quotas — the
+  brake is rate-based, not cap-based.
 - **Honeypot + opt-in reCAPTCHA** on `/signup` and `/signup/batch` (#40, #230),
   run before any work is done. The honeypot is end-to-end: both the hosted
   signup page and the embed widget render an off-screen, `aria-hidden`,
@@ -295,18 +300,24 @@ vector.
   caught bot looks exactly like a successful signup, would go unreported. The
   limit worth stating: reCAPTCHA runs **only** when the org has set
   `recaptchaSecretArn`, so it is off unless configured.
-- **AWS Budgets** alarms are the spend cap that ships. WAF **rate-based rules**
-  and a WAF **CAPTCHA** rule are the operator's to add (#30, #31)
-  **[Decided r2 — not yet built]** — so until an operator WebACL is associated,
+- **AWS Budgets** notifications are the spend cap that ships — a monthly cost
+  budget with ACTUAL 80% and FORECASTED 100% email alerts, created by the
+  one-time account bootstrap (`infra/bootstrap/addressium-bootstrap.yaml`),
+  not by the app stack. WAF **rate-based rules**
+  and a WAF **CAPTCHA** rule are the operator's to add (#30, #31, #225) — so
+  until an operator WebACL is associated,
   the denial-of-wallet story is Budgets plus the in-app checks above, and there
   is no per-IP brake in front of the unauthenticated endpoints.
 
 ### 4.5 SSRF (feeds) & stored-HTML / XSS
 
 - **Feeds** fetch operator-supplied URLs server-side — textbook **SSRF**. Guard:
-  HTTPS-only, **egress allowlist**, block link-local/private ranges
-  (`169.254/16`, `10/8`, `172.16/12`, `192.168/16`, `127/8`, `0/8`), reject
-  DNS-rebinding by pinning the resolved IP, and set tight timeouts. Reference
+  HTTPS-only, **blocklist of non-public ranges** — link-local/private/loopback/
+  CGNAT (`169.254/16`, `10/8`, `172.16/12`, `192.168/16`, `127/8`, `0/8`,
+  `100.64/10`) — reject
+  DNS-rebinding by pinning the resolved IP, and set tight timeouts. Note the
+  model honestly: any *public* HTTPS host is fetchable; this is a blocklist,
+  not an egress allowlist. Reference
   guard: [`services/feeds/src/guard.ts`](../services/feeds/src/guard.ts).
   (Fetchers run in **Lambda, which has no IMDS endpoint** — removing the
   `169.254.169.254` credential-theft path — but internal/VPC SSRF still matters.)
@@ -515,21 +526,23 @@ delivery of the event stream is an integrity control.
   `EVENT#<at>#<eventId>`, so a redelivered event overwrites its own row rather
   than double-counting. Built.
 - **DLQ on the send path** (#92): `SendQueue` has a dead-letter queue with
-  `maxReceiveCount: 5`, and two of the 24 alarms watch it (DLQ-not-empty, queue
+  `maxReceiveCount: 5`, and two of the 28 alarms watch it (DLQ-not-empty, queue
   age). A message that repeatedly fails to send is inspectable and replayable
   instead of lost. Built.
-- ~~SQS between SNS and `EventsFn`~~ **Done** (#20, #44, #218).
-  Today SES → SNS invokes `EventsFn` **directly**, which is an async Lambda
-  invocation: AWS retries twice and then discards the event permanently, and
-  there is no events DLQ. Interposing SQS adds durable buffering, a real DLQ,
-  and partial-batch-failure reporting. Until it lands, treat bounce and
-  complaint ingestion as best-effort, not guaranteed.
+- **SQS between SNS and `EventsFn`** (#20, #44, #218). Built: SES → SNS → SQS →
+  `EventsFn`, with durable buffering, an events DLQ with its own alarm pair,
+  and partial-batch-failure reporting. Before this, SNS invoked `EventsFn`
+  directly — async Lambda invocation, two retries, then permanent loss.
 - **Event write + counter increment in one `TransactWriteItems`** (#57), made
   exactly-once by the deterministic `eventId`.
-  **Done** (#221) — campaign counters were derived by
-  folding the whole event list on every read; the stored `Campaign.counters`
-  field is only ever zero-initialized and nothing increments it, so any figure
-  served straight from that field reads zero.
+  **Done** (#221) — readers prefer the stored `Campaign.counters` over folding
+  the event log. Two honest edges: sends under an id with no Campaign record
+  (recurring editions, drip, re-engagement) record the event and skip the
+  counter rather than resurrect a campaign row — their figures still fold the
+  log; and the counter update originally keyed on the wrong item
+  (`CAMPAIGN#…` instead of `CAMPAIGNREC#…`), which failed every transaction
+  on real DynamoDB — caught and fixed with a stubbed-client regression test
+  (`dynamo-append-fallback.test.ts`).
 
 ---
 
@@ -538,11 +551,11 @@ delivery of the event stream is an integrity control.
 | Control | Requirement |
 |---|---|
 | IAM | Least-privilege per Lambda; scoped resource ARNs; **no wildcards**; no long-lived keys |
-| Detection | CloudTrail (all regions), GuardDuty, AWS Config, Security Hub |
+| Detection | **Operator/account-level, not shipped:** CloudTrail (all regions), GuardDuty, AWS Config, Security Hub — expected to exist in a production account; none are created by the stack |
 | Edge | **Operator-supplied WAF** (#30, #31, #225): create or reuse a REGIONAL WebACL for the HTTP API and a CLOUDFRONT-scope one (in `us-east-1`) for the SPAs — AWS managed common + known-bad-inputs rule sets, a per-IP rate limit, optionally a CAPTCHA rule on `/signup` — then associate them |
-| Storage | S3 Block Public Access on; SSE-KMS; TLS-only bucket policies |
+| Storage | S3 Block Public Access on; SSE-KMS on the DynamoDB table and both SNS topics (customer-managed key, rotation on); buckets use SSE-S3 defaults; TLS-only bucket policies |
 | Compute | IMDSv2 only (any EC2/containers); minimal Lambda perms; DLQs |
-| Budget | AWS Budgets + anomaly alarms (denial-of-wallet backstop) |
+| Budget | AWS Budgets monthly budget with ACTUAL 80% / FORECASTED 100% email alerts (ships in the account bootstrap; no Cost Anomaly Detection) |
 
 ## 6. Frontend hardening
 
@@ -597,7 +610,10 @@ authorizes the cross-origin request, so no ambient-authority CSRF exists.
 Because addressium is **self-hosted OSS**, build/release integrity is a
 first-class control:
 
-- **SLSA** build provenance; **Sigstore/cosign**-signed release artifacts.
+- **SLSA** build provenance and **Sigstore/cosign**-signed release artifacts are
+  **planned, not wired** — no release/signing workflow exists yet (nothing has
+  been released). The SBOM below is real; provenance/signing land with the
+  first tagged release.
 - Published **SBOM** (CycloneDX) per release.
 - GitHub Actions **pinned by commit SHA** (every `uses:` in `.github/workflows/`
   carries a full-SHA pin + a version comment); workflow `permissions`
@@ -643,28 +659,26 @@ Secrets Manager/SSM. Hardening beyond the defaults is documented, not assumed.
 turns on, so it is stated plainly rather than left to be inferred:
 
 - **Edge protection is the operator's step.** r2 makes both WebACLs
-  operator-supplied (#30, #31, #66): addressium creates neither, and the
-  operator creates or reuses them and associates them with the API stage and the
-  two distributions. **[Decided r2 — not yet built]** — the current stack still
-  creates both ACLs and associates them, unconditionally, in every stage. So do
-  not read "WAF and rate limiting ship out of the box" as a durable property of
-  addressium: it is true of today's template and is scheduled to stop being
-  true. Plan the operator WebACL now. Without one, the public plane's brakes are
-  the in-app controls in §3 and §4.4 — double opt-in, signed action tokens, zod
-  validation, the honeypot check, and reCAPTCHA where an org has configured a
-  secret — and nothing rate-limits by IP.
-- **Alarms fire into a topic nobody is subscribed to.** All 24 CloudWatch alarms
-  publish to an SNS topic the stack creates, and a fresh deploy adds **no
-  subscription** to it — no email, no PagerDuty, no Slack. Alerting is therefore
-  silent until an operator subscribes something. r2 goes further and has
-  addressium consume an **external** ops topic instead of creating its own
-  (#32, #67, config `opsAlertTopicArn` / `opsAlertEmail`)
-  **[Decided r2 — not yet built]**; that config key does not exist yet.
-- **Nothing preflights either of the above.** The only preflight that exists is
-  `npm run deploy:check`, and it covers a different concern — whether a deploy
-  would replace or remove a data-holding resource. No command warns that no WAF
-  is associated or that no alert target is configured, so shipping unprotected
-  is currently silent.
+  operator-supplied (#30, #31, #66, #225) and that is the shipped reality: the
+  stack creates **no** WebACL, and associates any ARNs supplied via
+  `apiWebAclArn` / `cloudfrontWebAclArn` with the API stage and the two
+  distributions (`infra/cdk/lib/waf.ts` is a reference rule set, called by
+  nothing). Do not read "WAF and rate limiting ship out of the box" as a
+  property of addressium: without an operator WebACL, the public plane's brakes
+  are the in-app controls in §3 and §4.4 — double opt-in, signed action tokens,
+  zod validation, the honeypot check, and reCAPTCHA where an org has configured
+  a secret — and nothing rate-limits by IP.
+- **Alarms can fire into a topic nobody is subscribed to.** The 28 CloudWatch
+  alarms publish to one SNS topic. Which topic is configuration (#222): set
+  `opsAlertTopicArn` and your existing topic is used, set `opsAlertEmail` and a
+  topic is created with that address subscribed — but set **neither** and the
+  created topic has **no subscription at all**: no email, no PagerDuty, no
+  Slack. Alerting is silent until the operator chooses one of the two keys;
+  `npm run deploy:check` warns when both are empty.
+- **Preflight coverage is partial.** `npm run deploy:check` warns when no WAF
+  is associated and when no alert target is configured (#222, #225), and it
+  refuses deploys that would replace or remove a data-holding resource. There
+  is still no `doctor` command covering anything beyond that.
 
 ## 9. ASVS Level 2 — condensed verification checklist
 
@@ -680,7 +694,7 @@ A living checklist mapped to our controls (full ASVS tracked separately):
 - **V6 Cryptography** — KMS-managed keys; ES256; no home-grown crypto.
 - **V7 Errors/Logging** — structured logs, PII/token redaction, immutable audit.
 - **V9 Communications** — TLS 1.2+ everywhere; HSTS.
-- **V10 Malicious Code** — pinned deps, CodeQL, SBOM, signed releases.
+- **V10 Malicious Code** — pinned deps, CodeQL, SBOM; signed releases planned (§7).
 - **V12 Files/Resources** — SSRF controls on feeds; sanitized/sandboxed HTML.
 - **V13 API** — authz on every object/function; rate limiting is the operator's
   WebACL (§5, §8), not an addressium default.

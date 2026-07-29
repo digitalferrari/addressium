@@ -832,7 +832,9 @@ export async function subscriberSuppressHandler(event: HttpEvent): Promise<HttpR
   try {
     const input = schemas.manualSuppressSchema.parse(JSON.parse(event.body ?? "{}"));
     requireGrant(event, "suppression:manage", input.orgId);
-    return json(200, await manualSuppress(stores(), clock, input));
+    const detail = await manualSuppress(stores(), clock, input);
+    await audit(event, input.orgId, "suppression.suppress", input.email);
+    return json(200, detail);
   } catch (e) {
     return fail(e);
   }
@@ -956,7 +958,9 @@ export async function subscriberUnsuppressHandler(event: HttpEvent): Promise<Htt
     const { orgId, email } = JSON.parse(event.body ?? "{}") as { orgId?: string; email?: string };
     if (!orgId || !email) return json(400, { error: "orgId and email required" });
     requireGrant(event, "suppression:manage", orgId);
-    return json(200, await liftSuppression(stores(), { orgId, email }));
+    const detail = await liftSuppression(stores(), { orgId, email });
+    await audit(event, orgId, "suppression.unsuppress", email);
+    return json(200, detail);
   } catch (e) {
     return fail(e);
   }
@@ -1309,6 +1313,10 @@ export async function importMappedHandler(event: HttpEvent): Promise<HttpResult>
     if (report.errors.length > 0 && report.created === 0 && report.updated === 0) {
       return json(400, { error: report.errors[0], report });
     }
+    // A dry run writes nothing, so there is nothing to account for.
+    if (!body.dryRun) {
+      await audit(event, orgId, "import.run", batchId);
+    }
     // The batch id comes back so the console can link straight to the run it
     // just started — the caller usually did not supply one.
     return json(200, { ...report, batchId });
@@ -1373,6 +1381,10 @@ export async function importHandler(event: HttpEvent): Promise<HttpResult> {
           `columns from an export whose headers differ.`,
         report,
       });
+    }
+    // A dry run writes nothing, so there is nothing to account for.
+    if (!body.dryRun) {
+      await audit(event, orgId, "import.run", body.listId);
     }
     return json(200, report);
   } catch (e) {

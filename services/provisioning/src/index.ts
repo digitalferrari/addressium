@@ -8,8 +8,8 @@
  * is served by the tokens service once the key exists. Idempotent on org id.
  */
 import { schemas } from "@addressium/core";
-import { AwsProvisioningProviders, DynamoStores } from "@addressium/adapters-aws";
-import { provisionOrganization } from "@addressium/domain";
+import { AwsProvisioningProviders, DynamoStores, S3AuditLog } from "@addressium/adapters-aws";
+import { provisionOrganization, recordAudit, SystemClock } from "@addressium/domain";
 import { authorize, grantFromClaims } from "@addressium/rbac";
 
 function env(name: string): string {
@@ -20,6 +20,9 @@ function env(name: string): string {
 
 let _stores: DynamoStores | undefined;
 const stores = () => (_stores ??= new DynamoStores(env("TABLE_NAME")));
+let _audit: S3AuditLog | undefined;
+const auditLog = () => (_audit ??= new S3AuditLog(env("AUDIT_BUCKET")));
+const clock = new SystemClock();
 const providers = new AwsProvisioningProviders();
 
 export interface ProvisionEvent {
@@ -62,6 +65,22 @@ export async function handler(event: ProvisionEvent) {
   }
 
   const result = await provisionOrganization(stores(), providers, parsed.data, { orgId });
+  // Org provisioning is one of §4.19's audited privileged actions. Cross-org,
+  // so the entry is GLOBAL-scoped (orgId null) with the new org as the target;
+  // an idempotent re-run that created nothing is not an event worth logging.
+  // Audit must never take provisioning down with it — log and continue.
+  if (!result.alreadyExisted) {
+    try {
+      await recordAudit(auditLog(), clock, {
+        orgId: null,
+        memberSub: claims.sub ?? "unknown",
+        action: "orgs.create",
+        target: result.org.orgId,
+      });
+    } catch (e) {
+      console.error("audit: append failed", { action: "orgs.create", error: (e as Error).message });
+    }
+  }
   return {
     statusCode: result.alreadyExisted ? 200 : 201,
     headers: { "content-type": "application/json" },

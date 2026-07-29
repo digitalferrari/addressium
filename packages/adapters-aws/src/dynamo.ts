@@ -54,6 +54,7 @@ import type {
   ErasureStore,
   SweepCheckpointStore,
   EventStore,
+  HaltStore,
   ListStore,
   OrganizationStore,
   ImportBatchStore,
@@ -641,13 +642,16 @@ export class DynamoStores implements Stores {
    *
    * `opens` and `clicks` are UNIQUE per subscriber (see deriveCounters), which a
    * plain increment cannot express — so those carry an extra uniqueness marker
-   * in the same transaction. Three outcomes:
+   * in the same transaction. Four outcomes:
    *
    *   - transaction succeeds        -> new event, counter moved
    *   - the EVENT row already exists-> exact redelivery; nothing to do
    *   - only the MARKER exists      -> a genuine repeat open/click by the same
    *                                    subscriber: record the event, but do not
    *                                    move a counter that counts people
+   *   - no CAMPAIGN record exists   -> a send id with no record (recurring
+   *                                    editions, drip/re-engagement steps):
+   *                                    record the event, skip the counter
    */
   private async appendEvent(e: EngagementEvent): Promise<void> {
     const field = DynamoStores.COUNTER_FIELD[e.type];
@@ -659,12 +663,19 @@ export class DynamoStores implements Stores {
     const bumpCounter = {
       Update: {
         TableName: this.tableName,
-        Key: { pk: org(e.orgId), sk: `CAMPAIGN#${e.campaignId}` },
+        // The campaign RECORD — where readers expect `counters` (reporting.ts,
+        // alerts.ts). This used to target `CAMPAIGN#<id>` (a key nothing ever
+        // writes) with the counter at `data.<field>` instead of
+        // `data.counters.<field>`: the attribute_exists guard failed for EVERY
+        // campaign, the whole transaction cancelled, and the event row was
+        // lost with it — on real DynamoDB no counter ever moved and every
+        // append threw.
+        Key: { pk: org(e.orgId), sk: `CAMPAIGNREC#${e.campaignId}` },
         // if_not_exists covers campaigns written before counters were
         // maintained, and rows where the map is absent entirely.
         UpdateExpression:
-          "SET #c = if_not_exists(#c, :empty), #c.#f = if_not_exists(#c.#f, :zero) + :one",
-        ExpressionAttributeNames: { "#c": "data", "#f": field },
+          "SET #c.#cnt = if_not_exists(#c.#cnt, :empty), #c.#cnt.#f = if_not_exists(#c.#cnt.#f, :zero) + :one",
+        ExpressionAttributeNames: { "#c": "data", "#cnt": "counters", "#f": field },
         ExpressionAttributeValues: { ":empty": {}, ":zero": 0, ":one": 1 },
         // Do not resurrect a campaign that does not exist.
         ConditionExpression: "attribute_exists(pk)",
@@ -712,6 +723,21 @@ export class DynamoStores implements Stores {
         // A real second open by the same person. Keep the event — it is genuine
         // history, and #183 deliberately made repeats distinguishable — but do
         // not move a counter whose unit is people, not events.
+        await this.put(eventItem);
+        return;
+      }
+      const campaignMissing = reasons[1]?.Code === "ConditionalCheckFailed";
+      if (campaignMissing) {
+        // Sends that run under an id with no CAMPAIGN item: recurring-series
+        // editions (`<base>-<editionKey>`, feed.ts), drip sub-campaigns and
+        // re-engagement steps. The counter Update's attribute_exists guard
+        // refuses to resurrect the campaign, which used to cancel the WHOLE
+        // transaction — the event row was lost with it, the sender threw AFTER
+        // SES had dispatched the mail, and SES bounce/complaint notifications
+        // for these ids cycled to the events DLQ. Mirror the memory store's
+        // semantic ("never resurrect a campaign that does not exist"): record
+        // the event, skip the counter. Deliverability evaluation for these ids
+        // folds the event log instead of reading stored counters (alerts.ts).
         await this.put(eventItem);
         return;
       }
@@ -833,6 +859,19 @@ export class DynamoStores implements Stores {
         KeyConditionExpression: "pk = :pk AND begins_with(sk, :s)",
         ExpressionAttributeValues: { ":pk": org(orgId), ":s": "CAMPAIGNREC#" },
       }),
+  };
+
+  /**
+   * Halt markers for record-less send ids (recurring-series editions, drip
+   * sub-campaigns, re-engagement steps). Keyed OUTSIDE the CAMPAIGNREC#
+   * prefix so a halted edition never surfaces as a phantom row in
+   * campaigns.list (the console list and usage rollups read that prefix).
+   */
+  halts: HaltStore = {
+    isHalted: async (orgId, campaignId) =>
+      (await this.get<{ at: string }>(org(orgId), `HALT#${campaignId}`)) !== undefined,
+    halt: (orgId, campaignId, at) =>
+      this.put({ pk: org(orgId), sk: `HALT#${campaignId}`, data: { at } }),
   };
 
   series: CampaignSeriesStore = {

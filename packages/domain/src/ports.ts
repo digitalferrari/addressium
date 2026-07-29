@@ -371,6 +371,21 @@ export interface CampaignStore {
   list(orgId: string): Promise<Campaign[]>;
 }
 
+/**
+ * Deliverability halt markers for send ids that have NO Campaign record —
+ * recurring-series editions (`<base>-<editionKey>`), drip sub-campaigns and
+ * re-engagement steps. Their halt cannot live on `Campaign.status` because
+ * there is no row to flip; without this store, `checkDeliverability` silently
+ * dropped the halt for exactly the sends most likely to need it. Written by
+ * `checkDeliverability`, read by the send path's halt gate. Kept out of
+ * `CampaignStore` so halted editions never appear as phantom campaigns in
+ * `campaigns.list` (the console list, usage rollups).
+ */
+export interface HaltStore {
+  isHalted(orgId: string, campaignId: string): Promise<boolean>;
+  halt(orgId: string, campaignId: string, at: string): Promise<void>;
+}
+
 export interface CampaignSeriesStore {
   get(orgId: string, seriesId: string): Promise<CampaignSeries | undefined>;
   put(s: CampaignSeries): Promise<void>;
@@ -555,6 +570,8 @@ export interface Stores {
   sendClaims: SendClaimStore;
   version: VersionStore;
   campaigns: CampaignStore;
+  /** Halt markers for record-less send ids (recurring editions, drip, re-engagement). */
+  halts: HaltStore;
   series: CampaignSeriesStore;
   schedules: SendScheduleStore;
   templates: TemplateStore;

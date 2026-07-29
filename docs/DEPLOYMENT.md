@@ -24,7 +24,8 @@ there is no addressium-hosted control plane.
 
 ## 1. Prerequisites
 
-- **Node 20+** and npm (the repo is an npm-workspaces monorepo).
+- **Node 22+** and npm (the repo is an npm-workspaces monorepo; every Lambda
+  runs `NODEJS_22_X` and `package.json` requires `node >=22`).
 - **An AWS account.** You do **not** deploy with admin credentials. The account
   owner runs a one-time bootstrap that creates a constrained deploy identity;
   everything after §1 runs as that identity.
@@ -77,8 +78,8 @@ CloudFront, Secrets Manager and IAM resources.
 ```bash
 npm install        # all workspaces
 npm run build      # tsc -b across packages/services/apps/infra
-npm test           # 254 tests, no AWS creds needed
-npm run test:web   # 8 component tests
+npm test           # 734 tests (730 passing, 4 conditional skips), no AWS creds needed
+npm run test:web   # 37 component tests
 ```
 
 `npm test` runs in-memory and against a real DynamoDB API (dynalite — no Java,
@@ -113,27 +114,28 @@ Pass with `-c key=value` on `cdk deploy`, or add to `cdk.json` → `context`:
 
 | Context key | Default | Effect |
 | --- | --- | --- |
-| `enableAnalytics` | **off** | When `true`, adds the deferred analytics tier: a Kinesis stream off the DynamoDB table, Firehose → S3, a Glue database + table, and an Athena workgroup, plus the export/snapshot Lambdas. Off by default (#64); the core design does not depend on it. |
+| `enableAnalytics` | **off** | When `true`, adds the deferred analytics tier: a Kinesis stream off the DynamoDB table, Firehose → S3, a Glue database + two tables (`events` and `entities`, #199), and an Athena workgroup, plus the export/snapshot/replay Lambdas. Off by default (#64); the core design does not depend on it. |
 | `enableOpenSearchMirror` | **off** | When `true`, provisions the OpenSearch Serverless mirror fed by DynamoDB Streams (segment search at scale). Off by default (#64). |
 | `auditRetentionYears` | `7` | Object Lock default retention on the audit bucket, in years (7 → 2555 days). See §9. |
 | `confirmUrlBase` | derived | Base URL used in double-opt-in confirmation links. Set this to your subscriber site's origin. |
+| `sesMaxSendRate` | `14` | Your account's SES send rate in messages/second (a fresh production account gets 14) — set it to your real quota. Everything that sends divides this down rather than each taking it whole, so the aggregate stays inside the limit (#176). |
+| `senderMaxConcurrency` | `5` | How many sender Lambdas may run at once. Sets the SQS event source's cap *and* the divisor the sender applies to `sesMaxSendRate`, from one value — the two drifting apart is worse than neither, because it looks configured. |
 
 > **Leave the two analytics flags off unless you are specifically testing them.**
 > They are opt-in, off by default, and demoted out of the core design by #64 —
 > not removed. Both carry standing cost well above the rest of the stack
-> combined. Concretely, on a `dev` synth: default is 252 resources / 21 Lambda
-> functions; `-c enableAnalytics=true -c enableOpenSearchMirror=true` is 277
-> resources / 24 Lambda functions, and adds two more stack outputs
-> (`SegmentCollectionEndpoint`, `AnalyticsBucketName`). Neither flag is set
+> combined. Concretely, on a `dev` synth: default is 338 resources / 28 Lambda
+> functions; `-c enableAnalytics=true -c enableOpenSearchMirror=true` is 380
+> resources / 32 Lambda functions, and emits three more stack outputs
+> (`SegmentCollectionEndpoint`, `AnalyticsBucketName`,
+> `AnalyticsReplayFunctionName`). Neither flag is set
 > anywhere in the repo, and neither has a default value in `cdk.json`.
 
-### Ops alerting configuration **[Decided r2 — not yet built]**
+### Ops alerting configuration
 
 | Field | Meaning |
 | --- | --- |
-| `opsAlertTopicArn` | An **existing** SNS topic the 24 CloudWatch alarms publish to. Alert routing (PagerDuty, Slack, on-call rotation) is account-wide infrastructure; addressium consumes it rather than creating a competing topic (#22/#32/#67). |
-| `sesMaxSendRate` | Your account's SES send rate in messages/second. Defaults to **14**, what a fresh production account gets — set it to your real quota. Everything that sends divides this down rather than each taking it whole, so the aggregate stays inside the limit (#176). |
-| `senderMaxConcurrency` | How many sender Lambdas may run at once (default **5**). Sets the SQS event source's cap *and* the divisor the sender applies to `sesMaxSendRate`, from one value — the two drifting apart is worse than neither, because it looks configured. |
+| `opsAlertTopicArn` | An **existing** SNS topic the CloudWatch alarms publish to. Alert routing (PagerDuty, Slack, on-call rotation) is account-wide infrastructure; addressium consumes it rather than creating a competing topic (#22/#32/#67, #222). |
 | `opsAlertEmail` | Simple alternative for a setup with no existing topic — one email subscription. |
 
 Set **one** of them. With `opsAlertTopicArn`, no topic is created and no
@@ -141,7 +143,7 @@ Set **one** of them. With `opsAlertTopicArn`, no topic is created and no
 does not own. With only `opsAlertEmail`, a topic is created and that address is
 subscribed. Set **neither** and the stack still deploys, but every alarm
 publishes to a topic with no subscribers: `npm run deploy:check` warns about
-exactly this before it inspects anything else, because a stack that ships 26
+exactly this before it inspects anything else, because a stack that ships 28
 alarms into a void *looks* monitored, which is worse than one with none.
 
 ## 4. Deploy
@@ -172,12 +174,14 @@ hook; don't.
 
 > `deploy:check` is validated against change-set fixtures, **never against real
 > CloudFormation**. It is the only preflight that exists — there is no `doctor`
-> command, and nothing anywhere warns you about a missing WAF association or
-> alert target.
+> command. It also warns when no WAF association or alert target is configured
+> (§3), before it inspects anything else.
 
 ### Stack outputs you will need
 
-13 outputs are emitted in every stage (15 with both analytics flags on):
+18 outputs are emitted in a default deploy — 17 when you supply
+`opsAlertTopicArn` (the `OpsAlertsTopicArn` output is then omitted, §3) — 21
+with both analytics flags on, plus `BackupVaultName` in prod:
 
 | Output | Use |
 | --- | --- |
@@ -185,19 +189,18 @@ hook; don't.
 | `AdminPoolId` / `AdminClientId` | `VITE_COGNITO_*` for the admin console. |
 | `AdminSiteBucket` / `PublicSiteBucket` | Sync the built SPA into these. |
 | `AdminSiteUrl` / `PublicSiteUrl` | CloudFront **domain names** — not ARNs. |
-| `OpsAlertsTopicArn` | The topic all 24 alarms publish to today (§3, §9). |
+| `ApiStageArn` | Attach your REGIONAL WebACL here (§8). |
+| `AdminDistributionId` / `PublicDistributionId` | Attach your CLOUDFRONT-scope WebACL to these (§8). |
+| `OpsAlertsTopicArn` | The topic the alarms publish to, when addressium created it (§3, §9). |
+| `OpsDashboardUrl` | The CloudWatch ops dashboard (§9). |
 | `SendQueueUrl` / `SendDlqUrl` | Send pipeline and its dead-letter queue (§9). |
 | `SesEventsTopicArn` | Where SES publishes engagement events. |
 | `AuditBucketName` | The WORM audit bucket (§9). |
+| `UsageIngestFunctionName` | Daily usage-metering Lambda (§9). |
 | `DripStateMachineArn` | The drip Step Functions state machine. |
 
 The Hosted-UI **domain** is not an output — it is the
 `adminHostedUiDomainPrefix` you set in §3.
-
-> **There is no output for the API stage ARN or for either CloudFront
-> distribution ARN.** The WAF runbook in §8 needs all three, and compendium §3
-> says the stack must emit them. **[Decided r2 — not yet built]** — §8 says what
-> to do in the meantime.
 
 ## 5. Build & publish the web apps
 
@@ -215,10 +218,9 @@ build time:
 > with a signed token or no auth at all — it reads no `VITE_COGNITO_*` and sends
 > no `Authorization` header. A subscriber pool belongs to the org, not to
 > addressium, and the addressium subscriber record is the primary identity (§6).
-> There is no preference-centre endpoint on the API either, authenticated or
-> tokenized; the token-based preference centre in
-> [`ARCHITECTURE.md`](ARCHITECTURE.md) §4.10 is
-> **[Decided r2 — not yet built]**.
+> The token-based **preference-centre API** is built (#74 —
+> `POST /preferences/request`, `GET`/`POST /preferences`); its page in the
+> subscriber SPA is **not yet built** (ARCHITECTURE.md §4.10).
 
 ```bash
 VITE_API_BASE="https://<api-id>.execute-api.<region>.amazonaws.com" \
@@ -238,11 +240,11 @@ widget operators paste into any page:
 
 1. Open the admin console and sign in with a seeded `adminEmails` address (set a
    password from the Cognito invite; enable TOTP MFA).
-2. **Create the organization** with an authenticated `POST /orgs`. This runs
-   `services/provisioning`, which creates the org's **KMS ES256 signing key,
-   JWKS, SES identity and configuration set** at runtime (nothing per-org lives
-   in CloudFormation). There is no Add-organization screen in the console yet —
-   this is an API call, made with the JWT the console holds.
+2. **Create the organization** from the console's **Add organization** screen
+   (#226), which calls the authenticated `POST /orgs`. This runs
+   `services/provisioning`, which creates the org's **SES identity and
+   configuration set** — plus the **KMS ES256 signing key** when magic links are
+   on — at runtime (nothing per-org lives in CloudFormation).
 3. Add the org's sending domain and publish the **DKIM/SPF/DMARC** DNS records the
    provisioning step returns. Wait for SES verification to go green.
 4. Create lists, and you're ready to collect signups (double opt-in) and send.
@@ -334,7 +336,8 @@ directory honors these flags at render time.
 > inside a compliance-sensitive mail system, unrelated to sending email. Do not
 > create an LLM provider secret for addressium — there is nothing that would read
 > it, and nothing in the stack can write one. `secretsmanager` access is
-> read-only across every role, asserted at synth.
+> read-only across every role, asserted at synth — with one deliberate exception
+> (#234): the ConfirmSecret rotation function may write **its own** secret.
 
 ---
 
@@ -359,15 +362,15 @@ Create or reuse a WebACL in the **same region as the stack**, scope `REGIONAL`:
 
 1. Add the AWS managed rule groups **`AWSManagedRulesCommonRuleSet`** and
    **`AWSManagedRulesKnownBadInputsRuleSet`**.
-2. Add a **rate-based rule** keyed on source IP. The public surface is 10
-   unauthenticated routes — signup, batch signup, confirm, unsubscribe, the two
-   HMAC webhooks, JWKS, branding, public list, version — and signup is the one
+2. Add a **rate-based rule** keyed on source IP. The public surface is 15
+   unauthenticated route keys (13 paths) — signup, batch signup, confirm,
+   unsubscribe (GET+POST), the two HMAC webhooks, JWKS, branding, public list,
+   the directory, the three preference routes, version — and signup is the one
    that costs money when abused.
 3. Optionally add a **CAPTCHA** action scoped to `POST /signup` and
-   `POST /signup/batch`. The server-side honeypot and the per-org reCAPTCHA check
-   both exist, but reCAPTCHA is off unless the org configures a secret and no
-   shipped signup form renders the honeypot field yet — so today WAF is the only
-   bot control that is actually on.
+   `POST /signup/batch`. The server-side honeypot exists and **both** shipped
+   signup forms render the trap field (#230); the per-org reCAPTCHA check is
+   off unless the org configures a secret.
 4. **Associate** the ACL with the HTTP API's **stage ARN**.
 
 ### 8.2 CLOUDFRONT WebACL — the two SPAs
@@ -427,8 +430,8 @@ Set `opsAlertTopicArn` (or `opsAlertEmail`) in config — see §3. If you suppli
 only an email, the `OpsAlertsTopicArn` output names the topic that was created
 for you; with your own ARN there is no such output.
 
-`deploy:check` (§4) warns when neither is set. It does **not** yet check WAF
-association, and there is still no `doctor` command.
+`deploy:check` (§4) warns when neither is set, and likewise when the WAF ARNs
+are unset. There is still no `doctor` command.
 
 ---
 
@@ -438,10 +441,12 @@ association, and there is still no `doctor` command.
   own `AlertConfig.snsTopicArn` — operator-supplied already, per org — and a
   `halt`-level breach flips the campaign to `halted` so the sender stops. Set
   that topic when you provision the org; with none set, nothing is published.
-- **Infrastructure alarms.** 26 CloudWatch alarms in a default synth: the send
-  queue and its DLQ, errors and throttles across every handler, DynamoDB
-  throttles and system errors. With the analytics tier on there are more — both
-  analytics Lambdas plus two on the Firehose pipeline itself (#186). All publish
+- **Infrastructure alarms.** 28 CloudWatch alarms in a default synth: the send
+  queue and events queue with their DLQs, errors and throttles across every
+  handler, DynamoDB throttles and system errors. With the analytics tier on
+  there are more — errors and throttles across the three analytics Lambdas
+  (transform, snapshot, replay) plus two on the Firehose pipeline itself
+  (#186). All publish
   to one topic: yours if you set `opsAlertTopicArn`, otherwise the one created
   from `opsAlertEmail`, whose ARN is the `OpsAlertsTopicArn` output. A CloudWatch
   **dashboard** is created (#229) — its URL is the `OpsDashboardUrl` output, and
@@ -489,17 +494,15 @@ association, and there is still no `doctor` command.
   including AWS. Treat the bypass permission as break-glass and grant it
   deliberately. Set `auditRetentionYears` before the first deploy: it is stamped
   on every object written from then on and cannot be shortened afterwards.
-- **Logs.** 20 log groups, one per application handler, retention 90 days when
-  `stage` is exactly `"prod"` and **7 days otherwise**. The test is literal string
-  equality, so a `staging` or `prod-eu` stage silently gets 7-day retention.
+- **Logs.** 27 log groups, one per application handler, retention 90 days in
+  `prod` and **7 days in dev/staging** — keyed off the validated `stage` value
+  (#190), so an unrecognised stage fails at synth rather than silently
+  misconfiguring retention.
 - **Usage & cost.** Per-org usage is metered and cost is estimated from configurable
-  rates (see `packages/domain/src/usage.ts`).
-
-> **Campaign send counts read zero.** Hot counters are never incremented —
-> transactional event+counter writes are #57, **[Decided r2 — not yet built]** —
-> so the console's campaign list and the usage rollup that sums it both report 0
-> sent. Campaign *reports* are correct: they fold the full event list on every
-> read.
+  rates (see `packages/domain/src/usage.ts`). Campaign counters are maintained
+  transactionally with each engagement event (#221), so the campaign list and
+  usage rollups read real figures; sends under a record-less id (recurring
+  editions, drip, re-engagement) fold their event log instead.
 
 ## 10. Updating & tearing down
 
@@ -615,8 +618,15 @@ every record with a "why" note for this reason.
 ```bash
 npm run deploy        # deploy:check runs first and cannot be skipped
 npm run test:e2e      # the ten steps
-npx cdk destroy       # non-prod is RemovalPolicy.DESTROY, so teardown is clean
+npm run teardown:aws  # NOT `cdk destroy` — see below
 ```
+
+> **Do not reach for `npx cdk destroy`, even in dev.** The DynamoDB table is
+> `RemovalPolicy.RETAIN` **and** `deletionProtection: true` in *every* stage
+> (#190) — a destroy fails on the table and orphans the audit bucket, the
+> secrets and the admin pool, which are also RETAIN (§10).
+> `scripts/aws-teardown.sh` walks the survivors deliberately: it refuses
+> `prod`, prompts, and disables deletion protection first.
 
 Before the first real deploy, rehearse `deploy:check` across three change
 classes on a throwaway stack — a no-op (exits 0), a stateless edit (exits 0), and

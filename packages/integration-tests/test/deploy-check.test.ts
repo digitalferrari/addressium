@@ -18,6 +18,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 
@@ -202,4 +203,17 @@ test("the refusal explains what to do next", async () => {
   const r = check({ Changes: [change({ Replacement: "True" })] });
   assert.match(r.out, /migration/i);
   assert.match(r.out, /RETAIN does not prevent this/i);
+});
+
+test("deploy-check.sh runs cdk where cdk.json lives", async () => {
+  // `npm run deploy:check` and the root `predeploy` hook invoke the script
+  // from the repo ROOT, where there is no cdk.json — a bare `npx cdk` fails
+  // with "--app is required". Every cdk invocation must be anchored to
+  // infra/cdk, and the config path must point inside it.
+  const sh = readFileSync(resolve(here, "../../../../scripts/deploy-check.sh"), "utf8");
+  const bare = sh
+    .split("\n")
+    .filter((l) => /^\s*npx\s+.*\bcdk\s/.test(l) && !l.trimStart().startsWith("#"));
+  assert.deepEqual(bare, [], `cdk must run from infra/cdk; bare invocations:\n${bare.join("\n")}`);
+  assert.match(sh, /CFG="\$CDK_DIR\/addressium\.config\.json"/);
 });

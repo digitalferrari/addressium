@@ -59,7 +59,8 @@ test("fixed monthly cost accrues with zero sends", () => {
   const e = estimateSendCost({ ...base, subscribers: 0 });
   assert.equal(e.perSendTotalUsd, 0);
   assert.ok(e.fixedMonthlyUsd > 0, "alarms, KMS key and secrets bill regardless");
-  assert.equal(e.fixedMonthlyUsd, 2.4 + 1.0 + 0.8);
+  // 28 alarms ($2.80) + stack data key and 1 org key ($2.00) + 2 secrets ($0.80)
+  assert.equal(e.fixedMonthlyUsd, 2.8 + 2.0 + 0.8);
 });
 
 test("zero and negative inputs do not produce negative money", () => {

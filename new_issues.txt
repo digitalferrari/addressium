@@ -1,0 +1,167 @@
+# Review: Did addressium accurately replicate AWS Pinpoint?
+
+First, the framing that matters. The repo's own claim (README.md:3, docs/ARCHITECTURE.md:3) is
+"a replacement for the *email capabilities* of Amazon Pinpoint" — not a wire-compatible API clone.
+The API surface confirms this: greenfield console-shaped routes (POST /campaigns/schedule,
+/orgs/{org}/segments), no Pinpoint REST paths (/v1/apps/{id}/campaigns|segments|journeys|templates),
+no SDK compatibility. So the honest bar is: feature fidelity + migration path for Pinpoint's email
+use case.
+
+> **Re-verified 2026-07-29** (docs-vs-code audit): every Critical and High finding from the
+> original pass is now fixed — statuses inline with issue refs. The event plane works end to end
+> on paper AND in the template; the importer's compliance hazards are closed. What remains:
+> gzipped-JSONL import, suppression-list import, segment import, async import jobs, SendBulkEmail
+> batching, and segment engagement predicates on the GSI engine. The same pass found — and fixed —
+> a fourth event-plane defect nobody had seen: the counter half of every event append targeted a
+> non-existent key and cancelled the whole transaction on real DynamoDB (see Finding 1).
+
+
+## 1. Critical findings
+
+### [FIXED] 1. The event plane cannot work in a real deployment (three-layer break)
+
+Pinpoint's email analytics rested on its `_email.*` event stream (send/delivered/open/click/bounce/
+complaint/reject/rendering-failure — verified against AWS docs:
+https://docs.aws.amazon.com/pinpoint/latest/developerguide/event-streams-data-email.html).
+Addressium replicates that architecture on paper (SES config set → SNS → events Lambda → counters +
+suppression + Firehose). In code, it's severed at every hop:
+
+1. ~~No event destination.~~ **Fixed (#208).** Provisioning attaches the SES event destination
+   (`CreateConfigurationSetEventDestination` / `Update…` in
+   packages/adapters-aws/src/provisioning.ts); the stack grants it (`SES_EVENTS_TOPIC_ARN` on
+   ProvisioningFn, with the comment that without it the event plane is dead).
+2. ~~No SES message tags.~~ **Fixed.** `SesEmailSender` sets `EmailTags` (org, campaign,
+   subscriber) on every `SendEmailCommand` (packages/adapters-aws/src/ses.ts:81), so events
+   attribute correctly.
+3. ~~Handler can't parse what SNS delivers.~~ **Fixed (#218).** SES → SNS → **SQS** → EventsFn,
+   with a real DLQ pair and partial-batch-failure reporting; `ses-events.ts` unwraps the SNS
+   envelope and normalizes `notificationType` (including `Delivery`, #210). An integration test
+   feeds raw SES-shaped payloads through the handler (events-queue.test.ts, ses-events.test.ts).
+
+**Found in the re-verification (a fourth layer, now fixed):** `appendEvent`'s counter `Update`
+keyed on `CAMPAIGN#<id>` — an item nothing ever writes — with the counter at `data.<field>`
+instead of `data.counters.<field>`. The `attribute_exists` guard therefore failed for EVERY
+campaign on real DynamoDB, the whole `TransactWriteItems` cancelled (event row included), the
+sender threw after SES dispatch, and SES notifications for record-less send ids cycled to the
+events DLQ. Invisible to the suite because dynalite skips transactions and the memory store
+diverges deliberately. Fixed 2026-07-29 with a stubbed-client regression suite
+(packages/integration-tests/test/dynamo-append-fallback.test.ts); sends with no Campaign record
+(recurring editions, drip, re-engagement) keep the event and skip the counter by design.
+
+Original consequence (all now covered): opens, clicks, bounces, complaints ARE recorded; hot
+counters move transactionally (#221); suppression auto-triggers on permanent bounces and
+complaints; `checkDeliverability` fires and its halt persists (halt markers for record-less ids,
+2026-07-29); the click table fills; `lastEngagedAt` advances and the weekly re-engagement sweep
+enrolls (#233).
+
+
+### [MOSTLY FIXED] 2. The "first-class Pinpoint importer" can't read a Pinpoint export
+
+This is the adoption hook (README.md:44, ARCHITECTURE §4.7). Original findings, current status:
+
+- **CSV-only — STILL TRUE, and now documented.** Gzipped JSON Lines of endpoint objects is not
+  supported; the docs now say so plainly (ARCHITECTURE §2, §4.7; DESIGN-COMPENDIUM #59). What
+  exists: the import wizard's mapper reads a real Pinpoint **dotted-column CSV** export
+  (`Address`, `Attributes.*`, `OptOut`, `EndpointStatus`) with saved mappings and fingerprints
+  (#216).
+- ~~Silent no-op on real exports.~~ **Fixed (#209).** A file whose rows all error returns **400**
+  with a named cause, not `200 {created:0}` — on both the plain-CSV and mapped paths.
+- ~~Compliance hazard (OptOut/EndpointStatus imported mailable).~~ **Fixed (#216).** `OptOut` /
+  `EndpointStatus` map to non-mailable; three-state columns; consent basis is declared per import
+  and recorded per subscription (#223).
+- ~~`confirmed`-by-default.~~ **Fixed (#192).** Imports default to `pending`; `confirmed` is
+  refused without an explicit per-column consent basis — the refusal is the point.
+- **Suppression-list import — STILL ABSENT.** Nothing consumes SES `ListSuppressedDestinations`
+  output; bulk-load is one-by-one API calls.
+- **Segment import — STILL ABSENT.** No code references `SegmentDimensions`.
+- **Not async — STILL TRUE.** No S3-upload → Lambda/Step Functions job; imports run inline (the
+  wizard does batch rows under an `ImportBatch` record for traceability).
+
+
+### [FIXED] 3. Bounce handling doesn't distinguish hard from soft
+
+~~`recordBounce` globally suppresses on ANY bounce.~~ **Fixed.** `BounceType` is carried through
+(`"Permanent" | "Transient" | "Undetermined"`, packages/domain/src/suppress.ts:60,84-87) and only
+`Permanent` suppresses; complaints still suppress globally. A transient bounce no longer kills a
+subscriber.
+
+
+### [FIXED] 4. Authorization gap on the reporting endpoint
+
+~~`GET /orgs/{org}/campaigns/{campaign}/report` never calls `authorize()`.~~ **Fixed** (this is
+REVIEW-FINDINGS C1): `authorize(grantFromClaims(...), "reports:view", orgId)` runs before the
+report is built; `usageHandler` checks identically (services/reporting/src/index.ts:42,139).
+
+
+## 2. Feature fidelity vs Pinpoint email
+
+| Pinpoint capability            | Status        | Evidence / gap |
+|--------------------------------|---------------|----------------|
+| Projects → org silos           | OK + better   | Multi-org w/ per-org KMS key, SES identity, config set, dev/prod silos (§4.11) |
+| Endpoints (subscribers)        | PARTIAL       | Flat Record<string,string> attributes only — no multi-valued attributes, no metrics, no Location/Demographic model. `User.UserId`→`externalId` mapping on import EXISTS via the mapper (#216) |
+| Endpoint opt status            | OK + better   | Per-list subscription states + hybrid global/org suppression scopes (§4.13) — richer than Pinpoint's single OptOut |
+| Segments — dynamic             | WEAK          | Predicate DSL covers attribute eq/neq/exists, entitlement, explicit cohorts. Engagement-**recency** predicates are out of scope for the v1 GSI engine — use the opt-in OpenSearch mirror (packages/segment/src/index.ts:54-55). Pinpoint's Behavior/Metrics/Demographic dimensions absent |
+| Segments — imported            | MISSING       | No segment import at all |
+| Campaigns — scheduling         | PARTIAL       | now/at/recurring with DST-aware org+campaign timezone (§4.21). Missing: per-recipient local-time send (IsLocalTime), quiet hours, frequency caps, campaign end dates |
+| Campaigns — A/B                | CUT           | A/B testing was deliberately cut (#63, §4.20) — no A/B code exists. Pinpoint: up to 5 treatments + holdout; addressium: none, by decision |
+| Journeys                       | PARTIAL       | Linear drip sequences (wait→send) modeled via Step Functions — but nothing starts an execution yet (no starter wiring; triggers are signup/manual only). Re-engagement/sunset sweep (§4.22) IS live and is a genuinely good addition |
+| Event-triggered campaigns      | MISSING       | No custom-event ingestion (Pinpoint PutEvents), no event-triggered entry. Triggers: signup, cron, manual only |
+| Transactional send API         | MISSING       | No SendMessages/SendUsersMessages analogue — campaign/drip only (double-opt-in confirmation email is the sole transactional send) |
+| Templates                      | PARTIAL       | MJML/visual/raw-HTML + merge tags (escaped). No Handlebars, no template version history (integer version, no retention), no DefaultSubstitutions |
+| Sending via SES                | OK            | SES v2, per-org config sets, RFC 8058 headers with a signed token and a real route (the `unsub.{org}.example` placeholder is gone). Per-recipient SendEmail — SendBulkEmail 50-destination batching remains a documented later optimization. No attachments |
+| Event stream                   | OK            | Works end to end: destination attached (#208), messages tagged, SNS→SQS→Lambda parses SES envelopes (#218), counters transactional (#221 + the fourth-layer fix above) |
+| Analytics                      | PARTIAL       | Hot counters + click table + opt-in Firehose→S3→Athena lake (§4.23) is a good match for Pinpoint analytics usage. `delivered` events ARE ingested (#210); the `reputation` alert metric computes a real score (#210) but stays disabled by default until a live signal validates it. The click **overlay** (badges painted on the archived body) is not built — the body write isn't either (§4.8) |
+| Suppression                    | PARTIAL       | Auto-suppress on permanent bounce/complaint OK, manual OK (audited), GDPR tombstone OK. SES account-suppression-list import MISSING |
+| Recommender models             | ABSENT        | Fine — out of email-list scope |
+| SMS/push/voice/in-app          | ABSENT        | Deliberate (ARCHITECTURE §2 "email-first"); Pinpoint's surviving channels went to End User Messaging anyway |
+
+
+## 3. What IS faithfully replicated (and where it beats Pinpoint)
+
+Credit where due — the domain layer is well-built and tested:
+
+- Double opt-in with consent provenance (timestamp/IP/source URL) — Pinpoint had no native DOI;
+  this is the feature Pinpoint users bolted on manually.
+- RFC 8058 one-click unsubscribe — Pinpoint never had native list-unsubscribe; this is
+  table-stakes for 2024+ Gmail/Yahoo and it's enforced, signed, and routed.
+- Hybrid suppression scoping (bounces global, unsubs per-org) is a more thoughtful model than
+  Pinpoint's account-level list.
+- The per-link click table (link-id aggregation with the token redacted before persistence, §4.5,
+  §4.8) covers what Pinpoint analytics offered per link; the Mailchimp-style overlay on the
+  archived body awaits the body write.
+- DST-aware recurring scheduling via `ScheduleExpressionTimezone` correctly matches Pinpoint's
+  timezone semantics at org granularity (§4.21).
+- Send lifecycle (pause/resume/archive, never delete) with idempotency claims that survive
+  pausing (§4.6) — solid.
+- Per-org config sets / optional dedicated IPs replicate Pinpoint's deliverability isolation
+  model correctly (§4.11).
+- Dev-org silos with fail-closed send allowlists, Cedar-backed server-side RBAC, token redaction
+  before analytics persistence, SSRF guard on feeds — the security posture is genuinely strong.
+
+
+## 4. Recommended fix order (updated 2026-07-29)
+
+1. ~~Event plane~~ — **done** (#208, tags, #218, #221, plus the fourth-layer counter fix).
+2. ~~Hard/soft bounces~~ — **done** (`bounceType`, Permanent-only suppression).
+3. ~~RBAC on the report route~~ — **done** (REVIEW-FINDINGS C1).
+4. Importer — the compliance hazards are closed (#209, #192, #216, #223) and the docs no longer
+   promise JSONL. Remaining for a true Pinpoint migration: gzipped-JSONL endpoint parser,
+   suppression-list ingest, segment import, S3-based async jobs.
+5. Smaller fidelity items still open: `SendBulkEmail` batching, segment engagement-recency
+   predicates on the GSI engine (OpenSearch mirror is the current answer), per-recipient
+   local-time send / quiet hours / frequency caps, custom-event-triggered campaigns,
+   transactional send API.
+
+Bottom line: as of 2026-07-29 the two migration-critical points this review flagged — getting
+data IN (importer) and seeing what sends DID (event plane) — both work, with the importer's
+consent handling now stricter than Pinpoint's own. The remaining gap list is feature breadth
+(JSONL, segment/suppression import, event-triggered and transactional sending), not correctness.
+With Pinpoint sunsetting October 30, 2026
+(https://docs.aws.amazon.com/general/latest/gr/sunset_services.html), the honest framing is:
+a faithful core with a documented, smaller surface — and the docs now say exactly that.
+
+Sources:
+- https://aws.amazon.com/pinpoint/faqs/
+- https://docs.aws.amazon.com/general/latest/gr/sunset_services.html
+- https://docs.aws.amazon.com/pinpoint/latest/developerguide/event-streams-data-email.html
+- https://docs.aws.amazon.com/pinpoint/latest/developerguide/event-streams.html

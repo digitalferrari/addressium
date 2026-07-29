@@ -40,6 +40,7 @@ import type {
   ErasureStore,
   SweepCheckpointStore,
   EventStore,
+  HaltStore,
   ListStore,
   OrganizationStore,
   SegmentStore,
@@ -413,6 +414,16 @@ export class MemCampaigns implements CampaignStore {
   }
 }
 
+export class MemHalts implements HaltStore {
+  private map = new Map<string, string>();
+  async isHalted(orgId: string, campaignId: string) {
+    return this.map.has(subKey(orgId, campaignId));
+  }
+  async halt(orgId: string, campaignId: string, at: string) {
+    this.map.set(subKey(orgId, campaignId), at);
+  }
+}
+
 export class MemCampaignSeries implements CampaignSeriesStore {
   private map = new Map<string, CampaignSeries>();
   async get(orgId: string, seriesId: string) {
@@ -620,6 +631,7 @@ export function memStores(): Stores {
     sendClaims: new MemSendClaims(),
     version: new MemVersion(),
     campaigns,
+    halts: new MemHalts(),
     series: new MemCampaignSeries(),
     schedules: new MemSendSchedules(),
     templates: new MemTemplates(),

@@ -163,6 +163,13 @@ export async function checkDeliverability(
     const campaign = await stores.campaigns.get(orgId, campaignId);
     if (campaign && campaign.status !== "halted") {
       await stores.campaigns.put({ ...campaign, status: "halted" });
+    } else if (!campaign) {
+      // Recurring-series editions, drip sub-campaigns and re-engagement steps
+      // run under ids with NO Campaign row. Without a marker the halt was
+      // silently dropped here, so a bounce/complaint storm could never stop
+      // exactly the sends that needed it most. The marker is what the send
+      // path's halt gate reads for these ids.
+      await stores.halts.halt(orgId, campaignId, clock.now().toISOString());
     }
   }
   return { breaches, halted };

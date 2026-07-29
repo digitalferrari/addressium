@@ -93,7 +93,7 @@ export const DEFAULT_COST_INPUT: SendCostInput = {
   clickRate: 0.05,
   bounceRate: 0.02,
   orgs: 1,
-  alarms: 24,
+  alarms: 28,
   secrets: 2,
 };
 
@@ -193,9 +193,11 @@ export function estimateSendCost(input: SendCostInput): SendCostEstimate {
       detail: `${input.alarms} × $0.10/month`,
     },
     {
+      // Per-org signing keys PLUS the stack's own customer-managed data key
+      // (DynamoDB/SNS at rest) — forgetting it under-reports the standing bill.
       label: "KMS keys",
-      usd: round(input.orgs * PRICES.kmsKeyMonth),
-      detail: `${input.orgs} org${input.orgs === 1 ? "" : "s"} × $1.00/month`,
+      usd: round((input.orgs + 1) * PRICES.kmsKeyMonth),
+      detail: `1 stack data key + ${input.orgs} org key${input.orgs === 1 ? "" : "s"} × $1.00/month`,
     },
     {
       label: "Secrets Manager",

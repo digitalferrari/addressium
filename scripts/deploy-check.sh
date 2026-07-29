@@ -39,6 +39,12 @@ STACK="${NAME_PREFIX}-${STAGE}"
 # Change-set names must be unique per attempt and match [a-zA-Z][-a-zA-Z0-9]*.
 CHANGE_SET="addressium-check-$$"
 
+# The script is invoked from the repo root (npm's deploy:check / predeploy),
+# but `cdk` only works where cdk.json lives. Anchor everything so a direct
+# invocation from any directory behaves the same.
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+CDK_DIR="$ROOT/infra/cdk"
+
 say()  { printf '\n\033[1m==> %s\033[0m\n' "$*"; }
 info() { printf '    %s\n' "$*"; }
 fail() { printf '\033[31m    ✗ %s\033[0m\n' "$*"; }
@@ -59,7 +65,7 @@ warn() { printf '\033[33m    ! %s\033[0m\n' "$*"; }
 # refusing — but a stack that ships 26 alarms into a topic with no subscribers
 # LOOKS monitored, which is worse than one with no alarms at all.
 say "Checking alert routing"
-CFG="infra/cdk/addressium.config.json"
+CFG="$CDK_DIR/addressium.config.json"
 if [[ -f "$CFG" ]]; then
   OPS_ARN="$(python3 -c "import json,sys;print(json.load(open('$CFG')).get('opsAlertTopicArn','').strip())" 2>/dev/null || echo "")"
   OPS_EMAIL="$(python3 -c "import json,sys;print(json.load(open('$CFG')).get('opsAlertEmail','').strip())" 2>/dev/null || echo "")"
@@ -92,18 +98,18 @@ else
 fi
 
 say "Building"
-npm run build >/dev/null
+(cd "$ROOT" && npm run build) >/dev/null
 
 say "Creating change set for ${STACK} (nothing is applied)"
 if ! aws cloudformation describe-stacks --stack-name "$STACK" --region "$REGION" >/dev/null 2>&1; then
   info "Stack does not exist yet — this would be a CREATE."
   info "Nothing can be replaced on a first deploy, so there is nothing to check."
-  npx --yes cdk diff "$STACK" || true
+  (cd "$CDK_DIR" && npx --yes cdk diff "$STACK") || true
   exit 0
 fi
 
 # --no-execute leaves the change set pending instead of applying it.
-npx --yes cdk deploy "$STACK" --no-execute --change-set-name "$CHANGE_SET" --require-approval never
+(cd "$CDK_DIR" && npx --yes cdk deploy "$STACK" --no-execute --change-set-name "$CHANGE_SET" --require-approval never)
 
 say "Inspecting the change set"
 CHANGES_JSON="$(aws cloudformation describe-change-set \

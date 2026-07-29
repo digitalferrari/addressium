@@ -8,7 +8,14 @@
  */
 import test from "node:test";
 import assert from "node:assert/strict";
-import { SystemClock, sendCampaign, memStores, CaptureSender } from "@addressium/domain";
+import {
+  SystemClock,
+  sendCampaign,
+  memStores,
+  CaptureSender,
+  checkDeliverability,
+  CaptureAlertPublisher,
+} from "@addressium/domain";
 import type { MagicLinkSigner } from "@addressium/domain";
 
 const ORG = "acme";
@@ -71,7 +78,7 @@ test("a campaign that is not halted still sends normally", async () => {
   assert.notEqual(res.halted, true);
 });
 
-test("no campaign record means no halt gate (recurring editions still send)", async () => {
+test("no campaign record and no halt marker means no halt gate (recurring editions still send)", async () => {
   const { stores, clock } = await seed(2);
   const sender = new CaptureSender();
   const res = await sendCampaign(stores, sender, magic, clock, {
@@ -79,4 +86,51 @@ test("no campaign record means no halt gate (recurring editions still send)", as
     campaignId: "daily-1-2026072713",
   });
   assert.equal(res.sent, 2);
+});
+
+test("a halt marker stops a record-less send (recurring edition)", async () => {
+  const { stores, clock } = await seed(5);
+  await stores.halts.halt(ORG, "daily-1-2026072713", clock.now().toISOString());
+
+  const sender = new CaptureSender();
+  const res = await sendCampaign(stores, sender, magic, clock, {
+    ...descriptor,
+    campaignId: "daily-1-2026072713",
+  });
+  assert.equal(res.halted, true, "the halt marker gates the send");
+  assert.equal(res.sent, 0);
+  assert.equal(sender.sent.length, 0, "no mail leaves once halted");
+});
+
+test("a complaint breach on an edition id halts its remainder (the C5 scenario)", async () => {
+  // Recurring-series editions run under `<base>-<editionKey>` with NO Campaign
+  // row. Before halt markers, checkDeliverability's halt was silently dropped
+  // for exactly these ids, so a bounce storm could never stop a series.
+  const { stores, clock } = await seed(3);
+  await stores.alerts.put({
+    orgId: ORG,
+    rules: [{ metric: "complaint_rate", warnAt: 0.001, haltAt: 0.005, enabled: true }],
+    notifyTargets: [],
+  });
+  const EDITION = "daily-1-2026072713";
+  for (let i = 0; i < 3; i++) {
+    await stores.events.append({
+      orgId: ORG, subscriberId: `s00${i}`, campaignId: EDITION, type: "sent",
+      at: clock.now().toISOString(),
+    });
+  }
+  await stores.events.append({
+    orgId: ORG, subscriberId: "s000", campaignId: EDITION, type: "complaint",
+    at: clock.now().toISOString(),
+  });
+
+  const publisher = new CaptureAlertPublisher();
+  const check = await checkDeliverability(stores, publisher, clock, ORG, EDITION);
+  assert.equal(check.halted, true);
+  assert.equal(await stores.halts.isHalted(ORG, EDITION), true, "the halt survives without a campaign row");
+
+  const sender = new CaptureSender();
+  const res = await sendCampaign(stores, sender, magic, clock, { ...descriptor, campaignId: EDITION });
+  assert.equal(res.halted, true);
+  assert.equal(res.sent, 0);
 });

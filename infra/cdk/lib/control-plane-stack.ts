@@ -1316,6 +1316,9 @@ export class ControlPlaneStack extends Stack {
       SES_EVENTS_TOPIC_ARN: sesEvents.topicArn,
     });
     table.grantReadWriteData(provisioningFn);
+    // Org creation is a privileged, audited action (§4.19) — the sink is already
+    // in apiEnv as AUDIT_BUCKET; this is the write grant.
+    auditBucket.grantPut(provisioningFn);
     provisioningFn.addToRolePolicy(
       new PolicyStatement({
         // Per-org resources are created at runtime, so their ARNs cannot be
