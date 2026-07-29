@@ -24,18 +24,34 @@ import { sendToSubscriber } from "./send.js";
 import { unsubscribeAll } from "./unsubscribe.js";
 
 /** Sensible defaults; every field is per-org overridable via `Organization.reengagement`. */
-export const DEFAULT_REENGAGEMENT_POLICY: Required<ReengagementPolicy> = {
+/**
+ * A policy with every decision field filled in.
+ *
+ * `listId` stays OPTIONAL (#233): it is the one field with no sensible default,
+ * because the sweep sends real mail and has to send it from a list carrying a
+ * from-address and a CAN-SPAM footer. Requiring it in the type would force a
+ * placeholder; leaving it optional makes "enabled without a list" a condition the
+ * dispatcher checks and reports, which is what an operator needs to see.
+ */
+export type ResolvedReengagementPolicy = Required<Omit<ReengagementPolicy, "listId">> & {
+  listId?: string;
+};
+
+export const DEFAULT_REENGAGEMENT_POLICY: ResolvedReengagementPolicy = {
   enabled: false,
   coldAfterDays: 180,
   steps: 3,
   stepIntervalDays: 7,
   suppressScope: "org",
+  // No default (#233). The sweep sends real mail and has to send it from a list
+  // that carries a from-address and a CAN-SPAM footer; picking one would mail an
+  // audience the operator did not choose.
 };
 
 /** Fill any omitted fields of a partial policy from the defaults. */
 export function resolveReengagementPolicy(
   policy: Partial<ReengagementPolicy> | undefined,
-): Required<ReengagementPolicy> {
+): ResolvedReengagementPolicy {
   return { ...DEFAULT_REENGAGEMENT_POLICY, ...(policy ?? {}) };
 }
 
@@ -96,7 +112,7 @@ export interface DecisionContext {
   subscriber: Subscriber;
   /** Does the subscriber have at least one non-unsubscribed subscription? */
   hasActiveSubscription: boolean;
-  policy: Required<ReengagementPolicy>;
+  policy: ResolvedReengagementPolicy;
   now: Date;
 }
 
@@ -138,9 +154,22 @@ export interface ReengagementInput {
   subject: string;
   template: EmailTemplate;
   throttle?: SendThrottle;
+  /** Resume point from a previous invocation's result (#233). */
+  cursor?: string;
+  /**
+   * Subscribers to examine in THIS invocation. Bounds the work so a large org
+   * does not time out mid-pass — the caller re-invokes while a cursor comes back.
+   * Default 1000.
+   */
+  maxSubscribers?: number;
 }
 
 export interface ReengagementSweepResult {
+  /**
+   * Where to resume (#233). Present means this invocation hit its budget with
+   * work left; absent means the pass completed.
+   */
+  cursor?: string;
   scanned: number;
   enrolled: number;
   stepped: number;
@@ -170,9 +199,22 @@ export async function runReengagementSweep(
 
   const now = clock.now();
   const nowIso = now.toISOString();
-  const subscribers = await stores.subscribers.list(input.orgId);
 
-  for (const s of subscribers) {
+  // ONE PAGE, resumed from a checkpoint (#233, #182).
+  //
+  // This used to be `subscribers.list(orgId)` — the entire org in memory, plus
+  // an N+1 subscription read per subscriber, with no way to record progress. A
+  // retry restarted from zero, so on an org large enough to matter the sweep
+  // never completed: it burned the same first N subscribers on every attempt and
+  // the tail was never swept at all.
+  //
+  // `budget` bounds one invocation. The caller re-invokes while a cursor comes
+  // back, so a large org completes across several runs instead of timing out in
+  // one.
+  const budget = input.maxSubscribers ?? 1000;
+
+  /** One subscriber's worth of the sweep. Extracted so paging stays readable. */
+  const sweepOne = async (s: Subscriber): Promise<void> => {
     result.scanned++;
     const subs = await stores.subscriptions.listBySubscriber(input.orgId, s.sub);
     const hasActiveSubscription = subs.some((x) => x.status !== "unsubscribed");
@@ -228,7 +270,23 @@ export async function runReengagementSweep(
       }
       // "wait" / "skip": nothing to do this pass.
     }
-  }
+  };
 
-  return result;
+  // Page until the budget is spent (#233, #182). One invocation does bounded
+  // work and hands back a cursor; the caller resumes from it rather than
+  // restarting, which is what makes the sweep finish on an org large enough to
+  // need it.
+  let cursor = input.cursor;
+  do {
+    const page = await stores.subscribers.page(input.orgId, {
+      limit: Math.min(Math.max(budget - result.scanned, 1), 200),
+      ...(cursor ? { cursor } : {}),
+    });
+    cursor = page.cursor;
+    for (const s of page.items) await sweepOne(s);
+  } while (cursor && result.scanned < budget);
+
+  // A cursor in the result means "not finished". Absent means the pass completed,
+  // and the caller clears the checkpoint on that.
+  return { ...result, ...(cursor ? { cursor } : {}) };
 }

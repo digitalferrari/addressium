@@ -30,6 +30,7 @@ import type {
   EngagementEvent,
   EntitlementSync,
   ErasureRecord,
+  SweepCheckpoint,
   ImportBatch,
   ImportMapping,
   List,
@@ -51,6 +52,7 @@ import type {
   DripSequenceStore,
   EntitlementStore,
   ErasureStore,
+  SweepCheckpointStore,
   EventStore,
   ListStore,
   OrganizationStore,
@@ -795,6 +797,16 @@ export class DynamoStores implements Stores {
           TableName: this.tableName,
           Key: { pk: org(orgId), sk: `ENTITLEMENT#${subscriberId}` },
         }),
+      );
+    },
+  };
+
+  sweepCheckpoints: SweepCheckpointStore = {
+    get: (orgId, sweep) => this.get<SweepCheckpoint>(org(orgId), `SWEEP#${sweep}`),
+    put: (c) => this.put({ pk: org(c.orgId), sk: `SWEEP#${c.sweep}`, data: c }),
+    clear: async (orgId, sweep) => {
+      await this.doc.send(
+        new DeleteCommand({ TableName: this.tableName, Key: { pk: org(orgId), sk: `SWEEP#${sweep}` } }),
       );
     },
   };

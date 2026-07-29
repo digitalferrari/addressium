@@ -58,7 +58,8 @@ import {
   BackupResource,
   BackupVault,
 } from "aws-cdk-lib/aws-backup";
-import { Schedule } from "aws-cdk-lib/aws-events";
+import { Rule, Schedule } from "aws-cdk-lib/aws-events";
+import { LambdaFunction } from "aws-cdk-lib/aws-events-targets";
 import { Role, ServicePrincipal, PolicyStatement, Effect } from "aws-cdk-lib/aws-iam";
 import { CfnScheduleGroup } from "aws-cdk-lib/aws-scheduler";
 import {
@@ -816,6 +817,51 @@ export class ControlPlaneStack extends Stack {
     });
     sendQueue.grantSendMessages(launchFn); // each firing enqueues an edition
 
+    /**
+     * Weekly re-engagement / sunset sweep (#233, §4.22).
+     *
+     * ONE rule for the whole deployment, fanning out to the orgs that opted in.
+     * The sweep's terminal step UNSUBSCRIBES cold subscribers, so it is
+     * per-org opt-in (`Organization.reengagement.enabled`) rather than on by
+     * default: a deployment-wide default would start silently shrinking lists on
+     * installs where nobody asked for it, and a shrunk list is not something an
+     * operator can undo.
+     *
+     * Weekly, not daily. Step spacing is measured in days and the default policy
+     * waits 180 days for coldness, so a daily pass would do nothing 6 days out of
+     * 7 while paying for a full org scan each time.
+     *
+     * 15 minutes, not the default 30 seconds: this is the only handler that
+     * walks an entire org. It checkpoints and resumes, so a timeout costs one
+     * page rather than the pass — but a longer budget means fewer resumptions.
+     */
+    const reengagementFn = fn(
+      "ReengagementSweepFn",
+      svc("services/automations/src/index.ts"),
+      "reengagementDispatchHandler",
+      { SES_MAX_SEND_RATE },
+    );
+    // 15 minutes, not the shared 30-second default. This is the only handler
+    // that walks an entire org, and while it checkpoints — so a timeout costs
+    // one page rather than the pass — a 30-second budget would mean resuming
+    // constantly and a large org would take weeks of firings to sweep once.
+    (reengagementFn.node.defaultChild as CfnFunction).addPropertyOverride("Timeout", 900);
+    reengagementFn.addToRolePolicy(sesSendScoped());
+    reengagementFn.addToRolePolicy(
+      new PolicyStatement({
+        actions: ["kms:Sign"],
+        resources: ["*"],
+        conditions: { StringEquals: { "aws:ResourceTag/app": "addressium" } },
+      }),
+    );
+    table.grantReadWriteData(reengagementFn);
+    new Rule(this, "ReengagementSweepSchedule", {
+      // 04:00 UTC on Mondays — off-peak, and clear of the 03:00 analytics export.
+      schedule: Schedule.cron({ minute: "0", hour: "4", weekDay: "MON" }),
+      targets: [new LambdaFunction(reengagementFn)],
+      description: "addressium: weekly re-engagement sweep for orgs that opted in (#233)",
+    });
+
     // ---- drip automations state machine (§4.6, #23) ----
     // Each step: Wait(waitSeconds) → Task(dripStepHandler) → Choice(done?) loop.
     // The domain owns the per-step choice; the machine just orchestrates.
@@ -1383,6 +1429,7 @@ export class ControlPlaneStack extends Stack {
       ["Unsubscribe", unsubscribeFn],
       ["EntitlementWebhook", entitlementFn],
       ["IdentityWebhook", identityFn],
+      ["ReengagementSweep", reengagementFn],
       // Present only when the analytics tier is on; filtered below.
       ["AnalyticsTransform", analyticsTransformFn],
       ["AnalyticsSnapshot", analyticsSnapshotFn],

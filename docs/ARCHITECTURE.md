@@ -1016,6 +1016,41 @@ weight sender reputation on engagement, so a growing tail of dead addresses hurt
 inbox placement for *everyone* on the list. addressium closes the loop with an
 opt-in, per-org **win-back → sunset** automation (`Organization.reengagement`).
 
+**How it fires (#233).** A single weekly EventBridge rule (Mondays 04:00 UTC)
+invokes a dispatcher that finds the orgs with `reengagement.enabled` and sweeps
+each. Three things about that are deliberate:
+
+- **Per-org opt-in, never deployment-wide.** The terminal step *unsubscribes*
+  cold subscribers. A default-on sweep would start silently shrinking lists on
+  installs where nobody asked for it, and a shrunk list is not something an
+  operator can undo. `enabled` defaults to `false` and the sweep returns
+  immediately without so much as scanning.
+- **Weekly, not daily.** Step spacing is measured in days and the default policy
+  waits 180 for coldness, so a daily pass would do nothing six days in seven
+  while paying for a full org scan each time.
+- **`reengagement.listId` is required once enabled, and has no default.** The
+  win-back emails are real mail and need a list carrying a from-address and a
+  CAN-SPAM footer. An org that enables the policy without naming one is
+  *reported* by the dispatcher rather than swept — silence would look identical
+  to "no cold subscribers", which is precisely the failure this automation is
+  supposed to prevent.
+
+**It checkpoints and resumes** (#182). The sweep enumerates every subscriber in
+an org with an N+1 subscription read each, and used to do so with no record of
+progress — a retry restarted from zero, so an org large enough to matter was
+never fully swept: it burned the same first N subscribers on every attempt and
+the tail was never reached. Each invocation now walks a bounded number of
+subscribers (1000 by default) and returns a cursor if there is more; the
+`SweepCheckpoint` item carries it forward, and the absence of a cursor is how
+completion is known. The checkpoint is written *after* the work, so a crash
+re-does a page rather than skipping one — every action in the sweep is
+idempotent (send claims, step spacing), so a repeat is a near no-op while a skip
+would leave people permanently unswept.
+
+Before this the handler existed, was exported, and **no CDK construct referenced
+it**: the entire automation was domain logic with no caller, and its unit tests
+passed throughout because they exercise the domain function directly.
+
 - **Coldness is click-weighted.** Each subscriber carries a `lastEngagedAt`
   stamp that the events processor advances on **clicks only**. Opens are
   deliberately ignored: Apple Mail Privacy Protection (and similar proxies)

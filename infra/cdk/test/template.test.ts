@@ -975,3 +975,44 @@ test("the stack still creates no WebACL of its own (#225 holds)", () => {
   // and the next deploy would put ours back silently.
   assert.deepEqual(Object.keys(template().findResources("AWS::WAFv2::WebACL")), []);
 });
+
+test("the re-engagement sweep finally has an invoker (#233)", () => {
+  // It existed, was exported, and NO CDK construct referenced it — the whole
+  // sunset automation was domain logic with no caller, and its 21 unit tests
+  // passed throughout because they exercise the domain function directly.
+  const t = template();
+  const fns = t.findResources("AWS::Lambda::Function");
+  const sweep = Object.keys(fns).find((k) => k.startsWith("ReengagementSweepFn"));
+  assert.ok(sweep, "no sweep function");
+
+  const rules = Object.values(t.findResources("AWS::Events::Rule"));
+  const weekly = rules.find((r) =>
+    String((r.Properties as { ScheduleExpression?: string }).ScheduleExpression ?? "").includes("MON"),
+  );
+  assert.ok(weekly, "nothing fires the sweep");
+  // Weekly, not daily: step spacing is measured in days and the default policy
+  // waits 180 for coldness, so a daily pass does nothing 6 days in 7 while
+  // paying for a full org scan each time.
+  assert.match(
+    (weekly!.Properties as { ScheduleExpression: string }).ScheduleExpression,
+    /cron\(0 4 \? \* MON \*\)/,
+  );
+  assert.ok(
+    (weekly!.Properties as { Targets?: unknown[] }).Targets?.length,
+    "a rule with no target fires into nothing",
+  );
+
+  // And it is alarmed like every other handler — a silent sweep that
+  // unsubscribes people is the worst kind to leave unwatched.
+  const alarms = Object.keys(t.findResources("AWS::CloudWatch::Alarm"));
+  assert.ok(alarms.some((a) => a.startsWith("ReengagementSweepErrorsAlarm")));
+});
+
+test("the sweep gets a long timeout, because it walks a whole org (#233)", () => {
+  // It checkpoints and resumes, so a timeout costs one page rather than the
+  // pass — but the default 30s would mean resuming constantly.
+  const fns = template().findResources("AWS::Lambda::Function");
+  const sweep = Object.entries(fns).find(([k]) => k.startsWith("ReengagementSweepFn"))!;
+  const timeout = (sweep[1].Properties as { Timeout?: number }).Timeout ?? 0;
+  assert.ok(timeout >= 300, `sweep timeout is ${timeout}s`);
+});

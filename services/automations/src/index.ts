@@ -216,6 +216,8 @@ export interface ReengagementSweepEvent {
   subject?: string;
   /** Optional custom win-back body; a plain "still want these?" block by default. */
   template?: EmailTemplate;
+  /** Subscribers to examine in this invocation (#233). Default 1000. */
+  maxSubscribers?: number;
 }
 
 export async function reengagementSweepHandler(event: ReengagementSweepEvent) {
@@ -233,6 +235,12 @@ export async function reengagementSweepHandler(event: ReengagementSweepEvent) {
       },
     ],
   };
+  // Resume where the last invocation stopped (#233, #182). The sweep used to
+  // read the whole org into memory with no way to record progress, so a retry
+  // restarted from zero and an org large enough to matter was never fully swept.
+  const checkpoint = await s.sweepCheckpoints.get(event.orgId, "reengagement");
+  const startedAt = checkpoint?.startedAt ?? clock.now().toISOString();
+
   const result = await runReengagementSweep(s, ses, magic, clock, {
     orgId: event.orgId,
     listId: event.listId,
@@ -241,6 +249,91 @@ export async function reengagementSweepHandler(event: ReengagementSweepEvent) {
     // One bucket for the WHOLE sweep — a per-recipient bucket would pace
     // nothing, since each would start full.
     throttle: automationThrottle(),
+    ...(checkpoint?.cursor ? { cursor: checkpoint.cursor } : {}),
+    ...(event.maxSubscribers ? { maxSubscribers: event.maxSubscribers } : {}),
   });
-  return { ok: true, ...result };
+
+  if (result.cursor) {
+    // More to do. The checkpoint is written AFTER the work, so a crash re-does a
+    // page rather than skipping one — the sweep's actions are idempotent (send
+    // claims, step spacing), so a repeat is a near no-op while a skip would
+    // leave subscribers permanently unswept.
+    await s.sweepCheckpoints.put({
+      orgId: event.orgId,
+      sweep: "reengagement",
+      cursor: result.cursor,
+      startedAt,
+      updatedAt: clock.now().toISOString(),
+      scanned: (checkpoint?.scanned ?? 0) + result.scanned,
+      completedPasses: checkpoint?.completedPasses ?? 0,
+    });
+  } else {
+    // The pass finished. Clearing rather than storing a null cursor, so "no
+    // checkpoint" unambiguously means "start from the beginning next time".
+    await s.sweepCheckpoints.put({
+      orgId: event.orgId,
+      sweep: "reengagement",
+      startedAt: clock.now().toISOString(),
+      updatedAt: clock.now().toISOString(),
+      scanned: 0,
+      completedPasses: (checkpoint?.completedPasses ?? 0) + 1,
+    });
+  }
+
+  return { ok: true, ...result, complete: !result.cursor };
+}
+
+/**
+ * Weekly fan-out across every org that opted in (#233).
+ *
+ * A single EventBridge rule targets this; it finds the orgs with
+ * `reengagement.enabled` and sweeps each. Per-org opt-in is the whole point: the
+ * sweep's terminal step UNSUBSCRIBES cold subscribers, so a deployment-wide
+ * default would start silently shrinking lists on installs where nobody asked
+ * for it.
+ *
+ * An org that enabled the policy but never named a `listId` is REPORTED, not
+ * swept. The win-back emails need a list to send under — one carrying a
+ * from-address and a CAN-SPAM footer — and guessing one would mail an audience
+ * the operator did not choose. Silence here would look identical to "no cold
+ * subscribers", which is the failure mode this whole issue is about.
+ */
+export async function reengagementDispatchHandler(event?: { maxSubscribers?: number }) {
+  const s = stores();
+  const orgs = await s.organizations.list();
+  const swept: Record<string, unknown>[] = [];
+  const skipped: { orgId: string; reason: string }[] = [];
+
+  for (const org of orgs) {
+    if (!org.reengagement?.enabled) continue;
+    if (!org.reengagement.listId) {
+      skipped.push({ orgId: org.orgId, reason: "reengagement.enabled with no listId" });
+      console.warn("automations: re-engagement enabled but no listId configured", {
+        orgId: org.orgId,
+      });
+      continue;
+    }
+    try {
+      const r = await reengagementSweepHandler({
+        orgId: org.orgId,
+        listId: org.reengagement.listId,
+        ...(event?.maxSubscribers ? { maxSubscribers: event.maxSubscribers } : {}),
+      });
+      swept.push({ orgId: org.orgId, ...r });
+    } catch (e) {
+      // One org's failure must not stop the others: they are separate tenants
+      // and a bad list in one is not a reason to skip everyone else's hygiene.
+      console.error("automations: re-engagement sweep failed", {
+        orgId: org.orgId,
+        error: (e as Error).message,
+      });
+      skipped.push({ orgId: org.orgId, reason: (e as Error).message });
+    }
+  }
+  console.log("automations: re-engagement dispatch complete", {
+    orgs: orgs.length,
+    swept: swept.length,
+    skipped: skipped.length,
+  });
+  return { ok: true, swept, skipped };
 }

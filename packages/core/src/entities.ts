@@ -183,6 +183,15 @@ export interface ReengagementPolicy {
   stepIntervalDays: number;
   /** Suppression scope applied on sunset. Default "org". */
   suppressScope?: SuppressionScope;
+  /**
+   * The list the win-back emails are sent on (#233).
+   *
+   * Required once the policy is enabled: the sweep sends real mail, and it has
+   * to send it from a list that carries a from-address and a CAN-SPAM footer.
+   * There is no sensible default — picking one for the operator would mail an
+   * audience they did not choose.
+   */
+  listId?: string;
 }
 
 export interface SignupProtection {
@@ -511,6 +520,30 @@ export interface ErasureRecord {
   orgId: OrgId;
   subscriberId: SubscriberId;
   erasedAt: string;
+}
+
+/**
+ * Where a long-running org sweep got to (#233, #182).
+ *
+ * The re-engagement sweep enumerates every subscriber in an org and does an
+ * N+1 subscription read per subscriber. With no checkpoint a retry restarted
+ * from zero, so on an org large enough to matter it never completed — it just
+ * burned the same first N subscribers on every attempt. The cursor is the
+ * subscriber-page token, so a resumed run continues rather than repeating.
+ */
+export interface SweepCheckpoint {
+  orgId: OrgId;
+  /** Which sweep — one checkpoint per kind, so they never overwrite each other. */
+  sweep: "reengagement";
+  /** Opaque page cursor. Absent means "start from the beginning". */
+  cursor?: string;
+  /** When the current pass began — a pass that never finishes is visible as an old value. */
+  startedAt: string;
+  updatedAt: string;
+  /** Subscribers examined in the CURRENT pass, across all its invocations. */
+  scanned: number;
+  /** Passes completed end to end. */
+  completedPasses: number;
 }
 
 // ---- ops ----

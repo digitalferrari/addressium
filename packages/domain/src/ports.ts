@@ -13,6 +13,7 @@ import type {
   EngagementEvent,
   EntitlementSync,
   ErasureRecord,
+  SweepCheckpoint,
   ImportBatch,
   ImportMapping,
   List,
@@ -311,6 +312,19 @@ export interface EventStore {
   deleteForSubscriber(orgId: string, subscriberId: string): Promise<number>;
 }
 
+/**
+ * Where a long-running org sweep got to (#233, #182).
+ *
+ * One item per (org, sweep). Kept in its own store rather than on the
+ * Organization record: the org record is read on every send, and a sweep that
+ * checkpoints every page would turn a hot read into a hot WRITE.
+ */
+export interface SweepCheckpointStore {
+  get(orgId: string, sweep: SweepCheckpoint["sweep"]): Promise<SweepCheckpoint | undefined>;
+  put(c: SweepCheckpoint): Promise<void>;
+  clear(orgId: string, sweep: SweepCheckpoint["sweep"]): Promise<void>;
+}
+
 /** Erasure tombstones (#164) — see `ErasureRecord`. */
 export interface ErasureStore {
   put(e: ErasureRecord): Promise<void>;
@@ -529,6 +543,8 @@ export interface Stores {
   segments: SegmentStore;
   /** Erasure tombstones (#164). */
   erasures: ErasureStore;
+  /** Resumable sweep progress (#233). */
+  sweepCheckpoints: SweepCheckpointStore;
   importMappings: ImportMappingStore;
   importBatches: ImportBatchStore;
   dripSequences: DripSequenceStore;

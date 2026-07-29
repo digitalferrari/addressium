@@ -12,6 +12,7 @@ import type {
   EngagementEvent,
   EntitlementSync,
   ErasureRecord,
+  SweepCheckpoint,
   ImportBatch,
   ImportMapping,
   List,
@@ -37,6 +38,7 @@ import type {
   EmailSender,
   EntitlementStore,
   ErasureStore,
+  SweepCheckpointStore,
   EventStore,
   ListStore,
   OrganizationStore,
@@ -359,6 +361,19 @@ export class MemEvents implements EventStore {
   }
 }
 
+export class MemSweepCheckpoints implements SweepCheckpointStore {
+  private map = new Map<string, SweepCheckpoint>();
+  async get(orgId: string, sweep: SweepCheckpoint["sweep"]) {
+    return this.map.get(subKey(orgId, sweep));
+  }
+  async put(c: SweepCheckpoint) {
+    this.map.set(subKey(c.orgId, c.sweep), c);
+  }
+  async clear(orgId: string, sweep: SweepCheckpoint["sweep"]) {
+    this.map.delete(subKey(orgId, sweep));
+  }
+}
+
 export class MemErasures implements ErasureStore {
   private map = new Map<string, ErasureRecord>();
   async put(e: ErasureRecord) {
@@ -612,6 +627,7 @@ export function memStores(): Stores {
     usage: new MemUsage(),
     segments: new MemSegments(),
     erasures: new MemErasures(),
+    sweepCheckpoints: new MemSweepCheckpoints(),
     importMappings: new MemImportMappings(),
     importBatches: new MemImportBatches(),
     dripSequences: new MemDripSequences(),
