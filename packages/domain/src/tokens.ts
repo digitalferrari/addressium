@@ -162,6 +162,24 @@ export class HmacConfirmationSigner implements ConfirmationTokenSigner {
     return `${key.kid}.${body}.${sig}`;
   }
 
+  /**
+   * Verify a token and REQUIRE its scope (#74).
+   *
+   * Separate from `verify` so the requirement is explicit at every call site.
+   * The default scope is `confirm`, which is what tokens minted before the
+   * preference centre carry — so an old confirmation link keeps working and a
+   * management link cannot be presented in its place.
+   */
+  verifyScoped(token: string, scope: "confirm" | "manage"): ConfirmPayload {
+    const payload = this.verify(token);
+    if ((payload.scope ?? "confirm") !== scope) {
+      // Named for the reader of a log line, not for the holder of the token:
+      // the response this produces must never say which scope was expected.
+      throw new Error(`token scope mismatch: expected ${scope}`);
+    }
+    return payload;
+  }
+
   verify(token: string): ConfirmPayload {
     const parts = token.split(".");
     if (parts.length !== 3) throw new Error("malformed confirmation token");

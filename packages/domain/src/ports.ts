@@ -465,6 +465,17 @@ export interface ConfirmClaims {
   listId?: string;
   /** Multi-list opt-in (the "All newsletters" page) — one confirmation covers all. */
   listIds?: string[];
+  /**
+   * What this token is FOR (#74). Absent means `confirm`, which is what every
+   * token minted before the preference centre existed is.
+   *
+   * This is a token-confusion guard, and it is the security property the whole
+   * preference centre rests on. Without it, a confirmation link — which anyone
+   * who can read one email holds — would also open a management session over
+   * EVERY list that person is on, and the long-lived unsubscribe token in every
+   * message ever sent would do the same. One scope, one capability.
+   */
+  scope?: "confirm" | "manage";
   exp: number;
 }
 export interface ConfirmationTokenSigner {

@@ -1158,6 +1158,35 @@ export class ControlPlaneStack extends Stack {
       methods: [HttpMethod.GET],
       integration: new HttpLambdaIntegration("ConfirmInt", confirmFn),
     });
+    // The preference centre (#74). Its own function with its own reserved
+    // concurrency, for the same reason unsubscribe has one: a signup flood must
+    // not starve the surface people use to LEAVE.
+    const preferencesFn = fn("PreferencesFn", apiEntry, "preferencesHandler", {
+      ...apiEnv,
+      PREFERENCES_URL_BASE:
+        (this.node.tryGetContext("preferencesUrlBase") as string | undefined) ??
+        "https://your-site.example/preferences",
+    });
+    table.grantReadWriteData(preferencesFn);
+    confirmSecret.grantRead(preferencesFn);
+    reservePublic(preferencesFn, 20);
+    const preferenceRequestFn = fn("PreferenceRequestFn", apiEntry, "preferenceRequestHandler", {
+      ...apiEnv,
+      PREFERENCES_URL_BASE:
+        (this.node.tryGetContext("preferencesUrlBase") as string | undefined) ??
+        "https://your-site.example/preferences",
+    });
+    table.grantReadData(preferenceRequestFn);
+    confirmSecret.grantRead(preferenceRequestFn);
+    preferenceRequestFn.addToRolePolicy(sesSendScoped());
+    reservePublic(preferenceRequestFn, 10);
+    const prefInt = new HttpLambdaIntegration("PreferencesInt", preferencesFn);
+    api.addRoutes({ path: "/preferences", methods: [HttpMethod.GET, HttpMethod.POST], integration: prefInt });
+    api.addRoutes({
+      path: "/preferences/request",
+      methods: [HttpMethod.POST],
+      integration: new HttpLambdaIntegration("PreferenceRequestInt", preferenceRequestFn),
+    });
     api.addRoutes({
       path: "/unsubscribe",
       // GET as well as POST (#234). POST is the machine path a mailbox provider

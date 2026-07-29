@@ -40,3 +40,4 @@ export * from "./analytics-export.js";
 export * from "./onboarding.js";
 export * from "./themes.js";
 export * from "./audit.js";
+export * from "./preferences.js";

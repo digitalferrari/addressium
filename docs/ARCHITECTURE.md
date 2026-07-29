@@ -65,7 +65,7 @@ every org in a deployment is operated by the same owner.
 - Subscriber & list management with per-list subscription status
 - Public **signup forms** (embeddable snippet + hosted landing pages)
 - **Double opt-in** confirmation (configurable per list), one-click unsubscribe,
-  and a token-based preference center (**[Decided r2 — not yet built]**, §4.10)
+  and a token-based preference centre (§4.10, #74)
 - **Broadcasts**: send now, scheduled, and recurring campaigns
 - **Drip automations**: trigger-based sequences (welcome series, re-engagement)
   via Step Functions
@@ -1488,6 +1488,37 @@ built in and enforced, not optional:
   is unauthenticated, so such a form would be a mass-unsubscribe tool for
   anybody who can guess an address. Proving ownership of an address is what the
   preference centre in #74 is for.
+- **Preference centre** (#74): one page where a subscriber sees every newsletter
+  they are on and changes any of it, with no password.
+
+  The hard part is not the UI — it is that **anyone can type any address into a
+  form**, so a management surface that trusts a submitted address is a
+  mass-unsubscribe tool. Access is therefore by emailed token:
+  `POST /preferences/request` mails a link *to that address* and answers **202
+  with an identical body whether or not the address is on file** (including on
+  internal failure — a 500 for a known address and a 202 for an unknown one is
+  the same enumeration oracle by another route). `GET`/`POST /preferences` then
+  read the subscriber id **from the token**, never from the request body.
+
+  The token carries `scope: "manage"` and is verified with `verifyScoped`. That
+  guard is load-bearing rather than decorative: without it the RFC 8058
+  unsubscribe token — present in *every message ever sent*, with a five-year TTL
+  — would open a management session over every list its holder is on. Absent
+  scope reads as `confirm`, so every link minted before this kept working.
+
+  Two asymmetries in what it permits. **Leaving always works**, from any status,
+  on any list, including a closed one — nothing may stand between a person and
+  leaving. **Re-subscribing does not resurrect a `bounced` or `complained`
+  subscription**, and cannot join a closed list: those statuses are statements
+  about the address, not preferences, and clearing them through a form would
+  undo suppression through the front door. Re-subscribing from `unsubscribed`
+  goes straight to `confirmed` with `basis: "explicit"`, because the person is
+  holding a token mailed to that address — the same evidence double opt-in
+  exists to collect.
+
+  This works identically in both magic-link modes. Nothing here touches Cognito:
+  a linked pool changes how a reader proves ownership *on the operator's own
+  site*, not how they manage subscriptions.
 - **CAN-SPAM**: enforced physical mailing address and unsubscribe link in every
   template's footer; campaigns cannot send without them configured.
 - **Suppression**: enforced before every send with a configurable scope model

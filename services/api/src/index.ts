@@ -23,6 +23,10 @@ import { InvokeCommand, LambdaClient } from "@aws-sdk/client-lambda";
 import { schemas, APP_VERSION, EXPECTED_SCHEMA_VERSION, type AlertConfig } from "@addressium/core";
 import {
   HmacConfirmationSigner,
+  applyPreferences,
+  buildPreferenceLinkEmail,
+  preferenceCentre,
+  requestPreferenceLink,
   RetiredKeyError,
   TokenExpiredError,
   SystemClock,
@@ -1613,6 +1617,64 @@ export async function identitySyncHandler(event: HttpEvent): Promise<HttpResult>
 type RouteHandler = (event: HttpEvent) => Promise<HttpResult>;
 
 /** Behind the Cognito JWT authorizer. Every handler also calls requireGrant. */
+/**
+ * POST /preferences/request — email a management link (#74).
+ *
+ * Answers **202 with the same body whether or not the address is on file**.
+ * This route is unauthenticated by necessity — the whole point is that the
+ * person has no session — so any response that differs on existence turns it
+ * into an address-enumeration oracle against the subscriber base. "We have sent
+ * a link if that address is subscribed" is the only safe wording, and it happens
+ * to be the true one.
+ */
+export async function preferenceRequestHandler(event: HttpEvent): Promise<HttpResult> {
+  const accepted = { status: "sent", message: "If that address is subscribed, a link is on its way." };
+  try {
+    const { orgId, email } = JSON.parse(event.body ?? "{}") as { orgId?: string; email?: string };
+    if (!orgId || !email) return json(400, { error: "orgId and email required" });
+    const s = stores();
+    const minted = await requestPreferenceLink(s, await confirmSigner(), clock, { orgId, email });
+    if (minted) {
+      const org = await s.organizations.get(orgId);
+      const lists = await s.lists.list(orgId);
+      const url = `${env("PREFERENCES_URL_BASE")}?token=${encodeURIComponent(minted.token)}`;
+      const ses = new SesEmailSender(org?.sesConfigSet, undefined, org?.sesTransactionalConfigSet);
+      await ses.send(buildPreferenceLinkEmail(lists[0], email, url, org?.name ?? orgId));
+    }
+    return json(202, accepted);
+  } catch (e) {
+    // Even a failure answers 202: a 500 on a known address and a 202 on an
+    // unknown one is the same oracle by another route. Logged, not returned.
+    console.error("preferences: request failed", { error: (e as Error).message });
+    return json(202, accepted);
+  }
+}
+
+/** GET /preferences?token=… — what this subscriber is on, and POST to change it (#74). */
+export async function preferencesHandler(event: HttpEvent): Promise<HttpResult> {
+  const method = (event.requestContext?.http?.method ?? "GET").toUpperCase();
+  try {
+    const body = method === "POST" ? (JSON.parse(event.body ?? "{}") as Record<string, unknown>) : {};
+    const token = event.queryStringParameters?.token ?? (body.token as string) ?? "";
+    // `verifyScoped`, not `verify` (#74). Without the scope check, the RFC 8058
+    // unsubscribe token — present in every message ever sent, with a five-year
+    // TTL — would open a management session over every list its holder is on.
+    const claims = (await confirmSigner()).verifyScoped(token, "manage");
+    const s = stores();
+    if (method === "GET") return json(200, await preferenceCentre(s, claims.orgId, claims.sub));
+
+    const changes = body.changes as { listId: string; subscribed: boolean }[] | undefined;
+    if (!Array.isArray(changes)) return json(400, { error: "changes required" });
+    const result = await applyPreferences(s, clock, claims.orgId, claims.sub, changes);
+    return json(200, { ...result, view: await preferenceCentre(s, claims.orgId, claims.sub) });
+  } catch (e) {
+    if (e instanceof RetiredKeyError || e instanceof TokenExpiredError) {
+      return json(410, { status: "link_expired", error: "This management link is no longer valid." });
+    }
+    return fail(e);
+  }
+}
+
 const ADMIN_ROUTES: Record<string, RouteHandler> = {
   "GET /orgs/{org}": orgMetaHandler,
   "GET /orgs/{org}/setup": setupStateHandler,
@@ -1671,6 +1733,11 @@ const PUBLIC_ROUTES: Record<string, RouteHandler> = {
   "GET /confirm": confirmHandler,
   "GET /unsubscribe": unsubscribeHandler,
   "POST /unsubscribe": unsubscribeHandler,
+  // The preference centre (#74). Unauthenticated by necessity — proof of
+  // ownership is the emailed `scope: "manage"` token, not a session.
+  "POST /preferences/request": preferenceRequestHandler,
+  "GET /preferences": preferencesHandler,
+  "POST /preferences": preferencesHandler,
   "GET /orgs/{org}/lists/{list}/public": publicListHandler,
   "GET /orgs/{org}/directory": publicDirectoryHandler,
   // The subscriber site reads branding to theme itself, unauthenticated. It was
