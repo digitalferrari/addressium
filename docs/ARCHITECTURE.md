@@ -1444,11 +1444,17 @@ link can ever grant, not from assuming it stays private:
   through SES domain verification (DKIM/SPF/DMARC), sandbox-exit guidance, the
   physical mailing address, and the first admin user (§9.1).
 - **Environments**: one deployment hosts **multiple organizations** (§4.11);
-  `dev`/`prod` stacks via CDK context. Adding an org provisions its per-org
-  resources (KMS key, SES identity, config set, JWKS) at runtime via the
-  `provisioning` service. Note the stage test is **literal string equality**
-  against `"prod"` — a stage named `staging` or `prod-eu` silently gets the
-  non-prod settings (§9.2).
+  `dev` / `staging` / `prod` stacks via CDK context. Adding an org provisions its
+  per-org resources (KMS key, SES identity, config set, JWKS) at runtime via the
+  `provisioning` service.
+
+  **`stage` is a closed set, validated at synth** (#190): `dev`, `staging`,
+  `prod`, and anything else throws with the valid values named. It used to be a
+  free-form string compared with literal equality against `"prod"`, so
+  `"production"`, `"Prod"` or `"prod-eu"` silently produced a stack configured as
+  a scratch environment while holding production data. The value decides
+  termination protection and log retention, so a typo in a JSON file nobody
+  compiles was a production incident waiting for a `cdk destroy`.
 - **Cost posture**: near-$0 at idle — no always-on compute or database. The
   standing bill for a one-org install is **$4.20/month**: 24 CloudWatch alarms
   ($2.40), one KMS signing key per org ($1.00), 2 Secrets Manager secrets
@@ -1636,9 +1642,24 @@ signing secret".
   the streaming/storage lines and are likewise zero by default. Separately, the
   model **prices a per-recipient transactional event+counter write that is not
   yet implemented** (§4.5) — treat that line as a forecast, not a bill.
-- **Backups/export**: point-in-time recovery, deletion protection and a `RETAIN`
-  removal policy are on the DynamoDB table in **every** stage, not just prod. The
-  scheduled full export to S3 for portability is §4.19 and not yet built.
+- **Backups**: point-in-time recovery, deletion protection and a `RETAIN` removal
+  policy are on the DynamoDB table in **every** stage, not just prod — and PITR
+  is deliberately not called a backup (#190). It is a 35-day continuous window
+  that lives *inside* the table and dies with it, so a bad migration, a mass
+  overwrite by a runaway import, or an account-level incident takes the recovery
+  path with the data.
+
+  A real backup is a separate resource with a separate lifecycle: an **AWS Backup
+  plan** writing to a `RETAIN` vault — daily kept 35 days (covering the same
+  period as PITR through a different mechanism, rather than leaving a gap), plus
+  monthly kept a year for "we noticed in March that something broke in January".
+  **On by default in prod only**, since it carries a standing cost proportional
+  to table size; `-c enableBackup=true|false` overrides in both directions.
+
+  Both application secrets are `RETAIN` in every stage. `ConfirmSecret` signs
+  every outstanding double-opt-in and one-click-unsubscribe token, so losing it
+  does not merely break new links — it invalidates every link already sitting in
+  someone's inbox, including the unsubscribe link the law requires to work.
 - **Webhooks/API for operators**: an outbound webhook + public API so operators
   can integrate addressium with their own systems.
 - **Magic-link TTL default**: ship a sensible default (e.g. 7–30 days) with a
@@ -1750,10 +1771,13 @@ describes the target; this is the part that is still unearned. It mirrors
   GENERIC template carrying merge *tags*, not one recipient's rendered values. So
   there is no subject data there to erase today. If per-recipient bodies are ever
   archived, that changes and this line stops being true.
-- **The counts that are safe to quote** — 24 alarms, 20 log groups, 27 admin
-  routes, 252 resources in a default dev synth (248 in prod) — are reproducible
-  with `npm run build && npx cdk synth`. They are template facts, which is a
-  weaker claim than it sounds.
+- **The counts that are safe to quote** — 26 alarms, 21 log groups, 59 API routes
+  (48 behind the JWT authorizer), 294 resources in a default synth — are
+  reproducible with `npm run build && npx cdk synth`. They are template facts,
+  which is a weaker claim than it sounds. Dev and prod now synthesize the same
+  resource COUNT by coincidence rather than by design: prod adds the backup vault,
+  plan and selection (#190) while dev adds the auto-delete custom resources for
+  the two site buckets, and the two happen to balance.
 
 **1.0 is gated on** the end-to-end suite passing against a real AWS account,
 GDPR erasure completing, and one install running for 30 days.

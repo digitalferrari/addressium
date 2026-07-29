@@ -13,9 +13,10 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { App } from "aws-cdk-lib";
-import { ControlPlaneStack } from "../lib/control-plane-stack.js";
+import { ControlPlaneStack, parseStage } from "../lib/control-plane-stack.js";
 
 interface BootstrapConfig {
+  /** One of `dev` | `staging` | `prod`. Validated — see `loadConfig` (#190). */
   stage: string;
   region: string;
   adminEmails: string[];
@@ -40,26 +41,38 @@ interface BootstrapConfig {
 
 function loadConfig(): BootstrapConfig {
   const path = resolve(process.cwd(), "addressium.config.json");
+  // Only the READ and the PARSE are wrapped. A validation failure below is a
+  // different problem with a different fix, and burying "invalid stage" under
+  // "copy the example file and set your admin email" sends the operator to the
+  // wrong line (#190).
+  let cfg: Partial<BootstrapConfig>;
   try {
-    const cfg = JSON.parse(readFileSync(path, "utf8")) as Partial<BootstrapConfig>;
-    if (!cfg.adminEmails?.length) {
-      throw new Error("addressium.config.json must list at least one adminEmails entry.");
-    }
-    return {
-      stage: cfg.stage ?? "dev",
-      region: cfg.region ?? "us-east-1",
-      adminEmails: cfg.adminEmails,
-      adminHostedUiDomainPrefix: cfg.adminHostedUiDomainPrefix ?? "addressium-admin",
-      opsAlertTopicArn: cfg.opsAlertTopicArn,
-      opsAlertEmail: cfg.opsAlertEmail,
-      apiWebAclArn: cfg.apiWebAclArn,
-      cloudfrontWebAclArn: cfg.cloudfrontWebAclArn,
-    };
+    cfg = JSON.parse(readFileSync(path, "utf8")) as Partial<BootstrapConfig>;
   } catch (err) {
     throw new Error(
       `Could not load addressium.config.json — copy addressium.config.example.json and set your admin email. (${(err as Error).message})`,
     );
   }
+
+  if (!cfg.adminEmails?.length) {
+    throw new Error("addressium.config.json must list at least one adminEmails entry.");
+  }
+  // Validated HERE as well as in the stack, so the message names the file the
+  // operator edits. A mistyped stage — "production", "Prod" — compared unequal
+  // to "prod" and silently produced a stack configured as a scratch environment
+  // while holding production data.
+  const stage = parseStage(cfg.stage ?? "dev");
+
+  return {
+    stage,
+    region: cfg.region ?? "us-east-1",
+    adminEmails: cfg.adminEmails,
+    adminHostedUiDomainPrefix: cfg.adminHostedUiDomainPrefix ?? "addressium-admin",
+    opsAlertTopicArn: cfg.opsAlertTopicArn,
+    opsAlertEmail: cfg.opsAlertEmail,
+    apiWebAclArn: cfg.apiWebAclArn,
+    cloudfrontWebAclArn: cfg.cloudfrontWebAclArn,
+  };
 }
 
 const config = loadConfig();

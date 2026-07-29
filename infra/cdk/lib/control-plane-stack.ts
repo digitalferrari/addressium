@@ -52,6 +52,13 @@ import {
 import { LogGroup, RetentionDays } from "aws-cdk-lib/aws-logs";
 import { SnsAction } from "aws-cdk-lib/aws-cloudwatch-actions";
 import { Secret } from "aws-cdk-lib/aws-secretsmanager";
+import {
+  BackupPlan,
+  BackupPlanRule,
+  BackupResource,
+  BackupVault,
+} from "aws-cdk-lib/aws-backup";
+import { Schedule } from "aws-cdk-lib/aws-events";
 import { Role, ServicePrincipal, PolicyStatement, Effect } from "aws-cdk-lib/aws-iam";
 import { CfnScheduleGroup } from "aws-cdk-lib/aws-scheduler";
 import {
@@ -75,7 +82,33 @@ import { wireAnalytics } from "./analytics.js";
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../../..");
 const svc = (rel: string) => resolve(REPO_ROOT, rel);
 
+/**
+ * The deployment stages addressium recognises (#190).
+ *
+ * A closed set, not a free-form string, because `stage === "prod"` is what
+ * decides log retention, termination protection and — historically — every
+ * removal policy in the stack. `"production"` or `"Prod"` compared unequal and
+ * silently produced a NON-prod stack holding production data.
+ */
+export const STAGES = ["dev", "staging", "prod"] as const;
+export type Stage = (typeof STAGES)[number];
+
+/** Narrow an untrusted string to a `Stage`, or throw with the valid set. */
+export function parseStage(value: string): Stage {
+  if ((STAGES as readonly string[]).includes(value)) return value as Stage;
+  throw new Error(
+    `invalid stage ${JSON.stringify(value)} — must be one of ${STAGES.join(", ")}. ` +
+      `Stage decides termination protection and log retention, so a typo here is a ` +
+      `production deployment configured as a scratch one.`,
+  );
+}
+
 export interface ControlPlaneStackProps extends StackProps {
+  /**
+   * Validated at construction (#190). Typed as a string rather than `Stage` so
+   * the error an operator sees is the message above, naming the valid values —
+   * a TypeScript error in a config file they never compile helps nobody.
+   */
   stage: string;
   adminEmails: string[];
   adminHostedUiDomainPrefix: string;
@@ -119,7 +152,20 @@ export interface ControlPlaneStackProps extends StackProps {
 
 export class ControlPlaneStack extends Stack {
   constructor(scope: Construct, id: string, props: ControlPlaneStackProps) {
-    super(scope, id, props);
+    // Validated BEFORE `super`, so an unrecognised stage fails at synth rather
+    // than after a stack has been constructed around it (#190). The result also
+    // decides termination protection, which is a StackProps field and so has to
+    // be known here.
+    super(scope, id, {
+      ...props,
+      // A prod stack refuses `cdk destroy` outright. The removal policies below
+      // already RETAIN the data, but a destroyed stack still tears down the API,
+      // the queues and the schedules — an outage rather than a data loss, and
+      // still not something anyone should be able to do by running the wrong
+      // command in the wrong terminal. An explicit
+      // `aws cloudformation update-termination-protection` turns it off.
+      terminationProtection: props.terminationProtection ?? parseStage(props.stage) === "prod",
+    });
 
     // ---- data plane ----
     // OpenSearch segmentation mirror is opt-in (standing cost, #28). When on,
@@ -130,6 +176,10 @@ export class ControlPlaneStack extends Stack {
     // Reporting read-model (§4.23) is opt-in — when on, the table fans its change
     // stream out to Kinesis for the analytics data lake (separate from the
     // DynamoDB Streams the OpenSearch mirror uses).
+    // Fail at SYNTH on an unrecognised stage (#190). Every data-protection
+    // decision below keys off this value, and a mistyped one used to produce a
+    // stack that looked deployed-to-prod and behaved like a scratch environment.
+    const stage = parseStage(props.stage);
     const analyticsCtx = this.node.tryGetContext("enableAnalytics") as boolean | string | undefined;
     const enableAnalytics = analyticsCtx === true || analyticsCtx === "true";
     // Must match `LAKE_RETENTION_DAYS` in packages/domain/src/privacy.ts, which
@@ -456,9 +506,68 @@ export class ControlPlaneStack extends Stack {
       });
     });
 
+    /**
+     * A real backup, separate from the table's own lifecycle (#190).
+     *
+     * PITR is enabled and is NOT a backup: it is a 35-day continuous window that
+     * lives inside the table and dies with it. Deletion protection plus a RETAIN
+     * removal policy make deleting the table hard, but "hard" is not "recovered
+     * from" — a bad migration, a mass overwrite by a runaway import, or an
+     * account-level incident all leave the data gone with PITR gone alongside it.
+     * AWS Backup writes to a vault that is a different resource with a different
+     * lifecycle, which is the property that makes it a backup.
+     *
+     * Daily at 05:00 UTC, kept 35 days to match the PITR window (so the two
+     * cover the same period through different mechanisms rather than leaving a
+     * gap), plus a monthly copy kept a year for the "we noticed in March that
+     * something broke in January" case.
+     *
+     * On by default in prod ONLY. It has a standing cost proportional to table
+     * size, and a scratch stage that silently started billing for backups would
+     * be exactly the kind of surprise this project avoids elsewhere. Both
+     * directions are overridable: `-c enableBackup=true|false`.
+     */
+    const backupCtx = this.node.tryGetContext("enableBackup") as boolean | string | undefined;
+    const enableBackup =
+      backupCtx === undefined ? stage === "prod" : backupCtx === true || backupCtx === "true";
+    if (enableBackup) {
+      const vault = new BackupVault(this, "BackupVault", {
+        // The vault outlives the stack on purpose. A vault destroyed with the
+        // stack is a backup that disappears at exactly the moment it is needed.
+        removalPolicy: RemovalPolicy.RETAIN,
+      });
+      const plan = new BackupPlan(this, "BackupPlan", { backupVault: vault });
+      plan.addRule(
+        new BackupPlanRule({
+          ruleName: "daily-35d",
+          scheduleExpression: Schedule.cron({ minute: "0", hour: "5" }),
+          deleteAfter: Duration.days(35),
+        }),
+      );
+      plan.addRule(
+        new BackupPlanRule({
+          ruleName: "monthly-1y",
+          scheduleExpression: Schedule.cron({ minute: "0", hour: "5", day: "1" }),
+          deleteAfter: Duration.days(365),
+        }),
+      );
+      plan.addSelection("TableSelection", { resources: [BackupResource.fromDynamoDbTable(table)] });
+      new CfnOutput(this, "BackupVaultName", { value: vault.backupVaultName });
+    }
+
     // ---- application secrets (passed by ARN; handlers resolve at cold start) ----
-    const confirmSecret = new Secret(this, "ConfirmSecret");
-    const webhookSecret = new Secret(this, "WebhookSecret");
+    // RETAIN, in every stage (#190). `ConfirmSecret` signs every outstanding
+    // double-opt-in and one-click-unsubscribe token: losing it does not just
+    // break new links, it invalidates every link already sitting in someone's
+    // inbox — including the unsubscribe link the law requires to work. Secrets
+    // Manager's own 7-30 day recovery window only applies to a DELETE we asked
+    // for; a CloudFormation removal with DeletionPolicy: Delete does not get one.
+    const confirmSecret = new Secret(this, "ConfirmSecret", {
+      removalPolicy: RemovalPolicy.RETAIN,
+    });
+    const webhookSecret = new Secret(this, "WebhookSecret", {
+      removalPolicy: RemovalPolicy.RETAIN,
+    });
 
     // ---- handler functions ----
     const baseEnv = { TABLE_NAME: table.tableName };
@@ -473,7 +582,7 @@ export class ControlPlaneStack extends Stack {
         // Lambda's default log retention is NEVER EXPIRE. With ~40 functions
         // that is unbounded CloudWatch cost forever (#187).
         logGroup: new LogGroup(this, `${id}Logs`, {
-          retention: props.stage === "prod" ? RetentionDays.THREE_MONTHS : RetentionDays.ONE_WEEK,
+          retention: stage === "prod" ? RetentionDays.THREE_MONTHS : RetentionDays.ONE_WEEK,
           removalPolicy: RemovalPolicy.DESTROY,
         }),
       });
@@ -1394,7 +1503,7 @@ export class ControlPlaneStack extends Stack {
     }
 
     // ---- frontends (static SPAs on S3 + CloudFront, §4.1–4.2) ----
-    const prod = props.stage === "prod";
+    const prod = stage === "prod";
     // Assign the hoisted bindings the Cognito callback URLs and CORS resolve from.
     //
     // `connect-src` has to name every origin the SPA legitimately talks to (#197):

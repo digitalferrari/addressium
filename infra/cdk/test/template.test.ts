@@ -17,7 +17,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { App } from "aws-cdk-lib";
 import { Match, Template } from "aws-cdk-lib/assertions";
-import { ControlPlaneStack } from "../lib/control-plane-stack.js";
+import { ControlPlaneStack, STAGES, parseStage } from "../lib/control-plane-stack.js";
 
 /**
  * `props` become stack props; `context` becomes app context, which is where the
@@ -627,4 +627,118 @@ test("the erasure report's retention window is the one the bucket enforces (#164
     .Environment?.Variables ?? {};
   assert.equal(env.ANALYTICS_EVENT_RETENTION_DAYS, "45");
   assert.equal(env.ANALYTICS_ENABLED, "true");
+});
+
+test("an invalid stage fails at synth (#190)", () => {
+  // Every data-protection decision keys off this string. `"production"` and
+  // `"Prod"` both compared unequal to `"prod"`, so a config typo produced a
+  // stack holding production data while configured as a scratch environment.
+  for (const bad of ["production", "Prod", "PROD", "prod ", "test", ""]) {
+    assert.throws(
+      () => template({ stage: bad }),
+      /invalid stage/,
+      `accepted ${JSON.stringify(bad)}`,
+    );
+  }
+  // …and the valid set still synthesizes.
+  for (const ok of ["dev", "staging", "prod"]) {
+    assert.doesNotThrow(() => template({ stage: ok }), ok);
+  }
+});
+
+test("parseStage names the valid values in its error (#190)", () => {
+  // The operator is editing a JSON file they never compile, so the message is
+  // the entire interface. "invalid stage" alone sends them to the source.
+  assert.throws(() => parseStage("production"), (e: Error) => {
+    assert.match(e.message, /dev, staging, prod/);
+    assert.match(e.message, /"production"/);
+    return true;
+  });
+  assert.deepEqual([...STAGES], ["dev", "staging", "prod"]);
+});
+
+test("a prod stack refuses cdk destroy; a dev stack does not (#190)", () => {
+  // The removal policies already RETAIN the data, but a destroyed stack still
+  // tears down the API, the queues and the schedules — an outage, and not
+  // something anyone should reach by running the wrong command in the wrong
+  // terminal.
+  const app = new App({ context: { "aws:cdk:bundling-stacks": [] } });
+  const base = {
+    adminEmails: ["ops@example.com"],
+    adminHostedUiDomainPrefix: "addressium-admin",
+    env: { account: "111122223333", region: "us-east-1" },
+  };
+  assert.equal(
+    new ControlPlaneStack(app, "prod-stack", { ...base, stage: "prod" }).terminationProtection,
+    true,
+  );
+  assert.equal(
+    new ControlPlaneStack(app, "dev-stack", { ...base, stage: "dev" }).terminationProtection,
+    false,
+  );
+});
+
+test("both secrets are RETAIN, in every stage (#190)", () => {
+  // `ConfirmSecret` signs every outstanding double-opt-in and one-click
+  // unsubscribe token. Losing it does not just break new links — it invalidates
+  // every link already sitting in someone's inbox, including the unsubscribe
+  // link the law requires to work.
+  for (const stage of ["dev", "staging", "prod"]) {
+    const secrets = template({ stage }).findResources("AWS::SecretsManager::Secret");
+    assert.equal(Object.keys(secrets).length, 2, `${stage}: confirm + webhook`);
+    for (const [id, sec] of Object.entries(secrets)) {
+      assert.equal(
+        (sec as { DeletionPolicy?: string }).DeletionPolicy,
+        "Retain",
+        `${stage}/${id} would be deleted with the stack`,
+      );
+    }
+  }
+});
+
+test("prod gets a backup plan whose vault outlives the stack (#190)", () => {
+  // PITR is NOT a backup: a 35-day continuous window that lives inside the table
+  // and dies with it. A backup has to be a different resource with a different
+  // lifecycle.
+  const t = template({ stage: "prod" });
+  const vaults = t.findResources("AWS::Backup::BackupVault");
+  assert.equal(Object.keys(vaults).length, 1);
+  assert.equal(
+    (Object.values(vaults)[0] as { DeletionPolicy?: string }).DeletionPolicy,
+    "Retain",
+    "a vault destroyed with the stack is a backup that vanishes when it is needed",
+  );
+
+  const plans = Object.values(t.findResources("AWS::Backup::BackupPlan"));
+  assert.equal(plans.length, 1);
+  const rules = (plans[0]!.Properties as { BackupPlan: { BackupPlanRule: Record<string, any>[] } })
+    .BackupPlan.BackupPlanRule;
+  // Daily covering the PITR window, plus a monthly for "we noticed in March that
+  // something broke in January".
+  assert.deepEqual(
+    rules.map((r) => r.RuleName).sort(),
+    ["daily-35d", "monthly-1y"],
+  );
+  assert.equal(rules.find((r) => r.RuleName === "daily-35d")?.Lifecycle?.DeleteAfterDays, 35);
+  assert.equal(rules.find((r) => r.RuleName === "monthly-1y")?.Lifecycle?.DeleteAfterDays, 365);
+  assert.equal(Object.keys(t.findResources("AWS::Backup::BackupSelection")).length, 1);
+});
+
+test("a non-prod stage does not silently start billing for backups (#190)", () => {
+  // Off by default outside prod — a standing cost proportional to table size is
+  // exactly the kind of surprise this project avoids elsewhere. Both directions
+  // are overridable.
+  assert.deepEqual(Object.keys(template({ stage: "dev" }).findResources("AWS::Backup::BackupVault")), []);
+  assert.equal(
+    Object.keys(
+      template({ stage: "dev" }, { enableBackup: "true" }).findResources("AWS::Backup::BackupVault"),
+    ).length,
+    1,
+  );
+  assert.deepEqual(
+    Object.keys(
+      template({ stage: "prod" }, { enableBackup: "false" }).findResources("AWS::Backup::BackupVault"),
+    ),
+    [],
+  );
 });

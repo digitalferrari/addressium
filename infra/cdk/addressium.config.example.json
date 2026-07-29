@@ -1,4 +1,5 @@
 {
+  "_stage": "one of: dev | staging | prod — validated at synth (#190). It decides termination protection and log retention, so a typo is a production stack configured as a scratch one.",
   "stage": "dev",
   "region": "us-east-1",
   "adminEmails": ["you@example.com"],
