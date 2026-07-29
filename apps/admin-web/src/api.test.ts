@@ -41,9 +41,18 @@ test("campaigns() GETs the org campaign list", async () => {
   expect(init.method).toBe("GET");
 });
 
-test("subscribers() encodes the search query", async () => {
+test("subscribers() encodes the search query and carries the cursor (#182)", async () => {
+  // The endpoint returns ONE page. It used to load every subscriber in the org
+  // and filter by substring in Node, so typing in the search box was a
+  // self-inflicted DoS on the tenant's own table.
   await api.subscribers("acme", "a b@x");
-  expect(lastCall().url).toMatch(/\/orgs\/acme\/subscribers\?q=a%20b%40x$/);
+  expect(lastCall().url).toMatch(/\/orgs\/acme\/subscribers\?q=a\+b%40x$/);
+
+  await api.subscribers("acme", undefined, "CURSOR+TOKEN==", 25);
+  const url = lastCall().url;
+  expect(url).toContain("cursor=CURSOR%2BTOKEN%3D%3D");
+  expect(url).toContain("limit=25");
+  expect(url).not.toContain("q=");
 });
 
 test("importCsv() POSTs listId + csv + dryRun", async () => {

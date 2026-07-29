@@ -344,6 +344,50 @@ export class DynamoStores implements Stores {
         KeyConditionExpression: "pk = :pk AND begins_with(sk, :s)",
         ExpressionAttributeValues: { ":pk": org(orgId), ":s": "SUBSCRIBER#" },
       }),
+    /**
+     * One page of subscribers, optionally by email PREFIX (#182).
+     *
+     * The prefix path queries `gsi1` — whose sort key is the lowercased email —
+     * with `begins_with`, so the read is proportional to the MATCHES. The
+     * unfiltered path ranges the org partition's `SUBSCRIBER#` prefix. Neither
+     * loops to exhaustion: one page, one cursor.
+     *
+     * The cursor is DynamoDB's own `LastEvaluatedKey`, base64-encoded JSON. It
+     * is opaque to the caller by intent — a client-constructible cursor is a
+     * client-constructible starting key, and this endpoint is org-scoped by the
+     * partition it queries.
+     */
+    page: async (orgId, opts) => {
+      const limit = Math.min(Math.max(opts?.limit ?? 50, 1), 200);
+      const prefix = opts?.emailPrefix?.trim().toLowerCase();
+      const start = opts?.cursor
+        ? (JSON.parse(Buffer.from(opts.cursor, "base64url").toString("utf8")) as Record<string, unknown>)
+        : undefined;
+      const params: QueryCommandInput = prefix
+        ? {
+            TableName: this.tableName,
+            IndexName: "gsi1",
+            KeyConditionExpression: "gsi1pk = :p AND begins_with(gsi1sk, :e)",
+            ExpressionAttributeValues: { ":p": `${org(orgId)}#EMAIL`, ":e": prefix },
+            Limit: limit,
+            ExclusiveStartKey: start,
+          }
+        : {
+            TableName: this.tableName,
+            KeyConditionExpression: "pk = :pk AND begins_with(sk, :s)",
+            ExpressionAttributeValues: { ":pk": org(orgId), ":s": "SUBSCRIBER#" },
+            Limit: limit,
+            ExclusiveStartKey: start,
+          };
+      const res = await this.doc.send(new QueryCommand(params));
+      const items = (res.Items ?? []).map((it) => (it as Item<Subscriber>).data);
+      return {
+        items,
+        ...(res.LastEvaluatedKey
+          ? { cursor: Buffer.from(JSON.stringify(res.LastEvaluatedKey)).toString("base64url") }
+          : {}),
+      };
+    },
     // O(1) monotonic bump of a nested attribute — only advances, never rewinds,
     // and the attribute_exists guard makes an unknown subscriber a silent no-op.
     markEngaged: async (orgId, sub, at) => {
@@ -376,21 +420,63 @@ export class DynamoStores implements Stores {
         sk: `SUBSCRIPTION#${s.subscriberId}`,
         gsi2pk: `${org(s.orgId)}#SUB#${s.subscriberId}`,
         gsi2sk: `LIST#${s.listId}`,
-        status: s.status, // denormalized for the confirmed filter
+        status: s.status, // denormalized, still read by callers that hold a row
+        // Sparse gsi3 (#182): the key attributes exist ONLY while the
+        // subscription is confirmed, so the index IS the confirmed set. A
+        // subscription that lapses stops carrying them and DynamoDB drops it
+        // from the index — no tombstone, no filter, and no read capacity spent
+        // on rows that would be discarded. `put` writes the whole item, so
+        // omitting them here is what removes it.
+        ...(s.status === "confirmed"
+          ? {
+              gsi3pk: `${org(s.orgId)}#LIST#${s.listId}#CONFIRMED`,
+              // The subscriber id, because that is the order fan-out expresses
+              // its key ranges in (#171).
+              gsi3sk: s.subscriberId,
+            }
+          : {}),
         data: s,
       }),
-    listConfirmed: (orgId, listId) =>
-      this.queryAll<Subscription>({
+    listConfirmed: (orgId, listId) => this.subscriptions.confirmedRange(orgId, listId),
+    /**
+     * A key-range query over the sparse confirmed index (#182).
+     *
+     * This used to be `queryAll` over the whole list partition with a
+     * `FilterExpression`, which DynamoDB applies AFTER reading — so a send paid
+     * read capacity for every unsubscribed, bounced and complained row, and each
+     * fan-out slice re-read the entire list before discarding everything outside
+     * its window. A 250-slice campaign performed 250 full-list reads.
+     *
+     * The range is half-open `(after, until]`, matching `planFanOut` exactly:
+     * ranges are disjoint, the last is open-ended, and the boundaries are ids
+     * rather than offsets. Expressed with `>` / `<=`, so a boundary recipient
+     * lands in exactly one window rather than two or none.
+     */
+    confirmedRange: (orgId, listId, range) => {
+      const values: Record<string, string> = {
+        ":p": `${org(orgId)}#LIST#${listId}#CONFIRMED`,
+      };
+      let condition = "gsi3pk = :p";
+      if (range?.after !== undefined && range?.until !== undefined) {
+        condition += " AND gsi3sk BETWEEN :a AND :u";
+        // BETWEEN is inclusive at both ends, so the exclusive lower bound is
+        // restored by appending the smallest character that can follow it.
+        values[":a"] = `${range.after}\u0000`;
+        values[":u"] = range.until;
+      } else if (range?.after !== undefined) {
+        condition += " AND gsi3sk > :a";
+        values[":a"] = range.after;
+      } else if (range?.until !== undefined) {
+        condition += " AND gsi3sk <= :u";
+        values[":u"] = range.until;
+      }
+      return this.queryAll<Subscription>({
         TableName: this.tableName,
-        KeyConditionExpression: "pk = :pk AND begins_with(sk, :s)",
-        FilterExpression: "#st = :c",
-        ExpressionAttributeNames: { "#st": "status" },
-        ExpressionAttributeValues: {
-          ":pk": `${org(orgId)}#LIST#${listId}`,
-          ":s": "SUBSCRIPTION#",
-          ":c": "confirmed",
-        },
-      }),
+        IndexName: "gsi3",
+        KeyConditionExpression: condition,
+        ExpressionAttributeValues: values,
+      });
+    },
     listBySubscriber: (orgId, subscriberId) =>
       this.queryAll<Subscription>({
         TableName: this.tableName,

@@ -67,6 +67,8 @@ before(async () => {
       { AttributeName: "sk", AttributeType: "S" },
       { AttributeName: "gsi1pk", AttributeType: "S" },
       { AttributeName: "gsi1sk", AttributeType: "S" },
+      { AttributeName: "gsi3pk", AttributeType: "S" },
+      { AttributeName: "gsi3sk", AttributeType: "S" },
       { AttributeName: "gsi2pk", AttributeType: "S" },
       { AttributeName: "gsi2sk", AttributeType: "S" },
     ],
@@ -75,6 +77,15 @@ before(async () => {
       { AttributeName: "sk", KeyType: "RANGE" },
     ],
     GlobalSecondaryIndexes: [
+      {
+        IndexName: "gsi3",
+        KeySchema: [
+          { AttributeName: "gsi3pk", KeyType: "HASH" },
+          { AttributeName: "gsi3sk", KeyType: "RANGE" },
+        ],
+        Projection: { ProjectionType: "ALL" },
+        ProvisionedThroughput: throughput,
+      },
       {
         IndexName: "gsi1",
         KeySchema: [
@@ -342,4 +353,135 @@ test("the email reservation decides a race and never yields two ids", async () =
   // The reservation lives outside the org partition, so it never appears in a
   // subscriber listing.
   assert.deepEqual(await stores.subscribers.list(ORG), []);
+});
+
+test("the confirmed index is SPARSE — a lapsed subscription leaves it (#182)", async () => {
+  // `listConfirmed` used a FilterExpression, which DynamoDB applies AFTER
+  // reading, so every send paid read capacity for unsubscribed, bounced and
+  // complained rows. The index carries its key attributes only while the status
+  // is `confirmed`, so the index IS the confirmed set.
+  const client = new DynamoDBClient({
+    endpoint,
+    region: "us-east-1",
+    credentials: { accessKeyId: "x", secretAccessKey: "x" },
+  });
+  const stores = new DynamoStores(TABLE, client, { nonTransactionalCountersForTests: true });
+  const ORG = "sparseorg";
+  const LIST = "ledger";
+
+  const statuses = ["confirmed", "pending", "unsubscribed", "bounced", "complained"] as const;
+  for (const [i, status] of statuses.entries()) {
+    await stores.subscriptions.put({
+      orgId: ORG, subscriberId: `s${i}`, listId: LIST, status, updatedAt: "",
+    });
+  }
+  assert.deepEqual(
+    (await stores.subscriptions.listConfirmed(ORG, LIST)).map((s) => s.subscriberId),
+    ["s0"],
+    "only the confirmed row is in the index",
+  );
+
+  // Confirming later ADDS the row to the index…
+  await stores.subscriptions.put({
+    orgId: ORG, subscriberId: "s1", listId: LIST, status: "confirmed", updatedAt: "",
+  });
+  assert.deepEqual(
+    (await stores.subscriptions.listConfirmed(ORG, LIST)).map((s) => s.subscriberId),
+    ["s0", "s1"],
+  );
+
+  // …and unsubscribing REMOVES it, with no tombstone and no filter. This is the
+  // half that fails silently if `put` ever stops omitting the key attributes:
+  // the row would linger and a send would reach someone who opted out.
+  await stores.subscriptions.put({
+    orgId: ORG, subscriberId: "s0", listId: LIST, status: "unsubscribed", updatedAt: "",
+  });
+  assert.deepEqual(
+    (await stores.subscriptions.listConfirmed(ORG, LIST)).map((s) => s.subscriberId),
+    ["s1"],
+  );
+  // The item itself survives — only its index entry went.
+  assert.equal((await stores.subscriptions.get(ORG, "s0", LIST))?.status, "unsubscribed");
+});
+
+test("a fan-out slice reads only its own key range (#182)", async () => {
+  // The ranges are half-open `(after, until]` (#171). Read back from the real
+  // index, because the exclusive lower bound is expressed with a BETWEEN plus a
+  // sentinel — an off-by-one here sends a boundary recipient twice or never.
+  const client = new DynamoDBClient({
+    endpoint,
+    region: "us-east-1",
+    credentials: { accessKeyId: "x", secretAccessKey: "x" },
+  });
+  const stores = new DynamoStores(TABLE, client, { nonTransactionalCountersForTests: true });
+  const ORG = "rangeorg";
+  const LIST = "ledger";
+  const ids = ["s00", "s01", "s02", "s03", "s04", "s05"];
+  for (const id of ids) {
+    await stores.subscriptions.put({
+      orgId: ORG, subscriberId: id, listId: LIST, status: "confirmed", updatedAt: "",
+    });
+  }
+
+  const range = async (after?: string, until?: string) =>
+    (await stores.subscriptions.confirmedRange(ORG, LIST, { ...(after ? { after } : {}), ...(until ? { until } : {}) }))
+      .map((s) => s.subscriberId);
+
+  assert.deepEqual(await range(undefined, "s01"), ["s00", "s01"], "first window: until is INCLUSIVE");
+  assert.deepEqual(await range("s01", "s03"), ["s02", "s03"], "after is EXCLUSIVE");
+  assert.deepEqual(await range("s03"), ["s04", "s05"], "last window is open-ended");
+  assert.deepEqual(await range(), ids, "no range is the whole list");
+
+  // Together the windows tile the set exactly once — the property the whole
+  // key-range design exists for.
+  const tiled = [...(await range(undefined, "s01")), ...(await range("s01", "s03")), ...(await range("s03"))];
+  assert.deepEqual(tiled, ids);
+});
+
+test("subscriber search is one page, by email prefix (#182)", async () => {
+  // This endpoint used to load EVERY subscriber in the org and filter by
+  // substring in Node — typing in the console search box was a self-inflicted
+  // DoS on the tenant's own table.
+  const client = new DynamoDBClient({
+    endpoint,
+    region: "us-east-1",
+    credentials: { accessKeyId: "x", secretAccessKey: "x" },
+  });
+  const stores = new DynamoStores(TABLE, client, { nonTransactionalCountersForTests: true });
+  const ORG = "pageorg";
+  for (let i = 0; i < 12; i++) {
+    await stores.subscribers.put({
+      orgId: ORG, sub: `s${String(i).padStart(2, "0")}`,
+      email: i < 5 ? `alice${i}@x.com` : `bob${i}@x.com`,
+      attributes: {}, status: "active", entitlement: "free",
+    });
+  }
+
+  const first = await stores.subscribers.page(ORG, { limit: 5 });
+  assert.equal(first.items.length, 5, "a page is a page, not the whole org");
+  assert.ok(first.cursor, "and it says there is more");
+
+  // Paging through reaches everyone exactly once.
+  const seen = new Set(first.items.map((s) => s.sub));
+  let cursor: string | undefined = first.cursor;
+  while (cursor) {
+    const next = await stores.subscribers.page(ORG, { limit: 5, cursor });
+    for (const s of next.items) {
+      assert.ok(!seen.has(s.sub), `duplicate across pages: ${s.sub}`);
+      seen.add(s.sub);
+    }
+    cursor = next.cursor;
+  }
+  assert.equal(seen.size, 12);
+
+  // The prefix is served by the email index as a key condition, so the read is
+  // proportional to the MATCHES rather than to the list.
+  const alices = await stores.subscribers.page(ORG, { emailPrefix: "alice" });
+  assert.equal(alices.items.length, 5);
+  assert.ok(alices.items.every((s) => s.email.startsWith("alice")));
+
+  // Prefix, not substring — stated in a test because the console says so too.
+  assert.equal((await stores.subscribers.page(ORG, { emailPrefix: "@x.com" })).items.length, 0);
+  // Case-insensitive, because addresses are stored lowercased.
+  assert.equal((await stores.subscribers.page(ORG, { emailPrefix: "ALICE" })).items.length, 5);
 });

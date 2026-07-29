@@ -829,7 +829,10 @@ function Subscribers({ org }: { org: string }) {
   const [q, setQ] = useState("");
   const [query, setQuery] = useState("");
   const [rev, setRev] = useState(0);
-  const subs = useAsync(() => api.subscribers(org, query || undefined), [org, query, rev]);
+  /** Cursor stack — one entry per page visited, so Back is exact rather than re-derived. */
+  const [pages, setPages] = useState<(string | undefined)[]>([undefined]);
+  const cursor = pages[pages.length - 1];
+  const subs = useAsync(() => api.subscribers(org, query || undefined, cursor), [org, query, cursor, rev]);
   const supps = useAsync(() => api.suppressions(org), [org, rev]);
   const [email, setEmail] = useState("");
   const [msg, setMsg] = useState("");
@@ -860,19 +863,25 @@ function Subscribers({ org }: { org: string }) {
 
       <div className="card">
         <div className="row">
-          <input placeholder="Search by email…" value={q} onChange={(e) => setQ(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter") setQuery(q.trim()); }} style={{ flex: 1 }} />
-          <button className="btn" onClick={() => setQuery(q.trim())}>Search</button>
-          {query && <button className="btn ghost" onClick={() => { setQ(""); setQuery(""); }}>Clear</button>}
+          <input placeholder="Email starts with…" value={q} onChange={(e) => setQ(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") { setQuery(q.trim()); setPages([undefined]); } }} style={{ flex: 1 }} />
+          <button className="btn" onClick={() => { setQuery(q.trim()); setPages([undefined]); }}>Search</button>
+          {query && <button className="btn ghost" onClick={() => { setQ(""); setQuery(""); setPages([undefined]); }}>Clear</button>}
         </div>
+        {/* Said out loud rather than left to be discovered. A substring match
+            cannot use any index, and answering one meant loading the whole org
+            into memory (#182) — so the search is a prefix, and the box says so. */}
+        <p className="muted" style={{ margin: "6px 0 0", fontSize: 13 }}>
+          Matches the START of an address. Results are paged.
+        </p>
         {subs.loading && <p className="muted">Loading…</p>}
         {subs.error && <p className="err">{subs.error}</p>}
-        {subs.data && subs.data.length === 0 && <p className="muted">No subscribers match.</p>}
-        {subs.data && subs.data.length > 0 && (
+        {subs.data && subs.data.rows.length === 0 && <p className="muted">No subscribers match.</p>}
+        {subs.data && subs.data.rows.length > 0 && (
           <table style={{ marginTop: 8 }}>
             <thead><tr><th>Email</th><th>Status</th><th>Entitlement</th><th>Last engaged</th><th></th></tr></thead>
             <tbody>
-              {subs.data.map((s) => (
+              {subs.data.rows.map((s) => (
                 <tr key={s.sub}>
                   <td className="t-strong">{s.email}</td>
                   <td>{s.status}</td>
@@ -888,6 +897,15 @@ function Subscribers({ org }: { org: string }) {
               ))}
             </tbody>
           </table>
+        )}
+        {subs.data && (pages.length > 1 || subs.data.cursor) && (
+          <div style={{ display: "flex", gap: 8, marginTop: 10, alignItems: "center" }}>
+            <button className="btn ghost" disabled={pages.length === 1}
+              onClick={() => setPages(pages.slice(0, -1))}>Previous</button>
+            <button className="btn ghost" disabled={!subs.data.cursor}
+              onClick={() => setPages([...pages, subs.data!.cursor])}>Next</button>
+            <span className="muted">Page {pages.length}</span>
+          </div>
         )}
       </div>
 

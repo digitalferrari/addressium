@@ -170,6 +170,33 @@ export class ControlPlaneStack extends Stack {
       partitionKey: { name: "gsi2pk", type: AttributeType.STRING },
       sortKey: { name: "gsi2sk", type: AttributeType.STRING },
     });
+    /**
+     * SPARSE index over CONFIRMED subscriptions only (#182).
+     *
+     * `listConfirmed` used a `FilterExpression`, which DynamoDB applies AFTER
+     * reading — so every send paid read capacity for unsubscribed, bounced and
+     * complained rows, and each of a campaign's fan-out slices re-read the whole
+     * list. A 250-slice campaign did 250 full-list reads to send 250 windows.
+     *
+     * The index is sparse because `gsi3pk` is written ONLY when the status is
+     * `confirmed`: a subscription that lapses simply stops carrying the
+     * attribute and DynamoDB drops it from the index. So the index IS the
+     * confirmed set — no filter, and nothing to pay for rows that would be
+     * discarded.
+     *
+     * The sort key is the subscriber id, which is also the order fan-out slices
+     * their key ranges in (#171). That makes a slice a native key-range query
+     * rather than a full read plus an in-memory filter.
+     *
+     * KEYS_ONLY would be cheaper to store, but the send path needs each row's
+     * status and consent, and a second get-per-recipient would trade storage for
+     * a round trip on the hottest path in the system.
+     */
+    table.addGlobalSecondaryIndex({
+      indexName: "gsi3", // confirmed subscriptions, ordered by subscriber id
+      partitionKey: { name: "gsi3pk", type: AttributeType.STRING },
+      sortKey: { name: "gsi3sk", type: AttributeType.STRING },
+    });
 
     const archiveBucket = new Bucket(this, "ArchiveBucket", {
       blockPublicAccess: BlockPublicAccess.BLOCK_ALL,

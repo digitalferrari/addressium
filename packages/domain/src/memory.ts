@@ -140,6 +140,38 @@ export class MemSubscribers implements SubscriberStore {
     // shape so export code paths are exercised by the unit suite.
     for (const s of this.byId.values()) if (s.orgId === orgId) yield s;
   }
+  /**
+   * One page, with the same contract the real store has (#182).
+   *
+   * The cursor is the last id returned, which mirrors DynamoDB's
+   * LastEvaluatedKey closely enough to exercise the calling code — including the
+   * property that matters: a page is returned WITHOUT reading the whole org.
+   */
+  async page(
+    orgId: string,
+    opts?: { limit?: number; emailPrefix?: string; cursor?: string },
+  ) {
+    const limit = Math.min(Math.max(opts?.limit ?? 50, 1), 200);
+    const prefix = opts?.emailPrefix?.trim().toLowerCase();
+    // Sorted by the same key the real query ranges over — id for the unfiltered
+    // path, email for the index path — so page boundaries land in the same
+    // places a real store would put them.
+    const all = [...this.byId.values()]
+      .filter((s) => s.orgId === orgId && (!prefix || s.email.toLowerCase().startsWith(prefix)))
+      .sort((a, b) =>
+        prefix ? a.email.localeCompare(b.email) : a.sub.localeCompare(b.sub),
+      );
+    const from = opts?.cursor
+      ? all.findIndex((s) => (prefix ? s.email : s.sub) > opts.cursor!)
+      : 0;
+    const slice = from === -1 ? [] : all.slice(from, from + limit);
+    const last = slice.at(-1);
+    const more = from !== -1 && from + limit < all.length;
+    return {
+      items: slice,
+      ...(more && last ? { cursor: prefix ? last.email : last.sub } : {}),
+    };
+  }
   async markEngaged(orgId: string, sub: string, at: string) {
     const s = this.byId.get(subKey(orgId, sub));
     if (s && (!s.lastEngagedAt || s.lastEngagedAt < at)) {
@@ -168,6 +200,23 @@ export class MemSubscriptions implements SubscriptionStore {
         // under which the old offset-based fan-out looked correct — the fake was
         // hiding the bug it was supposed to catch.
         .sort((a, b) => a.subscriberId.localeCompare(b.subscriberId))
+    );
+  }
+  /**
+   * The confirmed rows in one key range (#182).
+   *
+   * Implemented over the same sorted set `listConfirmed` returns, and applying
+   * the SAME half-open `(after, until]` comparison the real index does — a fake
+   * that ranged inclusively at both ends would make a fan-out look correct here
+   * and duplicate a boundary recipient in production.
+   */
+  async confirmedRange(orgId: string, listId: string, range?: { after?: string; until?: string }) {
+    const all = await this.listConfirmed(orgId, listId);
+    if (!range) return all;
+    return all.filter(
+      (s) =>
+        (range.after === undefined || s.subscriberId > range.after) &&
+        (range.until === undefined || s.subscriberId <= range.until),
     );
   }
   async listBySubscriber(orgId: string, subscriberId: string) {

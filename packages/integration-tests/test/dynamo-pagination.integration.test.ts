@@ -57,12 +57,23 @@ before(async () => {
       { AttributeName: "sk", AttributeType: "S" },
       { AttributeName: "gsi1pk", AttributeType: "S" },
       { AttributeName: "gsi1sk", AttributeType: "S" },
+      { AttributeName: "gsi3pk", AttributeType: "S" },
+      { AttributeName: "gsi3sk", AttributeType: "S" },
     ],
     KeySchema: [
       { AttributeName: "pk", KeyType: "HASH" },
       { AttributeName: "sk", KeyType: "RANGE" },
     ],
     GlobalSecondaryIndexes: [
+      {
+        IndexName: "gsi3",
+        KeySchema: [
+          { AttributeName: "gsi3pk", KeyType: "HASH" },
+          { AttributeName: "gsi3sk", KeyType: "RANGE" },
+        ],
+        Projection: { ProjectionType: "ALL" },
+        ProvisionedThroughput: throughput,
+      },
       {
         IndexName: "gsi1",
         KeySchema: [

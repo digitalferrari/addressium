@@ -242,6 +242,13 @@ export function isExplicitPredicate(p: unknown): p is ExplicitPredicate {
   return !!p && typeof p === "object" && (p as ExplicitPredicate).match === "explicit";
 }
 
+/** One page of the Subscribers screen (#182). */
+export interface SubscriberPage {
+  rows: SubscriberRow[];
+  /** Opaque; pass back to fetch the next page. Absent on the last page. */
+  cursor?: string;
+}
+
 export interface SubscriberRow {
   sub: string;
   email: string;
@@ -517,8 +524,19 @@ export const api = {
   /** Add or remove one address; returns the cohort as it stands afterwards. */
   segmentMember: (orgId: string, segmentId: string, action: "add" | "remove", email: string) =>
     call<SegmentMember[]>("POST", `/segments/members`, { orgId, segmentId, action, email }),
-  subscribers: (org: string, q?: string) =>
-    call<SubscriberRow[]>("GET", `/orgs/${org}/subscribers${q ? `?q=${encodeURIComponent(q)}` : ""}`),
+  /**
+   * One PAGE of subscribers (#182). `q` is an email PREFIX, served as a key
+   * condition by the email index — a substring match cannot use any index, and
+   * the previous endpoint answered one by loading the whole org into memory.
+   */
+  subscribers: (org: string, q?: string, cursor?: string, limit?: number) => {
+    const params = new URLSearchParams();
+    if (q) params.set("q", q);
+    if (cursor) params.set("cursor", cursor);
+    if (limit) params.set("limit", String(limit));
+    const qs = params.toString();
+    return call<SubscriberPage>("GET", `/orgs/${org}/subscribers${qs ? `?${qs}` : ""}`);
+  },
   /** The full subscriber record: attributes, per-list status, segments (#205). */
   subscriber: (org: string, sub: string) =>
     call<SubscriberDetail>("GET", `/orgs/${org}/subscribers/${encodeURIComponent(sub)}`),

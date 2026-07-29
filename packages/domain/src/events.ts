@@ -135,9 +135,18 @@ export async function buildClickMap(
   stores: Stores,
   orgId: string,
   campaignId: string,
+  /**
+   * The campaign's events, when the caller has already read them (#182).
+   *
+   * `buildCampaignReport` read the whole log and then called this, which read it
+   * AGAIN — two full reads of an unbounded item set to render one screen. Passed
+   * in rather than cached inside, so there is no hidden lifetime to reason about
+   * and a direct caller still gets a correct answer.
+   */
+  preloaded?: EngagementEvent[],
 ): Promise<ClickMap> {
   const archive = await stores.archive.get(orgId, campaignId);
-  const events = await stores.events.all(orgId, campaignId);
+  const events = preloaded ?? (await stores.events.all(orgId, campaignId));
   const sent = events.filter((e) => e.type === "sent").length;
   const rows: ClickMapRow[] = [];
 

@@ -739,18 +739,29 @@ export async function subscribersListHandler(event: HttpEvent): Promise<HttpResu
   try {
     const orgId = event.pathParameters?.org ?? "";
     requireGrant(event, "subscribers:manage", orgId);
+    // One PAGE (#182). This used to load every subscriber in the org and filter
+    // by substring in Node: for a 500k-subscriber org, hundreds of megabytes
+    // across hundreds of sequential queries, triggered by typing in a search
+    // box. The prefix search is served as a key condition by the email index, so
+    // the read is proportional to the matches.
     const q = (event.queryStringParameters?.q ?? "").trim().toLowerCase();
-    const all = await stores().subscribers.list(orgId);
-    const rows = all
-      .filter((s) => (q ? s.email.toLowerCase().includes(q) : true))
-      .map((s) => ({
-        sub: s.sub,
-        email: s.email,
-        status: s.status,
-        entitlement: s.entitlement,
-        lastEngagedAt: s.lastEngagedAt,
-      }));
-    return json(200, rows);
+    const limit = Number(event.queryStringParameters?.limit ?? 50);
+    const page = await stores().subscribers.page(orgId, {
+      limit: Number.isFinite(limit) ? limit : 50,
+      ...(q ? { emailPrefix: q } : {}),
+      ...(event.queryStringParameters?.cursor ? { cursor: event.queryStringParameters.cursor } : {}),
+    });
+    const rows = page.items.map((s) => ({
+      sub: s.sub,
+      email: s.email,
+      status: s.status,
+      entitlement: s.entitlement,
+      lastEngagedAt: s.lastEngagedAt,
+    }));
+    // An OBJECT, not a bare array. The old shape had no room for a cursor, and a
+    // paginated endpoint whose response cannot say "there is more" is one that
+    // silently truncates.
+    return json(200, { rows, ...(page.cursor ? { cursor: page.cursor } : {}) });
   } catch (e) {
     return fail(e);
   }

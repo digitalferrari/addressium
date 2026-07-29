@@ -502,20 +502,29 @@ export async function sendCampaign(
   // per campaign/slice, not per recipient.
   const org = await stores.organizations.get(input.orgId);
 
-  // Narrowed to the segment first, so the key ranges below tile the same set the
-  // fan-out sliced (#203). Filtering after the range would drop recipients whose
-  // ids fall in a later window.
+  // The slice's key range is pushed into the QUERY (#182). This used to read the
+  // whole confirmed list and then discard everything outside the window, so a
+  // 250-slice campaign performed 250 full-list reads to send 250 windows —
+  // quadratic in list size, on the hottest path in the system.
+  //
+  // Segment narrowing happens after, on the already-windowed rows, so a
+  // segment-targeted slice never materializes the whole list either (#203).
+  const windowed = await stores.subscriptions.confirmedRange(
+    input.orgId,
+    input.listId,
+    input.slice,
+  );
   const all = await segmentRecipients(
     stores,
-    await stores.subscriptions.listConfirmed(input.orgId, input.listId),
+    windowed,
     input.orgId,
     input.segmentId,
     opts.segments,
   );
-  // A slice sends only its KEY RANGE of the confirmed set; no slice → the whole
-  // list. Ranges are immune to the set changing under them mid-fan-out (#171).
-  const ordered = [...all].sort((a, b) => a.subscriberId.localeCompare(b.subscriberId));
-  const confirmed = recipientsInSlice(ordered, input.slice);
+  // Re-sorted rather than trusted: the index returns subscriber-id order, and
+  // the ranges are expressed in that order (#171), but a store that ever
+  // returned rows unordered would silently break the window boundaries.
+  const confirmed = [...all].sort((a, b) => a.subscriberId.localeCompare(b.subscriberId));
   let sent = 0;
   let suppressed = 0;
   let devBlocked = 0;

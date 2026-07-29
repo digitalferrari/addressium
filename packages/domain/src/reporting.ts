@@ -59,8 +59,16 @@ export async function buildCampaignReport(
   orgId: string,
   campaignId: string,
 ): Promise<CampaignReport> {
+  // ONE read of the event log, not two (#182). This read the whole log to derive
+  // counters and then called `buildClickMap`, which read it again — two full
+  // reads of an unbounded item set to render one screen.
   const events = await stores.events.all(orgId, campaignId);
-  const counters = deriveCounters(events);
-  const clickMap = await buildClickMap(stores, orgId, campaignId);
+  // Prefer the STORED counters. They are maintained transactionally with each
+  // append (#221) and are what `checkDeliverability` evaluates, so using them
+  // here means the bounce rate an operator reads is the same number that halted
+  // the campaign — deriving separately let the report and the halt disagree.
+  const campaign = await stores.campaigns.get(orgId, campaignId);
+  const counters = campaign?.counters ?? deriveCounters(events);
+  const clickMap = await buildClickMap(stores, orgId, campaignId, events);
   return { orgId, campaignId, counters, rates: deliverabilityRates(counters), clickMap };
 }

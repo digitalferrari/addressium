@@ -181,6 +181,29 @@ export interface SubscriberStore {
    */
   stream(orgId: string): AsyncIterable<Subscriber>;
   /**
+   * One page of subscribers, optionally narrowed to an email PREFIX (#182).
+   *
+   * The admin search loaded EVERY subscriber for the org and filtered by
+   * substring in Node. For a 500k-subscriber org that is hundreds of megabytes
+   * across hundreds of sequential queries — typing in the console's search box
+   * was a self-inflicted denial of service on the tenant's own table, and it
+   * grew worse exactly as an org became more valuable.
+   *
+   * `emailPrefix` is served by the `gsi1` email index as a key condition, so the
+   * read is proportional to the MATCHES rather than to the list. That is a
+   * deliberate narrowing from substring to prefix: a substring match cannot use
+   * any index, so the only honest choices were "prefix, bounded" or "substring,
+   * unbounded". The console says which it is doing.
+   *
+   * `cursor` is opaque and comes from the previous page. It is the store's
+   * pagination token verbatim, so callers cannot construct one that skips the
+   * org scoping.
+   */
+  page(
+    orgId: string,
+    opts?: { limit?: number; emailPrefix?: string; cursor?: string },
+  ): Promise<{ items: Subscriber[]; cursor?: string }>;
+  /**
    * Advance `lastEngagedAt` to `at` if it's newer (monotonic). Called on a CLICK
    * only — opens don't count. No-op if the subscriber is unknown. O(1) update.
    */
@@ -190,7 +213,27 @@ export interface SubscriberStore {
 export interface SubscriptionStore {
   get(orgId: string, sub: string, listId: string): Promise<Subscription | undefined>;
   put(s: Subscription): Promise<void>;
+  /**
+   * Every confirmed subscription on a list, ordered by subscriber id.
+   *
+   * Used to PLAN a fan-out, which needs the whole ordered set to compute
+   * boundaries. Sending uses `confirmedRange` instead — see below.
+   */
   listConfirmed(orgId: string, listId: string): Promise<Subscription[]>;
+  /**
+   * The confirmed subscriptions in one half-open key range `(after, until]`
+   * (#182).
+   *
+   * `listConfirmed` + `recipientsInSlice` read the ENTIRE list and then threw
+   * away everything outside the window, so a 250-slice campaign performed 250
+   * full-list reads to send 250 windows — quadratic in list size, on the hottest
+   * path in the system. This pushes the range into the query.
+   *
+   * The ordering and the range semantics must match `planFanOut` exactly: the
+   * ranges are disjoint, the last is open-ended, and the boundaries are
+   * subscriber ids rather than offsets (#171).
+   */
+  confirmedRange(orgId: string, listId: string, range?: RecipientSlice): Promise<Subscription[]>;
   /** All of a subscriber's subscriptions across lists (preference center, unsub-all). */
   listBySubscriber(orgId: string, subscriberId: string): Promise<Subscription[]>;
 }

@@ -1158,11 +1158,37 @@ caller it had succeeded:
 
 - **Org scoping**: `orgId` prefixes partition keys, so every access pattern is
   implicitly silo-scoped; cross-org reads are impossible by construction.
-- List membership & status: GSI on `(listId, status)` → paginated list views and
-  segment base sets.
+- List membership & status: **`gsi3`, a SPARSE index over confirmed
+  subscriptions only** (#182). `gsi3pk = ORG#<org>#LIST#<list>#CONFIRMED` and
+  `gsi3sk = <subscriberId>`, and the key attributes are written **only while the
+  status is `confirmed`** — so a subscription that lapses stops carrying them and
+  DynamoDB drops it from the index. The index *is* the confirmed set.
+
+  This replaced a `FilterExpression`, which DynamoDB applies **after** reading:
+  every send paid read capacity for unsubscribed, bounced and complained rows,
+  and each of a campaign's fan-out slices re-read the whole list before
+  discarding everything outside its window. A 250-slice campaign performed 250
+  full-list reads to send 250 windows — quadratic in list size, on the hottest
+  path in the system.
+
+  The sort key is the subscriber id because that is the order fan-out expresses
+  its key ranges in (#171), so `confirmedRange(orgId, listId, slice)` is a native
+  key-range query. The range is half-open `(after, until]`, matching `planFanOut`
+  exactly, so a boundary recipient lands in one window rather than two or none.
 - Engagement recency: GSI on `(subscriberId, lastEngagedAt)` for
   "hasn't opened in N days" style predicates.
-- Email lookup: GSI on normalized email for import dedupe and unsubscribe.
+- Email lookup: `gsi1` on the normalized email, for import dedupe, unsubscribe,
+  and the console's **paginated prefix search** (#182). The admin search used to
+  load every subscriber in the org and filter by substring in Node — for a
+  500k-subscriber org, hundreds of megabytes across hundreds of sequential
+  queries, triggered by typing in a search box, and worse the more valuable the
+  org became. It is now one page with an opaque cursor, and the query is a
+  `begins_with` key condition on this index.
+
+  That is a deliberate narrowing from substring to **prefix**. A substring match
+  cannot use any index, so the only honest options were "prefix, bounded" or
+  "substring, unbounded"; the console's search box says which it does rather than
+  leaving an operator to discover that `@acme.com` finds nothing.
 - **Materialized tags**: common segment memberships precomputed as
   attributes/tags on the subscriber so frequent segments are O(query), not
   O(scan).
