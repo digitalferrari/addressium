@@ -6,7 +6,8 @@
  * Built assets are uploaded by CI (`aws s3 sync apps/<app>/dist s3://<bucket>`);
  * we don't BucketDeployment here because the apps aren't built in this repo yet.
  */
-import { Duration, RemovalPolicy } from "aws-cdk-lib";
+import { Duration, RemovalPolicy, Stack } from "aws-cdk-lib";
+import { PolicyStatement, ServicePrincipal } from "aws-cdk-lib/aws-iam";
 import { Construct } from "constructs";
 import { Bucket, BlockPublicAccess } from "aws-cdk-lib/aws-s3";
 import {
@@ -130,10 +131,40 @@ export class StaticSite extends Construct {
         viewerProtocolPolicy: ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
         responseHeadersPolicy: headers,
       },
+      // 404 ONLY (#202). Mapping 403 → 200 meant every WAF-blocked request was
+      // answered `200 OK` with the app's own HTML: the block still happened, but
+      // scanners, uptime monitors and anything reading WAF metrics all saw
+      // success — an edge control that works and reports that it does not.
+      //
+      // 403 was mapped because S3 returns it for a missing key when the caller
+      // cannot list the bucket, so an unknown SPA route 403'd instead of 404'ing
+      // and client-side routing broke. The fix is below: grant `s3:ListBucket`
+      // to the distribution so S3 answers 404 for a missing key and the mapping
+      // can be narrowed to the status that actually means "no such route".
       errorResponses: [
-        { httpStatus: 403, responseHttpStatus: 200, responsePagePath: "/index.html" },
         { httpStatus: 404, responseHttpStatus: 200, responsePagePath: "/index.html" },
       ],
     });
+
+    // Lets S3 distinguish "missing key" (404) from "not allowed" (403) for this
+    // distribution only — scoped by the source-ARN condition, so nothing else
+    // gains the ability to enumerate the bucket.
+    this.bucket.addToResourcePolicy(
+      new PolicyStatement({
+        actions: ["s3:ListBucket"],
+        resources: [this.bucket.bucketArn],
+        principals: [new ServicePrincipal("cloudfront.amazonaws.com")],
+        conditions: {
+          StringEquals: {
+            "AWS:SourceArn": Stack.of(this).formatArn({
+              service: "cloudfront",
+              region: "",
+              resource: "distribution",
+              resourceName: this.distribution.distributionId,
+            }),
+          },
+        },
+      }),
+    );
   }
 }

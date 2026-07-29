@@ -353,7 +353,24 @@ vector.
 
 ### 4.7 Data protection & privacy
 
-- **Encryption** at rest (KMS on DynamoDB/S3) and in transit (TLS 1.2+).
+- **Encryption** at rest and in transit (TLS 1.2+). The DynamoDB table uses a
+  **customer-managed KMS key** with rotation enabled, not the AWS-owned default
+  (#202) — the default gives no CloudTrail record of key usage, no rotation
+  control and no crypto-shredding option, all three of which an auditor expects
+  on a multi-tenant PII store. The same key encrypts both SNS topics, because
+  **SNS is not encrypted by default** (unlike S3, DynamoDB and Kinesis) and the
+  SES events topic carries bounce and complaint notifications containing
+  subscriber addresses. Queues declare `SQS_MANAGED` explicitly rather than
+  relying on the service default — an auditor reads the template, not the
+  service documentation.
+
+  The key is `RETAIN` with a 30-day pending window: deleting it makes every
+  ciphertext permanently unreadable, and that includes the backups, which are
+  encrypted with it. Queues deliberately do **not** use the CMK: `SesEventsTopic`
+  publishes into `EventsQueue`, and a customer-managed key there additionally
+  needs a key policy admitting the SNS service principal — a second failure mode
+  (silently undelivered notifications) in exchange for control over ciphertexts
+  that live at most 14 days. The durable store is the table, and that has the CMK.
 - **Claim minimization** in tokens; **token redaction** from the event pipeline
   and logs (no bearer tokens at rest).
 - **Consent provenance**, configurable retention, and **GDPR/CCPA** export +

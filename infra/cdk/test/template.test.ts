@@ -1016,3 +1016,139 @@ test("the sweep gets a long timeout, because it walks a whole org (#233)", () =>
   const timeout = (sweep[1].Properties as { Timeout?: number }).Timeout ?? 0;
   assert.ok(timeout >= 300, `sweep timeout is ${timeout}s`);
 });
+
+// ---- encryption, reliability and governance (#202) ----
+
+test("the data plane uses a customer-managed key, not the AWS-owned one (#202)", () => {
+  // The default gives no CloudTrail record of key usage, no rotation control and
+  // no crypto-shredding — all three of which an auditor expects on a
+  // multi-tenant PII store.
+  const t = template();
+  const keys = Object.values(t.findResources("AWS::KMS::Key"));
+  assert.ok(keys.length >= 1, "no CMK");
+  const key = keys[0]!;
+  assert.equal((key.Properties as { EnableKeyRotation?: boolean }).EnableKeyRotation, true);
+  // A deleted key makes every ciphertext permanently unreadable — including the
+  // backups, which are encrypted with it. That is total loss no restore survives.
+  assert.equal((key as { DeletionPolicy?: string }).DeletionPolicy, "Retain");
+
+  t.hasResourceProperties("AWS::DynamoDB::Table", {
+    SSESpecification: Match.objectLike({ SSEEnabled: true }),
+  });
+});
+
+test("SNS topics are encrypted at rest (#202)", () => {
+  // SNS is NOT encrypted by default, unlike S3/DynamoDB/Kinesis, and the SES
+  // events topic carries bounce and complaint notifications containing
+  // subscriber email addresses. The synthesized topic had no Properties at all.
+  const topics = Object.entries(template({ opsAlertEmail: "ops@example.com" })
+    .findResources("AWS::SNS::Topic"));
+  assert.ok(topics.length >= 2);
+  for (const [id, topic] of topics) {
+    assert.ok(
+      (topic.Properties as { KmsMasterKeyId?: unknown })?.KmsMasterKeyId,
+      `${id} is unencrypted`,
+    );
+  }
+});
+
+test("queue encryption is DECLARED, not merely inherited (#202)", () => {
+  // SQS does encrypt by default, but the template said nothing — and an auditor
+  // reads the template, not the service documentation.
+  for (const [id, q] of Object.entries(template().findResources("AWS::SQS::Queue"))) {
+    const p = q.Properties as { SqsManagedSseEnabled?: boolean; KmsMasterKeyId?: unknown };
+    assert.ok(p.SqsManagedSseEnabled === true || p.KmsMasterKeyId, `${id} declares no encryption`);
+  }
+});
+
+test("the send archive cannot be deleted by the sender (#202)", () => {
+  // `grantReadWrite` includes `s3:DeleteObject*`, and that wildcard matches
+  // `DeleteObjectVersion` — so versioning did NOT protect the evidentiary
+  // archive from a compromised or buggy sender, which is the one thing
+  // versioning was there to do.
+  const t = template();
+  const archive = Object.entries(t.findResources("AWS::S3::Bucket")).find(([id]) =>
+    id.startsWith("ArchiveBucket"),
+  )!;
+  const arnRef = archive[0];
+
+  for (const policy of Object.values(t.findResources("AWS::IAM::Policy"))) {
+    const doc = (policy.Properties as { PolicyDocument: { Statement: Record<string, any>[] } })
+      .PolicyDocument;
+    for (const st of doc.Statement ?? []) {
+      const actions = Array.isArray(st.Action) ? st.Action : [st.Action];
+      if (!actions.some((a: string) => typeof a === "string" && a.startsWith("s3:DeleteObject"))) continue;
+      // A delete grant exists somewhere — it must not reach the archive bucket.
+      assert.ok(
+        !JSON.stringify(st.Resource ?? "").includes(arnRef),
+        `a policy grants ${actions.join(",")} on the send archive`,
+      );
+    }
+  }
+});
+
+test("a WAF-blocked request is not answered 200 OK (#202)", () => {
+  // Mapping 403 → 200 meant the block still happened but scanners, uptime
+  // monitors and WAF metric consumers all saw success — an edge control that
+  // works and reports that it does not.
+  for (const [id, d] of Object.entries(template().findResources("AWS::CloudFront::Distribution"))) {
+    const responses =
+      ((d.Properties as { DistributionConfig: Record<string, any> }).DistributionConfig
+        .CustomErrorResponses ?? []) as Record<string, number>[];
+    assert.ok(
+      !responses.some((r) => r.ErrorCode === 403),
+      `${id} still rewrites 403 to a success page`,
+    );
+    // 404 → index.html stays: that is SPA routing, and S3 now returns 404 for a
+    // missing key because the distribution can list the bucket.
+    assert.ok(responses.some((r) => r.ErrorCode === 404 && r.ResponseCode === 200));
+  }
+});
+
+test("the OpenSearch mirror is not on the public internet (#202)", () => {
+  // `AllowFromPublic: true` put the collection AND its dashboard on the
+  // internet, protected only by IAM — a mirror of every subscriber attribute
+  // reachable from anywhere with a credential.
+  const t = template({}, { enableOpenSearchMirror: "true" });
+  const net = Object.values(t.findResources("AWS::OpenSearchServerless::SecurityPolicy")).find((p) =>
+    (p.Properties as { Type: string }).Type === "network",
+  )!;
+  const policy = JSON.parse((net.Properties as { Policy: string }).Policy) as Record<string, any>[];
+  for (const rule of policy) {
+    assert.equal(rule.AllowFromPublic, false, "the mirror is publicly reachable");
+  }
+});
+
+test("standby replicas are prod-only (#202)", () => {
+  // They roughly DOUBLE the OCU floor, which is the largest standing cost in the
+  // stack when the mirror is on.
+  const collOf = (stage: string) =>
+    Object.values(
+      template({ stage }, { enableOpenSearchMirror: "true" }).findResources(
+        "AWS::OpenSearchServerless::Collection",
+      ),
+    )[0]!.Properties as { StandbyReplicas?: string };
+  assert.equal(collOf("prod").StandbyReplicas, "ENABLED");
+  assert.equal(collOf("dev").StandbyReplicas, "DISABLED");
+});
+
+test("the stream consumer's exhausted batches go somewhere, and alarm (#202)", () => {
+  // After 3 attempts the records were DROPPED with no destination and no signal,
+  // so the mirror diverged from the table silently and stayed diverged.
+  const t = template({}, { enableOpenSearchMirror: "true" });
+  const mapping = Object.values(t.findResources("AWS::Lambda::EventSourceMapping")).find(
+    (m) => (m.Properties as { EventSourceArn?: unknown; StartingPosition?: string }).StartingPosition,
+  )!;
+  const p = mapping.Properties as Record<string, any>;
+  assert.ok(p.DestinationConfig?.OnFailure?.Destination, "no failure destination");
+  // One poison record used to fail its whole batch of 100 forever.
+  assert.equal(p.BisectBatchOnFunctionError, true);
+  assert.deepEqual(p.FunctionResponseTypes, ["ReportBatchItemFailures"]);
+
+  assert.ok(
+    Object.keys(t.findResources("AWS::CloudWatch::Alarm")).some((a) =>
+      a.startsWith("MirrorDlqNotEmptyAlarm"),
+    ),
+    "divergence is still silent",
+  );
+});

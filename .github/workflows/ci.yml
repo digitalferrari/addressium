@@ -24,6 +24,17 @@ jobs:
       - run: npm run build
       - run: npm test --if-present
       - run: npm run test:web --if-present
+      # A real `cdk synth`, not just the assertion tests (#202).
+      #
+      # `npm test` builds templates via `Template.fromStack`, which covers the
+      # STACK. It does not cover `bin/addressium.ts` — config loading, stage
+      # validation, the app wiring — and it does not run the bundler. Every
+      # infrastructure defect this repo has shipped was synth-visible, so the
+      # cheapest possible gate is to actually synthesize.
+      - name: cdk synth
+        run: |
+          cp infra/cdk/addressium.config.example.json infra/cdk/addressium.config.json
+          npm run --workspace infra/cdk synth -- --quiet
 
   sbom:
     runs-on: ubuntu-latest

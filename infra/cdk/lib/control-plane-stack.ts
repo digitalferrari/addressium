@@ -17,9 +17,10 @@ import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { Stack, type StackProps, RemovalPolicy, Duration, CfnOutput, Lazy, ArnFormat } from "aws-cdk-lib";
 import type { Construct } from "constructs";
-import { AttributeType, BillingMode, StreamViewType, Table } from "aws-cdk-lib/aws-dynamodb";
+import { AttributeType, BillingMode, StreamViewType, Table, TableEncryption } from "aws-cdk-lib/aws-dynamodb";
+import { Key } from "aws-cdk-lib/aws-kms";
 import { Bucket, BlockPublicAccess, ObjectLockRetention, StorageClass } from "aws-cdk-lib/aws-s3";
-import { Queue } from "aws-cdk-lib/aws-sqs";
+import { Queue, QueueEncryption } from "aws-cdk-lib/aws-sqs";
 import {
   Mfa,
   UserPool,
@@ -34,6 +35,7 @@ import { Runtime } from "aws-cdk-lib/aws-lambda";
 import { NodejsFunction } from "aws-cdk-lib/aws-lambda-nodejs";
 import type { CfnFunction } from "aws-cdk-lib/aws-lambda";
 import { SqsEventSource, DynamoEventSource } from "aws-cdk-lib/aws-lambda-event-sources";
+import { SqsDestination } from "aws-cdk-lib/aws-lambda-destinations";
 import { StartingPosition } from "aws-cdk-lib/aws-lambda";
 import { CfnCollection, CfnSecurityPolicy, CfnAccessPolicy } from "aws-cdk-lib/aws-opensearchserverless";
 import { HttpApi, HttpMethod, CorsHttpMethod } from "aws-cdk-lib/aws-apigatewayv2";
@@ -192,11 +194,38 @@ export class ControlPlaneStack extends Stack {
       ? new Stream(this, "AnalyticsStream", { streamMode: StreamMode.ON_DEMAND })
       : undefined;
 
+    /**
+     * Customer-managed key for the data plane (#202).
+     *
+     * DynamoDB's default is an AWS-OWNED key: no CloudTrail record of key usage,
+     * no rotation control, and no crypto-shredding option — all three of which
+     * an auditor expects on a multi-tenant PII store. The same key encrypts the
+     * SNS topics, because SNS is NOT encrypted by default (unlike S3, DynamoDB
+     * and Kinesis) and `SesEventsTopic` carries bounce and complaint
+     * notifications containing subscriber email addresses.
+     *
+     * RETAIN and a 30-day pending window: a deleted KMS key makes every
+     * ciphertext under it permanently unreadable, which for the subscriber table
+     * is total data loss that no backup survives — the backup is encrypted with
+     * the same key.
+     *
+     * Changing this on a LIVE table replaces it. Nothing is deployed yet, which
+     * is exactly the window the issue names for doing it.
+     */
+    const dataKey = new Key(this, "DataKey", {
+      description: "addressium: DynamoDB table, SNS topics, SQS queues",
+      enableKeyRotation: true,
+      removalPolicy: RemovalPolicy.RETAIN,
+      pendingWindow: Duration.days(30),
+    });
+
     const table = new Table(this, "Table", {
       partitionKey: { name: "pk", type: AttributeType.STRING },
       sortKey: { name: "sk", type: AttributeType.STRING },
       billingMode: BillingMode.PAY_PER_REQUEST,
       pointInTimeRecovery: true,
+      encryption: TableEncryption.CUSTOMER_MANAGED,
+      encryptionKey: dataKey,
       stream: enableOpenSearchMirror ? StreamViewType.NEW_AND_OLD_IMAGES : undefined,
       kinesisStream: analyticsStream,
       // NEVER destroy subscriber, consent, or analytics data — in ANY stage.
@@ -373,10 +402,30 @@ export class ControlPlaneStack extends Stack {
     // Send pipeline queue with a dead-letter queue (#92): a message that fails
     // to send `maxReceiveCount` times lands in the DLQ instead of being lost, so
     // it can be inspected and replayed. Alarms below page ops when it fills.
-    const sendDlq = new Queue(this, "SendDlq", { retentionPeriod: Duration.days(14) });
+    /**
+     * Queue encryption, declared rather than inherited (#202).
+     *
+     * SQS does encrypt by default, but the synthesized template said nothing —
+     * and an auditor reads the template, not the service documentation. Stating
+     * it makes the posture reviewable.
+     *
+     * `SQS_MANAGED`, not the CMK above. `SesEventsTopic` publishes into
+     * `EventsQueue`, and a customer-managed key on the queue additionally
+     * requires a key policy admitting the SNS service principal — a second
+     * failure mode (silently undelivered notifications) in exchange for control
+     * over a key whose ciphertexts live for at most 14 days. The durable PII
+     * store is the table, and that one has the CMK.
+     */
+    const queueEncryption = { encryption: QueueEncryption.SQS_MANAGED } as const;
+
+    const sendDlq = new Queue(this, "SendDlq", {
+      retentionPeriod: Duration.days(14),
+      ...queueEncryption,
+    });
     const sendQueue = new Queue(this, "SendQueue", {
       visibilityTimeout: Duration.minutes(5),
       deadLetterQueue: { queue: sendDlq, maxReceiveCount: 5 },
+      ...queueEncryption,
     });
     // Engagement-event buffer (#218, compendium #20/#44). SES → SNS → SQS →
     // Lambda, NOT SNS → Lambda. An SNS→Lambda subscription is an ASYNCHRONOUS
@@ -385,14 +434,20 @@ export class ControlPlaneStack extends Stack {
     // mailed, so the damage compounds silently and is invisible until
     // deliverability is already gone. The queue makes delivery durable and the
     // DLQ makes a failure inspectable and replayable.
-    const eventsDlq = new Queue(this, "EventsDlq", { retentionPeriod: Duration.days(14) });
+    const eventsDlq = new Queue(this, "EventsDlq", {
+      retentionPeriod: Duration.days(14),
+      ...queueEncryption,
+    });
     const eventsQueue = new Queue(this, "EventsQueue", {
       // Comfortably above the handler's own timeout so a slow batch is not
       // redelivered while it is still being processed.
       visibilityTimeout: Duration.minutes(5),
       deadLetterQueue: { queue: eventsDlq, maxReceiveCount: 5 },
+      ...queueEncryption,
     });
-    const sesEvents = new Topic(this, "SesEventsTopic");
+    // Encrypted at rest (#202). SNS is NOT encrypted by default, and this topic
+    // carries bounce and complaint notifications containing subscriber emails.
+    const sesEvents = new Topic(this, "SesEventsTopic", { masterKey: dataKey });
     // SES publishes engagement events here via each org's configuration-set
     // event destination. Without this policy SES is denied and the event plane
     // stays dead even once the destination exists (#208). SourceAccount stops
@@ -417,7 +472,7 @@ export class ControlPlaneStack extends Stack {
     const externalOpsTopic = props.opsAlertTopicArn?.trim();
     const ownedOpsTopic = externalOpsTopic
       ? undefined
-      : new Topic(this, "OpsAlertsTopic");
+      : new Topic(this, "OpsAlertsTopic", { masterKey: dataKey });
     if (ownedOpsTopic && props.opsAlertEmail?.trim()) {
       ownedOpsTopic.addSubscription(new EmailSubscription(props.opsAlertEmail.trim()));
     }
@@ -996,7 +1051,12 @@ export class ControlPlaneStack extends Stack {
     confirmSecret.grantRead(senderFn); // signs the List-Unsubscribe token (#178)
     webhookSecret.grantRead(entitlementFn);
     webhookSecret.grantRead(identityFn);
-    archiveBucket.grantReadWrite(senderFn);
+    // grantPut + grantRead, NOT grantReadWrite (#202). `grantReadWrite` includes
+    // `s3:DeleteObject*`, and that wildcard matches `DeleteObjectVersion` — so
+    // versioning did NOT protect the evidentiary send archive from a compromised
+    // or buggy sender, which is the one thing versioning was there to do.
+    archiveBucket.grantPut(senderFn);
+    archiveBucket.grantRead(senderFn);
     // kms:Sign is scoped by the addressium key-tag condition and ses:SendEmail to
     // this account's SES identities/config-sets (#93). Per-org signing keys are
     // created by provisioning at runtime and tagged app=addressium, so the tag
@@ -1516,6 +1576,20 @@ export class ControlPlaneStack extends Stack {
     // ---- OpenSearch segmentation mirror (opt-in, §5, #28) ----
     if (enableOpenSearchMirror) {
       const collName = `addressium-${props.stage}`;
+      // Where the stream consumer's exhausted batches land (#202). Without it
+      // the records were dropped and the mirror diverged with no signal.
+      const mirrorDlq = new Queue(this, "MirrorDlq", {
+        retentionPeriod: Duration.days(14),
+        ...queueEncryption,
+      });
+      alarm("MirrorDlqNotEmptyAlarm", new Alarm(this, "MirrorDlqNotEmptyAlarm", {
+        metric: mirrorDlq.metricApproximateNumberOfMessagesVisible({ period: Duration.minutes(5) }),
+        threshold: 0,
+        comparisonOperator: ComparisonOperator.GREATER_THAN_THRESHOLD,
+        evaluationPeriods: 1,
+        treatMissingData: TreatMissingData.NOT_BREACHING,
+        alarmDescription: "addressium: OpenSearch mirror is diverging from the table (#202)",
+      }));
       // Serverless collection needs an encryption + network policy before it
       // can be created, and a data-access policy for the indexer role.
       const encPolicy = new CfnSecurityPolicy(this, "OsEncPolicy", {
@@ -1535,13 +1609,25 @@ export class ControlPlaneStack extends Stack {
               { ResourceType: "collection", Resource: [`collection/${collName}`] },
               { ResourceType: "dashboard", Resource: [`collection/${collName}`] },
             ],
-            AllowFromPublic: true,
+            // NOT public (#202). `AllowFromPublic: true` put the collection AND
+            // its dashboard on the internet, protected only by IAM — a
+            // subscriber-attribute mirror reachable from anywhere with a
+            // credential. The indexer reaches it over the AWS network as a VPC
+            // endpoint principal; an operator who needs dashboard access adds
+            // their own source explicitly rather than getting it by default.
+            AllowFromPublic: false,
+            SourceVPCEs: [],
           },
         ]),
       });
       const collection = new CfnCollection(this, "SegmentCollection", {
         name: collName,
         type: "SEARCH",
+        // Standby replicas roughly DOUBLE the OCU floor, and the OCU floor is the
+        // largest standing cost in this stack when the mirror is on (#202). Prod
+        // keeps them; a scratch environment paying twice for redundancy it does
+        // not need is the kind of surprise this project avoids elsewhere.
+        standbyReplicas: stage === "prod" ? "ENABLED" : "DISABLED",
       });
       collection.addDependency(encPolicy);
       collection.addDependency(netPolicy);
@@ -1554,6 +1640,15 @@ export class ControlPlaneStack extends Stack {
           startingPosition: StartingPosition.LATEST,
           batchSize: 100,
           retryAttempts: 3,
+          // After 3 attempts the records were DROPPED with no destination and no
+          // signal, so the OpenSearch mirror diverged from the table silently and
+          // stayed diverged — segments quietly resolving against stale data
+          // (#202). A DLQ makes the divergence recoverable, and alarmed.
+          onFailure: new SqsDestination(mirrorDlq),
+          // One poison record used to fail its whole batch of 100 forever. Bisect
+          // isolates it so the other 99 land.
+          bisectBatchOnError: true,
+          reportBatchItemFailures: true,
         }),
       );
       indexerFn.addToRolePolicy(
