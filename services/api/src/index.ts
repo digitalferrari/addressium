@@ -1284,12 +1284,30 @@ export async function privacyHandler(event: HttpEvent): Promise<HttpResult> {
     }
     if (action === "erase") {
       requireGrant(event, "subscribers:delete", orgId);
-      const erased = await eraseSubscriber(stores(), clock, orgId, email);
+      const report = await eraseSubscriber(stores(), clock, orgId, email, {
+        // The lake only exists when the analytics tier is on, so only then is
+        // there a retention window to quote. Claiming one either way would be a
+        // number the operator could not check.
+        analyticsEnabled: process.env.ANALYTICS_ENABLED === "true",
+        // Read from the same env the bucket's lifecycle rule is built from, so
+        // the date the subject is told matches the rule that enforces it.
+        ...(process.env.ANALYTICS_EVENT_RETENTION_DAYS
+          ? { lakeRetentionDays: Number(process.env.ANALYTICS_EVENT_RETENTION_DAYS) }
+          : {}),
+      });
       // Erasure is irreversible. If nothing records that it happened, nobody
       // can later demonstrate the request was honoured — or notice one that
-      // was not requested.
-      await audit(event, orgId, "privacy.erase", email);
-      return json(200, { erased });
+      // was not requested. The counts go in the entry too: "erased: true" is
+      // what made #164 invisible, since it said the same thing whether one item
+      // was anonymized or every trace was removed.
+      await audit(
+        event,
+        orgId,
+        "privacy.erase",
+        `${email} events=${report.eventsDeleted} subs=${report.subscriptionsRedacted}`,
+      );
+      // `erased` is kept for the existing client; the report is the useful half.
+      return json(200, { erased: report.found, report });
     }
     return json(400, { error: "action must be export or erase" });
   } catch (e) {

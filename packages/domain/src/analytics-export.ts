@@ -10,14 +10,26 @@
  * stream image — so it is unit-tested without any AWS wiring. The Firehose
  * transformation Lambda (services/analytics-export) is a thin shell over it.
  */
-import type { EngagementEvent, EventType } from "@addressium/core";
+import type { EngagementEvent, ErasureRecord, EventType } from "@addressium/core";
+
+/**
+ * The `event_type` values the lake carries.
+ *
+ * `erased` is not an engagement event — it is the GDPR tombstone (#164), landed
+ * in the SAME table on purpose. Rows already written to S3 cannot be deleted per
+ * subject (compressed, partitioned, append-only objects), so every query
+ * anti-joins against these rows instead. Putting them in the existing table
+ * means no second Firehose, no second Glue table, and no partition an operator
+ * can forget to include in a query.
+ */
+export type LakeEventType = EventType | "erased";
 
 /** A flattened, columnar-friendly analytics row for one engagement event. */
 export interface EventAnalyticsRow {
   org_id: string;
   campaign_id: string;
   subscriber_id: string;
-  event_type: EventType;
+  event_type: LakeEventType;
   /** Resolved link id for clicks; null otherwise (tokens are never exported). */
   link_id: string | null;
   at: string;
@@ -71,4 +83,44 @@ export function eventFromImage(image: Record<string, DdbAttr> | undefined): Enga
   if (!orgId || !campaignId || !subscriberId || !type || !at) return null;
   const linkId = d.linkId?.S;
   return { orgId, campaignId, subscriberId, type, at, ...(linkId ? { linkId } : {}) };
+}
+
+/**
+ * Flatten an erasure tombstone into a lake row (#164).
+ *
+ * `campaign_id` is empty rather than null: it is a partition-adjacent column the
+ * Glue SerDe reads as a string, and an anti-join keyed on `subscriber_id` never
+ * looks at it. It carries no personal data — a random UUID whose link to a
+ * person was destroyed by the erasure that produced this row.
+ */
+export function toErasureAnalyticsRow(e: ErasureRecord): EventAnalyticsRow {
+  return {
+    org_id: e.orgId,
+    campaign_id: "",
+    subscriber_id: e.subscriberId,
+    event_type: "erased",
+    link_id: null,
+    at: e.erasedAt,
+    event_date: eventPartitionDate(e.erasedAt),
+  };
+}
+
+/**
+ * Pull an `ErasureRecord` out of a stream image, or null when the item is not
+ * one (#164).
+ *
+ * A DELETE arrives with no NewImage, so only writes produce a row — which is
+ * what we want: the tombstone is written once and never removed.
+ */
+export function erasureFromImage(image: Record<string, DdbAttr> | undefined): ErasureRecord | null {
+  if (!image) return null;
+  const sk = image.sk?.S;
+  if (!sk || !sk.startsWith("ERASURE#")) return null;
+  const d = image.data?.M;
+  if (!d) return null;
+  const orgId = d.orgId?.S;
+  const subscriberId = d.subscriberId?.S;
+  const erasedAt = d.erasedAt?.S;
+  if (!orgId || !subscriberId || !erasedAt) return null;
+  return { orgId, subscriberId, erasedAt };
 }

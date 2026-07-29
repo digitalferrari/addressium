@@ -51,7 +51,7 @@ test("export returns the record; erase anonymizes + blocks re-signup", async () 
   assert.equal(exp?.subscriber.sub, r.subscriber.sub);
   assert.equal(exp?.subscriptions.length, 1);
 
-  assert.equal(await eraseSubscriber(stores, clock, ORG, "jordan@example.com"), true);
+  assert.equal((await eraseSubscriber(stores, clock, ORG, "jordan@example.com")).found, true);
   const after = await stores.subscribers.get(ORG, r.subscriber.sub);
   assert.equal(after?.status, "suppressed");
   assert.match(after?.email ?? "", /^erased:/);

@@ -276,7 +276,7 @@ test("an erased subject's PII never appears in a later export", async () => {
   assert.ok(victim, "the fixture exports at least one real address");
 
   const erased = await eraseSubscriber(stores, clock, ORG, victim);
-  assert.equal(erased, true);
+  assert.equal(erased.found, true);
 
   const after = await exportCsv(stores, { orgId: ORG, includeUnsubscribed: true });
   assert.ok(!after.includes(victim), `erased address still exported: ${victim}`);

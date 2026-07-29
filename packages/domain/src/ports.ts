@@ -12,6 +12,7 @@ import type {
   EmailArchive,
   EngagementEvent,
   EntitlementSync,
+  ErasureRecord,
   ImportBatch,
   ImportMapping,
   List,
@@ -148,6 +149,26 @@ export interface SubscriberStore {
    * item is the only thing that actually decides a race.
    */
   reserveEmail(orgId: string, email: string, sub: string): Promise<{ sub: string }>;
+  /**
+   * Give the address back, so it can be claimed again (#164).
+   *
+   * Only erasure calls this. The reservation item carries the plaintext address
+   * in its SORT KEY, so leaving it behind means the erased person's email is
+   * still sitting in the table under a different item — which is exactly the
+   * "erasure did not erase" failure. Releasing it also means a later signup from
+   * that address starts a genuinely new relationship with a new id, rather than
+   * being handed the erased subscriber's.
+   */
+  releaseEmail(orgId: string, email: string): Promise<void>;
+  /**
+   * Delete the `externalId → sub` pointer (#164).
+   *
+   * Clearing `externalId` on the subscriber record is not enough: the pointer is
+   * a SEPARATE item, and `findByExternalId` reads it first. Left behind, the
+   * erased person is still resolvable from their Cognito `sub` — the single most
+   * durable identifier in the system.
+   */
+  removeExternalIdPointer(orgId: string, externalId: string): Promise<void>;
   /** Strongly-consistent read, for the moment after losing a reservation. */
   getConsistent(orgId: string, sub: string): Promise<Subscriber | undefined>;
   /** Enumerate every subscriber for an org — batch sweeps (re-engagement, reporting). */
@@ -229,11 +250,40 @@ export interface ArchiveStore {
 export interface EventStore {
   append(e: EngagementEvent): Promise<void>;
   all(orgId: string, campaignId: string): Promise<EngagementEvent[]>;
+  /**
+   * Delete every engagement event naming this subscriber, across campaigns
+   * (#164). Returns how many were removed.
+   *
+   * Events live under the CAMPAIGN partition, so there is no per-subscriber
+   * index and this walks the org's campaigns. That is deliberate: erasure is
+   * rare and correctness matters more than its cost, and adding a GSI keyed by
+   * subscriber would create a second place the identifier lives — the opposite
+   * of what this method exists for.
+   *
+   * Campaign COUNTERS are not adjusted. They are stored separately and are
+   * aggregate statistics, not personal data; decrementing them would rewrite
+   * historical reports to hide that a send happened, which is not what an
+   * erasure request asks for.
+   */
+  deleteForSubscriber(orgId: string, subscriberId: string): Promise<number>;
+}
+
+/** Erasure tombstones (#164) — see `ErasureRecord`. */
+export interface ErasureStore {
+  put(e: ErasureRecord): Promise<void>;
+  get(orgId: string, subscriberId: string): Promise<ErasureRecord | undefined>;
+  list(orgId: string): Promise<ErasureRecord[]>;
 }
 
 export interface EntitlementStore {
   put(e: EntitlementSync): Promise<void>;
   latest(orgId: string, subscriberId: string): Promise<EntitlementSync | undefined>;
+  /**
+   * Drop the entitlement record for an erased subject (#164). It carries the
+   * subscriber id and the billing system's name — a direct link between the
+   * person and their payment relationship, which survived erasure entirely.
+   */
+  remove(orgId: string, subscriberId: string): Promise<void>;
 }
 
 /**
@@ -434,6 +484,8 @@ export interface Stores {
   alerts: AlertConfigStore;
   usage: UsageStore;
   segments: SegmentStore;
+  /** Erasure tombstones (#164). */
+  erasures: ErasureStore;
   importMappings: ImportMappingStore;
   importBatches: ImportBatchStore;
   dripSequences: DripSequenceStore;

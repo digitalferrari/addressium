@@ -491,6 +491,28 @@ export interface EntitlementSync {
   at: string;
 }
 
+/**
+ * Proof that a subject was erased, and the key the data lake anti-joins on
+ * (#164).
+ *
+ * Erasure deletes the DynamoDB items that name the subject. It cannot delete
+ * rows already written to S3 — the fact tier is GZIP-compressed, partitioned,
+ * append-only objects, and rewriting them per request is neither cheap nor
+ * atomic. So the tombstone is exported into the lake alongside the events and
+ * every query filters against it: the row survives on disk until its lifecycle
+ * rule expires it, and nothing can resolve it to the subject in the meantime.
+ *
+ * It holds NO personal data. `subscriberId` is a random UUID whose link to a
+ * person was destroyed by the same erasure that wrote this record — which is
+ * precisely what makes retaining it lawful, and what makes it useless to anyone
+ * who obtains it.
+ */
+export interface ErasureRecord {
+  orgId: OrgId;
+  subscriberId: SubscriberId;
+  erasedAt: string;
+}
+
 // ---- ops ----
 export interface AlertConfig {
   orgId: OrgId;

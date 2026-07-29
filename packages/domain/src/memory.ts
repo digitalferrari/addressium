@@ -11,6 +11,7 @@ import type {
   EmailArchive,
   EngagementEvent,
   EntitlementSync,
+  ErasureRecord,
   ImportBatch,
   ImportMapping,
   List,
@@ -35,6 +36,7 @@ import type {
   DripSequenceStore,
   EmailSender,
   EntitlementStore,
+  ErasureStore,
   EventStore,
   ListStore,
   OrganizationStore,
@@ -109,6 +111,22 @@ export class MemSubscribers implements SubscriberStore {
     if (held) return { sub: held };
     this.emailOwner.set(key, sub);
     return { sub };
+  }
+  async releaseEmail(orgId: string, email: string) {
+    this.emailOwner.delete(subKey(orgId, email.toLowerCase()));
+  }
+  async removeExternalIdPointer(orgId: string, externalId: string) {
+    // The fake resolves externalId by scanning `byId` rather than through a
+    // pointer item, so there is nothing separate to delete — the guarantee it
+    // must reproduce is the OBSERVABLE one: after this, findByExternalId does
+    // not resolve. A fake that quietly kept resolving would let the Dynamo bug
+    // (a pointer item the erase never touched) pass the unit suite.
+    for (const [key, sub] of this.byId) {
+      if (sub.orgId === orgId && sub.externalId === externalId) {
+        const { externalId: _drop, ...rest } = sub;
+        this.byId.set(key, rest as Subscriber);
+      }
+    }
   }
   async getConsistent(orgId: string, sub: string) {
     // A single map: every read here is already consistent.
@@ -281,6 +299,28 @@ export class MemEvents implements EventStore {
   async all(orgId: string, campaignId: string) {
     return this.list.filter((e) => e.orgId === orgId && e.campaignId === campaignId);
   }
+
+  async deleteForSubscriber(orgId: string, subscriberId: string) {
+    const before = this.list.length;
+    this.list = this.list.filter((e) => !(e.orgId === orgId && e.subscriberId === subscriberId));
+    // The dedupe sets are NOT cleared. They exist so a redelivered source event
+    // is not re-counted, and an erasure must not turn a redelivery into a fresh
+    // row bearing the id we just removed.
+    return before - this.list.length;
+  }
+}
+
+export class MemErasures implements ErasureStore {
+  private map = new Map<string, ErasureRecord>();
+  async put(e: ErasureRecord) {
+    this.map.set(subKey(e.orgId, e.subscriberId), e);
+  }
+  async get(orgId: string, subscriberId: string) {
+    return this.map.get(subKey(orgId, subscriberId));
+  }
+  async list(orgId: string) {
+    return [...this.map.values()].filter((e) => e.orgId === orgId);
+  }
 }
 
 export class MemEntitlements implements EntitlementStore {
@@ -290,6 +330,9 @@ export class MemEntitlements implements EntitlementStore {
   }
   async latest(orgId: string, subscriberId: string) {
     return this.map.get(subKey(orgId, subscriberId));
+  }
+  async remove(orgId: string, subscriberId: string) {
+    this.map.delete(subKey(orgId, subscriberId));
   }
 }
 
@@ -519,6 +562,7 @@ export function memStores(): Stores {
     alerts: new MemAlertConfigs(),
     usage: new MemUsage(),
     segments: new MemSegments(),
+    erasures: new MemErasures(),
     importMappings: new MemImportMappings(),
     importBatches: new MemImportBatches(),
     dripSequences: new MemDripSequences(),

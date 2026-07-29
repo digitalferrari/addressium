@@ -887,16 +887,27 @@ per §9.2 — the external ops topic and the CloudWatch dashboard, both
 
 - **Data-subject requests:** export one person's record (profile + subscriptions
   + entitlement) as JSON, or **erase / forget** them.
-- **What erasure actually does, precisely:** unsubscribe every subscription,
-  write a hashed suppression tombstone (§4.13) so the address can never be
-  re-added, and anonymize the profile in place (email replaced with
-  `erased:<sub>`, attributes cleared, consent dropped, status `suppressed`). It
-  is **DynamoDB-only.** It does **not** reach the S3 archive or the analytics
-  bucket, and it does **not** delete the engagement-event rows, which keep the
-  pseudonymous `subscriberId`. That is defensible — the profile those ids resolve
-  to is anonymized — but the honest description is "the profile is anonymized and
-  the address is tombstoned", not "the person's data is gone". Erasure reaching
-  S3 is **[Decided r2 — not yet built]** (#164).
+- **What erasure actually does, precisely** (#164). It anonymizes the profile in
+  place (email → `erased:<sub>`, attributes cleared, consent dropped, status
+  `suppressed`), unsubscribes every subscription and strips the identifying half
+  of each consent record, and **deletes**: the `EXTID#` pointer plus the
+  `externalId` field, the email-reservation item, the entitlement record, and
+  every `EVENT#` row naming the subject across every campaign. It returns an
+  `ErasureReport` of what it reached rather than a bare `true` — the old boolean
+  said the same thing whether one item was anonymized or every trace went, which
+  is why the gap survived so long.
+
+  Two things are deliberately **kept**, and both are lawful bases rather than
+  oversights: the suppression tombstone, which holds the address so the next
+  import cannot silently re-add the person (GDPR Art. 17(3)(b) / Recital 65), and
+  each subscription's consent timestamps and basis, which are the org's evidence
+  it was once entitled to mail the address. Campaign counters are untouched —
+  they are aggregates, and decrementing them would rewrite historical reports to
+  hide that a send happened.
+
+  For the S3 lake the mechanism is **tombstone plus expiry, not rewriting**: see
+  §4.23 below and `SECURITY.md` §4.7 for the anti-join query and the retention
+  windows.
 - **Bulk export / portability** (compendium #58, #224). CSV **and** JSONL,
   including consent provenance, round-trip importable through §4.7 — because
   *users must be able to leave*, and an export nobody can read back is a file
@@ -1060,8 +1071,22 @@ cohort/funnel queries), with partition pruning on `org_id` + `event_date` to
 bound scan cost. Facts run seconds-to-minutes behind (Firehose buffering) and
 dimension snapshots up to a day — that lag is the price of keeping the analytics
 plane off the sending path. Reporting weights **clicks** over MPP-inflated opens
-(§4.22). GDPR erasure (§4.19) must reach the lake too: rewrite or rebuild the
-affected partitions.
+(§4.22).
+
+**GDPR erasure and the lake (#164).** Rows already written to `events/` are
+GZIP-compressed, dynamically partitioned, append-only objects. Rewriting them per
+request is neither cheap nor atomic, and a half-rewritten partition is worse than
+an intact one — so erasure does not try. Instead it writes an `ERASURE#` item,
+which flows through the same Kinesis → Firehose path and lands in the **same Glue
+table** as an `event_type = 'erased'` row. No second delivery stream, no second
+table, and no partition an operator's query can forget. Every analytics query
+anti-joins against those rows (the query is in `SECURITY.md` §4.7), and the rows
+themselves age out: `events/` expires at 730 days by default
+(`-c analyticsEventRetentionDays=…`), `entities/` — the nightly full-table
+export, which lands *raw* subscriber items — at 30 days. The erasure report
+quotes the resulting date back to the operator, read from the same value the
+lifecycle rule is built from. Between erasure and expiry a pseudonymous id
+survives on disk that nothing can resolve to a person and no query returns.
 
 ---
 
@@ -1689,8 +1714,16 @@ describes the target; this is the part that is still unearned. It mirrors
   /version` returns the running version and a `deployed` of `null` on every real
   install, forever, so it cannot yet confirm that a deploy landed. There is no
   migration runner either, despite what a couple of source comments imply.
-- **GDPR erasure does not reach the S3 archive** (#164), and does not delete
-  engagement-event rows (§4.19).
+- **GDPR erasure reaches the lake by tombstone, not by rewriting** (#164, §4.19).
+  Rows bearing a pseudonymous subscriber id survive in `events/` until their
+  lifecycle rule expires them — anti-joined out of every query, resolvable by
+  nothing, but physically present. Lower `analyticsEventRetentionDays` if that is
+  not acceptable for your jurisdiction. The S3 **archive** is not reached either
+  — but checked rather than assumed: `EmailArchive.s3Key` is computed and stored
+  in DynamoDB while **nothing uploads an object**, and the archived body is the
+  GENERIC template carrying merge *tags*, not one recipient's rendered values. So
+  there is no subject data there to erase today. If per-recipient bodies are ever
+  archived, that changes and this line stops being true.
 - **The counts that are safe to quote** — 24 alarms, 20 log groups, 27 admin
   routes, 252 resources in a default dev synth (248 in prod) — are reproducible
   with `npm run build && npx cdk synth`. They are template facts, which is a

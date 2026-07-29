@@ -92,7 +92,7 @@ test("an uncontended erase still succeeds", async () => {
   // The guard must not break the normal path — an erasure that fails closed on
   // every attempt is a GDPR failure of its own.
   const stores = await withSubscriber();
-  assert.equal(await eraseSubscriber(stores, clock, ORG, "alice@example.com"), true);
+  assert.equal((await eraseSubscriber(stores, clock, ORG, "alice@example.com")).found, true);
   const after = await stores.subscribers.get(ORG, "sub-1");
   assert.equal(after?.email, "erased:sub-1");
   assert.deepEqual(after?.attributes, {});

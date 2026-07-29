@@ -29,6 +29,7 @@ import type {
   EmailArchive,
   EngagementEvent,
   EntitlementSync,
+  ErasureRecord,
   ImportBatch,
   ImportMapping,
   List,
@@ -49,6 +50,7 @@ import type {
   CampaignStore,
   DripSequenceStore,
   EntitlementStore,
+  ErasureStore,
   EventStore,
   ListStore,
   OrganizationStore,
@@ -269,6 +271,37 @@ export class DynamoStores implements Stores {
         KeyConditionExpression: "pk = :pk AND begins_with(sk, :s)",
         ExpressionAttributeValues: { ":pk": org(orgId), ":s": "SUBSCRIBER#" },
       }),
+    /**
+     * Give the address back (#164).
+     *
+     * The reservation carries the plaintext email in its SORT KEY, so an erasure
+     * that leaves it behind leaves the erased person's address in the table
+     * under a different item. The suppression tombstone is what blocks a re-add;
+     * this item was only ever a uniqueness latch.
+     */
+    releaseEmail: async (orgId, email) => {
+      await this.doc.send(
+        new DeleteCommand({
+          TableName: this.tableName,
+          Key: { pk: `${org(orgId)}#EMAILRESV`, sk: `EMAIL#${email.toLowerCase()}` },
+        }),
+      );
+    },
+    /**
+     * Delete the `externalId → sub` pointer (#164).
+     *
+     * Clearing `externalId` on the subscriber record is not enough — the pointer
+     * is a SEPARATE item and `findByExternalId` reads it FIRST, so the erased
+     * person stayed resolvable from their Cognito sub.
+     */
+    removeExternalIdPointer: async (orgId, externalId) => {
+      await this.doc.send(
+        new DeleteCommand({
+          TableName: this.tableName,
+          Key: { pk: `${org(orgId)}#EXTID`, sk: `EXTID#${externalId}` },
+        }),
+      );
+    },
     // A single item whose existence decides the race — see the port doc. Kept in
     // its own partition so it never shows up in a subscriber listing.
     reserveEmail: async (orgId, email, sub) => {
@@ -621,6 +654,46 @@ export class DynamoStores implements Stores {
           ":s": "EVENT#",
         },
       }),
+    /**
+     * Delete every engagement event naming this subscriber (#164).
+     *
+     * Events live under the CAMPAIGN partition, so there is no index keyed by
+     * subscriber and this walks the org's campaigns. That is a deliberate
+     * trade: erasure is rare, and a GSI on subscriber id would create a SECOND
+     * place the identifier lives — the opposite of what this method is for.
+     *
+     * Campaign counters are untouched. They are aggregates, not personal data,
+     * and decrementing them would rewrite historical reports to hide that a send
+     * happened, which is not what erasure asks for.
+     */
+    deleteForSubscriber: async (orgId, subscriberId) => {
+      const campaigns = await this.campaigns.list(orgId);
+      let removed = 0;
+      for (const c of campaigns) {
+        const pk = `${org(orgId)}#CAMPAIGN#${c.campaignId}`;
+        let ExclusiveStartKey: Record<string, unknown> | undefined;
+        do {
+          const res = await this.doc.send(
+            new QueryCommand({
+              TableName: this.tableName,
+              KeyConditionExpression: "pk = :pk AND begins_with(sk, :s)",
+              ExpressionAttributeValues: { ":pk": pk, ":s": "EVENT#" },
+              ExclusiveStartKey,
+            }),
+          );
+          for (const raw of res.Items ?? []) {
+            const it = raw as Item<EngagementEvent> & { sk: string };
+            if (it.data?.subscriberId !== subscriberId) continue;
+            await this.doc.send(
+              new DeleteCommand({ TableName: this.tableName, Key: { pk, sk: it.sk } }),
+            );
+            removed++;
+          }
+          ExclusiveStartKey = res.LastEvaluatedKey as Record<string, unknown> | undefined;
+        } while (ExclusiveStartKey);
+      }
+      return removed;
+    },
   };
 
   entitlements: EntitlementStore = {
@@ -628,6 +701,28 @@ export class DynamoStores implements Stores {
       this.put({ pk: org(e.orgId), sk: `ENTITLEMENT#${e.subscriberId}`, data: e }),
     latest: (orgId, subscriberId) =>
       this.get<EntitlementSync>(org(orgId), `ENTITLEMENT#${subscriberId}`),
+    // #164: this record links the subject to their billing relationship and
+    // survived erasure entirely.
+    remove: async (orgId, subscriberId) => {
+      await this.doc.send(
+        new DeleteCommand({
+          TableName: this.tableName,
+          Key: { pk: org(orgId), sk: `ENTITLEMENT#${subscriberId}` },
+        }),
+      );
+    },
+  };
+
+  erasures: ErasureStore = {
+    put: (e) => this.put({ pk: org(e.orgId), sk: `ERASURE#${e.subscriberId}`, data: e }),
+    get: (orgId, subscriberId) =>
+      this.get<ErasureRecord>(org(orgId), `ERASURE#${subscriberId}`),
+    list: (orgId) =>
+      this.queryAll<ErasureRecord>({
+        TableName: this.tableName,
+        KeyConditionExpression: "pk = :pk AND begins_with(sk, :s)",
+        ExpressionAttributeValues: { ":pk": org(orgId), ":s": "ERASURE#" },
+      }),
   };
 
   campaigns: CampaignStore = {

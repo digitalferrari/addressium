@@ -9,7 +9,13 @@
  * newline-delimited JSON record for Athena. Everything else is dropped. This
  * handler holds NO AWS SDK client — Firehose delivers and persists; we only map.
  */
-import { eventFromImage, toEventAnalyticsRow, type DdbAttr } from "@addressium/domain";
+import {
+  erasureFromImage,
+  eventFromImage,
+  toErasureAnalyticsRow,
+  toEventAnalyticsRow,
+  type DdbAttr,
+} from "@addressium/domain";
 
 /** One record in a Firehose transformation invocation (data is base64). */
 export interface FirehoseRecord {
@@ -41,9 +47,22 @@ export function transformRecord(record: FirehoseRecord): FirehoseResponseRecord 
     // Events are append-only; only INSERTs become rows (MODIFY/REMOVE dropped).
     if (raw.eventName && raw.eventName !== "INSERT") return { recordId: record.recordId, result: "Dropped" };
     const image = raw.dynamodb?.NewImage ?? raw.NewImage;
-    const event = eventFromImage(image);
-    if (!event) return { recordId: record.recordId, result: "Dropped" };
-    const row = toEventAnalyticsRow(event);
+    // A GDPR erasure tombstone lands in the same table as an `erased` row (#164),
+    // so every query can anti-join against it. Rows already written to S3 cannot
+    // be deleted per subject — they are compressed, partitioned, append-only
+    // objects — and a second Firehose plus a second Glue table would be one more
+    // thing an operator's query could forget to include.
+    const erasure = erasureFromImage(image);
+    const row = erasure ? toErasureAnalyticsRow(erasure) : null;
+    if (!row) {
+      const event = eventFromImage(image);
+      if (!event) return { recordId: record.recordId, result: "Dropped" };
+      return {
+        recordId: record.recordId,
+        result: "Ok",
+        data: b64encode(`${JSON.stringify(toEventAnalyticsRow(event))}\n`),
+      };
+    }
     // Newline-delimited JSON: Firehose extracts org_id/event_date for dynamic
     // partitioning and the JSON SerDe reads one row per line.
     return { recordId: record.recordId, result: "Ok", data: b64encode(`${JSON.stringify(row)}\n`) };

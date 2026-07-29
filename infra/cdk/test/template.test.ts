@@ -579,3 +579,52 @@ test("apiAppUrl pins connect-src to one exact origin (#197)", () => {
     assert.ok(!connectSrc.includes("execute-api"), `${id}: the wildcard must be replaced`);
   }
 });
+
+test("the analytics lake has a bounded retention window, not 'forever' (#164)", () => {
+  // The fact tier carries `subscriber_id`, which is pseudonymous personal data,
+  // and an S3 object cannot be edited per subject — so a GDPR erasure rests on
+  // two things: the tombstone every query anti-joins against, and this rule
+  // eventually removing the rows outright. "Retained indefinitely" is not a
+  // retention policy anyone can defend to a regulator.
+  const buckets = Object.values(template({}, { enableAnalytics: "true" }).findResources("AWS::S3::Bucket"));
+  const rulesOf = (b: Record<string, any>) =>
+    (b.Properties?.LifecycleConfiguration?.Rules ?? []) as Record<string, any>[];
+  const analytics = buckets.find((b) =>
+    rulesOf(b as Record<string, any>).some((r) => r.Prefix === "events/"),
+  );
+  assert.ok(analytics, "the analytics bucket exists when the tier is enabled");
+
+  const events = rulesOf(analytics as Record<string, any>).find((r) => r.Prefix === "events/")!;
+  assert.ok(events.ExpirationInDays > 0, "the fact tier must expire");
+  // Every prefix that can hold subject data is bounded, not just the fact tier:
+  // the nightly full-table export lands RAW subscriber items under entities/.
+  for (const prefix of ["entities/", "athena-results/", "events-errors/"]) {
+    const r: Record<string, any> | undefined = rulesOf(analytics as Record<string, any>).find(
+      (x) => x.Prefix === prefix,
+    );
+    assert.ok((r?.ExpirationInDays ?? 0) > 0, `${prefix} must expire`);
+  }
+});
+
+test("the erasure report's retention window is the one the bucket enforces (#164)", () => {
+  // The number an operator is TOLD and the number that actually expires the rows
+  // come from the same context value. If they drift, the erasure report is a
+  // claim nobody can check.
+  const t = template({}, { enableAnalytics: "true", analyticsEventRetentionDays: "45" });
+  const bucket = Object.values(t.findResources("AWS::S3::Bucket")).find((b) =>
+    ((b.Properties as Record<string, any>)?.LifecycleConfiguration?.Rules ?? []).some(
+      (r: Record<string, unknown>) => r.Prefix === "events/",
+    ),
+  )!;
+  const rule = ((bucket.Properties as Record<string, any>).LifecycleConfiguration.Rules as Record<string, any>[])
+    .find((r) => r.Prefix === "events/")!;
+  assert.equal(rule.ExpirationInDays, 45);
+
+  // …and the API is told the same number, so its report matches.
+  const fns = t.findResources("AWS::Lambda::Function");
+  const admin = Object.entries(fns).find(([k]) => k.startsWith("AdminApiFn"))!;
+  const env = (admin[1].Properties as { Environment?: { Variables?: Record<string, string> } })
+    .Environment?.Variables ?? {};
+  assert.equal(env.ANALYTICS_EVENT_RETENTION_DAYS, "45");
+  assert.equal(env.ANALYTICS_ENABLED, "true");
+});

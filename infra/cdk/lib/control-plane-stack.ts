@@ -132,6 +132,11 @@ export class ControlPlaneStack extends Stack {
     // DynamoDB Streams the OpenSearch mirror uses).
     const analyticsCtx = this.node.tryGetContext("enableAnalytics") as boolean | string | undefined;
     const enableAnalytics = analyticsCtx === true || analyticsCtx === "true";
+    // Must match `LAKE_RETENTION_DAYS` in packages/domain/src/privacy.ts, which
+    // is the figure an erasure report quotes back to the operator (#164).
+    const analyticsEventRetentionDays = Number(
+      (this.node.tryGetContext("analyticsEventRetentionDays") as string | undefined) ?? 730,
+    );
     const analyticsStream = enableAnalytics
       ? new Stream(this, "AnalyticsStream", { streamMode: StreamMode.ON_DEMAND })
       : undefined;
@@ -204,6 +209,18 @@ export class ControlPlaneStack extends Stack {
           transitions: [
             { storageClass: StorageClass.GLACIER_INSTANT_RETRIEVAL, transitionAfter: Duration.days(90) },
           ],
+          // A BOUNDED window, not "forever" (#164). The fact tier carries
+          // `subscriber_id`, which is pseudonymous personal data — and an object
+          // in S3 cannot be edited per subject, so a GDPR erasure relies on two
+          // things: the tombstone every query anti-joins against, and this rule
+          // eventually removing the rows outright. "Retained indefinitely" is
+          // not a retention policy anyone can defend to a regulator.
+          //
+          // Two years by default, because year-over-year cohort reporting is the
+          // reason the lake exists at all. `-c analyticsEventRetentionDays=…`
+          // moves it; the domain's `LAKE_RETENTION_DAYS` is the same number, so
+          // what an erasure REPORTS matches what the bucket enforces.
+          expiration: Duration.days(analyticsEventRetentionDays),
           noncurrentVersionExpiration: Duration.days(30),
         },
       ],
@@ -893,6 +910,11 @@ export class ControlPlaneStack extends Stack {
       // paused (#179). Without the queue, resume would 500 at the last step
       // having already flipped the record to active — the worst place to fail.
       SEND_QUEUE_URL: sendQueue.queueUrl,
+      // An erasure report quotes a lake retention window only when there IS a
+      // lake (#164). Claiming one on a deployment with analytics off would be a
+      // number the operator cannot check against any bucket.
+      ANALYTICS_ENABLED: String(enableAnalytics),
+      ANALYTICS_EVENT_RETENTION_DAYS: String(analyticsEventRetentionDays),
     });
     table.grantReadWriteData(adminApiFn);
     sendQueue.grantSendMessages(adminApiFn);

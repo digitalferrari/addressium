@@ -362,13 +362,63 @@ vector.
 Three limits on that last bullet, stated here because a privacy control that is
 narrower than it sounds is worse than one that is absent:
 
-- **Erasure is DynamoDB-only.** `eraseSubscriber` unsubscribes every
-  subscription, writes a suppression tombstone, and anonymizes the profile in
-  place. It does **not** reach the S3 archive (compendium §9, #164)
-  **[Decided r2 — not yet built]**, and it does not rewrite the `EVENT#` rows,
-  which retain a pseudonymous subscriber id pointing at the now-anonymized
-  profile. The accurate promise is "the profile is anonymized and the address is
-  tombstoned", not "every trace of the person is gone".
+- **What erasure reaches, exactly** (#164). It used to anonymize a single
+  DynamoDB item and return `true`, so an operator ran it, got a success, and
+  reported compliance while the person was still resolvable from their Cognito
+  `sub`. `eraseSubscriber` now returns an `ErasureReport` of what it actually
+  did, and the API records those counts in the audit entry — "erased: true" said
+  the same thing whether one item changed or every trace went.
+
+  | Data | On erasure | Why |
+  | --- | --- | --- |
+  | Profile (`email`, `attributes`, signup IP + source URL) | anonymized in place | The id is kept so references stay valid |
+  | `externalId` + the `EXTID#` pointer item | **deleted** | The pointer is a separate item read *first* by `findByExternalId`, so clearing the field alone left the Cognito sub resolving |
+  | Email-reservation item | **released** | Its sort key *is* the plaintext address |
+  | Entitlement record | **deleted** | Links the subject to a billing system |
+  | `EVENT#` rows, every campaign | **deleted** | Walks the org's campaigns; there is deliberately no subscriber-keyed index, which would be a second place the id lives |
+  | Campaign counters | **untouched** | Aggregates, not personal data. Decrementing would rewrite historical reports to hide that a send happened |
+  | Subscription consent: IP, user agent, source URL | **stripped** | Personal data |
+  | Subscription consent: timestamps, basis | **kept** | The org's evidence it was once entitled to mail the address, which an erasure request does not retroactively undo |
+  | Suppression tombstone (holds the address) | **kept** | GDPR Art. 17(3)(b) / Recital 65 — and without it the next import silently re-adds them |
+  | S3 data lake | **tombstone + expiry**, see below | An S3 object cannot be edited per subject |
+
+- **The lake is handled by tombstone and expiry, not by rewriting** (#164). Rows
+  already written to `events/` are GZIP-compressed, dynamically partitioned,
+  append-only objects; rewriting them per request is neither cheap nor atomic,
+  and a half-rewritten partition is worse than an intact one. So an erasure
+  writes an `ERASURE#` item, which flows through the existing Kinesis → Firehose
+  path and lands in the **same Glue table** as an `event_type = 'erased'` row —
+  no second delivery stream, no second table, and no partition a query can forget
+  to include. Every analytics query anti-joins against it:
+
+  ```sql
+  WITH erased AS (
+    SELECT DISTINCT org_id, subscriber_id FROM events WHERE event_type = 'erased'
+  )
+  SELECT e.* FROM events e
+  LEFT JOIN erased x ON e.org_id = x.org_id AND e.subscriber_id = x.subscriber_id
+  WHERE x.subscriber_id IS NULL AND e.event_type <> 'erased'
+  ```
+
+  The rows themselves then age out: `events/` expires at **730 days** by default
+  (`-c analyticsEventRetentionDays=…`), `entities/` — the nightly full-table
+  export, which lands *raw* subscriber items — at **30 days**, `athena-results/`
+  at 14 and `events-errors/` at 30. Two years is chosen because year-over-year
+  cohort reporting is why the lake exists; "retained indefinitely", which is what
+  it was, is not a retention policy anyone can defend to a regulator.
+
+  The erasure report quotes the resulting expiry date back to the operator, read
+  from the same value the bucket's lifecycle rule is built from, so the date a
+  subject is given matches the rule that enforces it. It is quoted **only** when
+  the analytics tier is enabled — on a default deployment there is no lake, and a
+  window the operator cannot check against any bucket would be worse than none.
+
+  **The honest limit:** between the erasure and that expiry, a row bearing the
+  subject's (pseudonymous) subscriber id still exists on disk. Nothing can
+  resolve it to a person — the profile, the pointer and the reservation are all
+  gone — and no query returns it. An operator who needs the row physically gone
+  sooner should lower `analyticsEventRetentionDays`, at the cost of the reporting
+  history it buys.
 - **Export covers both the subject and the list.** The DSAR path returns one
   subject's profile, subscriptions and entitlement as JSON; bulk CSV/JSONL
   portability of a whole org, including a re-import plan, is done (#58, #224).
