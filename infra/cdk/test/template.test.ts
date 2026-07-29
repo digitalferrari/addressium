@@ -1152,3 +1152,32 @@ test("the stream consumer's exhausted batches go somewhere, and alarm (#202)", (
     "divergence is still silent",
   );
 });
+
+test("every Lambda runs a supported runtime (#235)", () => {
+  // AWS disabled CREATION of nodejs20.x on 2027-02-01. This project has never
+  // been deployed, so a first deploy is all creates — the deprecation would have
+  // failed the very first `cdk deploy` anyone ran, at the worst possible moment.
+  //
+  // Asserted rather than left to a synth warning, because a warning nobody
+  // clears is exactly how the previous one survived until it was months from
+  // breaking.
+  const RETIRED = ["nodejs14.x", "nodejs16.x", "nodejs18.x", "nodejs20.x"];
+  const fns = template({}, { enableAnalytics: "true", enableOpenSearchMirror: "true" })
+    .findResources("AWS::Lambda::Function");
+  const runtimes = new Set<string>();
+  for (const [id, f] of Object.entries(fns)) {
+    const rt = (f.Properties as { Runtime?: string }).Runtime;
+    if (!rt) continue; // CDK's own custom-resource providers
+    assert.ok(!RETIRED.includes(rt), `${id} is on ${rt}`);
+    // CDK's own singleton providers (auto-delete-objects, log retention) carry a
+    // runtime the framework picks and upgrades on its own schedule. They still
+    // must not be RETIRED — asserted above — but pinning them to ours would mean
+    // forking library code, so they are excluded from the single-runtime check.
+    if (id.startsWith("Custom") || id.startsWith("LogRetention")) continue;
+    if (rt.startsWith("nodejs")) runtimes.add(rt);
+  }
+  // One runtime across OUR functions. A mixed set means some handler runs code
+  // the others' tests never exercised.
+  assert.equal(runtimes.size, 1, `mixed runtimes: ${[...runtimes].join(", ")}`);
+  assert.equal([...runtimes][0], "nodejs22.x", "must match `engines` and CI's node-version");
+});

@@ -223,7 +223,11 @@ export class ControlPlaneStack extends Stack {
       partitionKey: { name: "pk", type: AttributeType.STRING },
       sortKey: { name: "sk", type: AttributeType.STRING },
       billingMode: BillingMode.PAY_PER_REQUEST,
-      pointInTimeRecovery: true,
+      // `pointInTimeRecoverySpecification`, not the deprecated
+      // `pointInTimeRecovery` boolean (#235). Same synthesized property; the old
+      // spelling is on its way out, and a deprecation warning nobody clears is
+      // how the runtime one survived until it was months from breaking.
+      pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: true },
       encryption: TableEncryption.CUSTOMER_MANAGED,
       encryptionKey: dataKey,
       stream: enableOpenSearchMirror ? StreamViewType.NEW_AND_OLD_IMAGES : undefined,
@@ -631,10 +635,20 @@ export class ControlPlaneStack extends Stack {
       new NodejsFunction(this, id, {
         entry,
         handler,
-        runtime: Runtime.NODEJS_20_X,
+        // nodejs22.x (#235). AWS disabled CREATION of nodejs20.x functions on
+        // 2027-02-01, and this project has never been deployed — a first deploy
+        // is all creates, so the deprecation would have failed the very first
+        // `cdk deploy` anyone ever ran, at the worst possible moment.
+        //
+        // 22 rather than 24 to match the `engines` field and CI's Node version:
+        // one major across build, bundle target and runtime means the code that
+        // passes tests is the code that runs. Deliberately NOT `NODEJS_LATEST`,
+        // which silently changes what you deployed between two runs of the same
+        // commit.
+        runtime: Runtime.NODEJS_22_X,
         timeout: Duration.seconds(30),
         environment: { ...baseEnv, ...extraEnv },
-        bundling: { format: "esm" as never, target: "node20" },
+        bundling: { format: "esm" as never, target: "node22" },
         // Lambda's default log retention is NEVER EXPIRE. With ~40 functions
         // that is unbounded CloudWatch cost forever (#187).
         logGroup: new LogGroup(this, `${id}Logs`, {
