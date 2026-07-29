@@ -329,8 +329,14 @@ test("no role can write a secret, and no AI route exists (#227)", () => {
   // reintroducing a write here would also reintroduce reach over this stack's
   // own confirmation-token and webhook signing secrets, and rotating those
   // silently invalidates every outstanding opt-in link and inbound webhook.
+  //
+  // ONE deliberate exception since #234: the ConfirmSecret rotation function.
+  // It is allowed to write because it APPENDS a key to the keyring rather than
+  // replacing one — it structurally cannot cause the harm this test guards
+  // against, and its `testSecret` step refuses to promote a version that stops
+  // verifying the outgoing key's tokens. Every other policy still gets zero.
   const t = template();
-  for (const policy of Object.values(t.findResources("AWS::IAM::Policy"))) {
+  for (const [id, policy] of Object.entries(t.findResources("AWS::IAM::Policy"))) {
     const doc = (policy.Properties as { PolicyDocument: { Statement: Record<string, unknown>[] } })
       .PolicyDocument;
     for (const st of doc.Statement ?? []) {
@@ -348,7 +354,14 @@ test("no role can write a secret, and no AI route exists (#227)", () => {
         "secretsmanager:*",
       ];
       const writes = actionsOf(st).filter((a) => WRITES.includes(a));
-      assert.deepEqual(writes, [], `a role may write secrets: ${writes.join(", ")}`);
+      if (id.startsWith("ConfirmSecretRotationFn")) {
+        // Scoped to ConfirmSecret alone. The rotation function must not be able
+        // to touch WebhookSecret, whose rotation has none of these protections.
+        const resources = flatten(st.Resource);
+        assert.ok(!resources.includes("WebhookSecret"), "rotation reaches the webhook secret");
+        continue;
+      }
+      assert.deepEqual(writes, [], `${id} may write secrets: ${writes.join(", ")}`);
     }
   }
 
@@ -1290,4 +1303,57 @@ test("something actually writes a usage record (#199)", () => {
   // name rather than by an authenticated route.
   assert.ok(Object.keys(fns).some((k) => k.startsWith("UsageIngestFn")));
   assert.ok("UsageIngestFunctionName" in (t.toJSON().Outputs ?? {}), "and no way to find it");
+});
+
+// ---------------------------------------------------------------------------
+// #234 — ConfirmSecret rotation, and the unsubscribe link people actually click
+// ---------------------------------------------------------------------------
+
+test("the visible unsubscribe link answers a browser, not just a mailbox provider (#234)", () => {
+  // The `unsubscribe_url` merge tag and the RFC 8058 `List-Unsubscribe` header
+  // are the SAME url. The route was POST-only, so the header worked and the
+  // link in the body of every message — the one a human clicks — returned 405.
+  const routes = Object.values(template().findResources("AWS::ApiGatewayV2::Route")).map((r) =>
+    flatten((r.Properties as { RouteKey: unknown }).RouteKey),
+  );
+  assert.ok(routes.includes("POST /unsubscribe"), "one-click POST is gone");
+  assert.ok(routes.includes("GET /unsubscribe"), "a browser click still 405s");
+});
+
+test("ConfirmSecret has a rotation schedule, and its own function (#234)", () => {
+  // A RotationSchedule on a SINGLE-key secret would be worse than none: it would
+  // invalidate every outstanding opt-in and unsubscribe link on a schedule,
+  // quietly. So the presence of a schedule is only correct alongside a rotation
+  // function that appends to a keyring rather than replacing it.
+  const t = template();
+  const schedules = t.findResources("AWS::SecretsManager::RotationSchedule");
+  assert.equal(Object.keys(schedules).length, 1, "exactly one secret rotates");
+  const cfg = Object.values(schedules)[0]!.Properties as {
+    RotationLambdaARN?: unknown;
+    RotationRules?: { AutomaticallyAfterDays?: number; ScheduleExpression?: string };
+  };
+  assert.ok(cfg.RotationLambdaARN, "a schedule with no function does nothing");
+  assert.ok(flatten(cfg.RotationLambdaARN).includes("ConfirmSecretRotationFn"));
+
+  // Yearly, not the 30-day default: every rotation permanently adds a key to the
+  // ring, and unsubscribe tokens live five years.
+  const rules = cfg.RotationRules ?? {};
+  const yearly =
+    rules.AutomaticallyAfterDays === 365 || /365 days|rate\(365 days\)/.test(rules.ScheduleExpression ?? "");
+  assert.ok(yearly, `rotation cadence is not yearly: ${JSON.stringify(rules)}`);
+});
+
+test("the rotation function can move a staging label (#234)", () => {
+  // grantRead/grantWrite do NOT cover UpdateSecretVersionStage. Without it,
+  // `finishSecret` fails, AWSPENDING is never promoted, and the rotation retries
+  // and fails forever — with the secret itself untouched, so nothing looks wrong.
+  const t = template();
+  const grants = Object.entries(t.findResources("AWS::IAM::Policy"))
+    .filter(([id]) => id.startsWith("ConfirmSecretRotationFn"))
+    .flatMap(([, p]) =>
+      ((p.Properties as { PolicyDocument: { Statement: Record<string, unknown>[] } }).PolicyDocument
+        .Statement ?? []).flatMap((st) => actionsOf(st)),
+    );
+  assert.ok(grants.includes("secretsmanager:UpdateSecretVersionStage"), "finishSecret cannot promote");
+  assert.ok(grants.includes("secretsmanager:PutSecretValue"), "createSecret cannot stage");
 });

@@ -625,6 +625,9 @@ export class ControlPlaneStack extends Stack {
     const confirmSecret = new Secret(this, "ConfirmSecret", {
       removalPolicy: RemovalPolicy.RETAIN,
     });
+    // Rotation is added further down, once the bundler helper exists — see
+    // `ConfirmSecretRotationFn` (#234). It APPENDS a key rather than replacing
+    // one, which is the only shape of rotation this secret can survive.
     const webhookSecret = new Secret(this, "WebhookSecret", {
       removalPolicy: RemovalPolicy.RETAIN,
     });
@@ -931,6 +934,46 @@ export class ControlPlaneStack extends Stack {
       description: "addressium: weekly re-engagement sweep for orgs that opted in (#233)",
     });
 
+    // ---- ConfirmSecret rotation (#234) ----
+    //
+    // This secret signs the double opt-in link and the RFC 8058 one-click
+    // unsubscribe link — the latter is in EVERY message ever sent and the law
+    // requires it to keep working. So the rotation function APPENDS a key to a
+    // keyring rather than replacing one. Attaching an ordinary rotation to a
+    // single-key secret would have been worse than no rotation: it would have
+    // invalidated every outstanding link, on a schedule, silently.
+    //
+    // The function's `testSecret` step proves a token signed by the OUTGOING key
+    // still verifies under the staged keyring before anything is promoted, so a
+    // rotation that would orphan live links fails instead of shipping.
+    const confirmRotationFn = fn(
+      "ConfirmSecretRotationFn",
+      svc("services/automations/src/rotate-confirm-secret.ts"),
+      "rotateConfirmSecretHandler",
+      {},
+    );
+    confirmSecret.grantRead(confirmRotationFn);
+    confirmSecret.grantWrite(confirmRotationFn);
+    confirmRotationFn.addToRolePolicy(
+      new PolicyStatement({
+        // grantRead/grantWrite do not cover the staging-label move that
+        // `finishSecret` performs, nor the DescribeSecret it reads the current
+        // version id from.
+        actions: ["secretsmanager:UpdateSecretVersionStage", "secretsmanager:DescribeSecret"],
+        resources: [confirmSecret.secretArn],
+      }),
+    );
+    confirmSecret.addRotationSchedule("Rotation", {
+      rotationLambda: confirmRotationFn,
+      // Yearly, not the 30-day default. Rotation cadence should be proportional
+      // to exposure, and this key never leaves Secrets Manager and the handler
+      // memory that reads it. Every rotation permanently adds a key to the ring
+      // — the ring is the overlap window, and unsubscribe tokens live five years
+      // — so a 30-day cadence would carry ~60 keys before the oldest stopped
+      // mattering, for no gain over yearly.
+      automaticallyAfter: Duration.days(365),
+    });
+
     // ---- drip automations state machine (§4.6, #23) ----
     // Each step: Wait(waitSeconds) → Task(dripStepHandler) → Choice(done?) loop.
     // The domain owns the per-step choice; the machine just orchestrates.
@@ -1117,7 +1160,12 @@ export class ControlPlaneStack extends Stack {
     });
     api.addRoutes({
       path: "/unsubscribe",
-      methods: [HttpMethod.POST],
+      // GET as well as POST (#234). POST is the machine path a mailbox provider
+      // uses for RFC 8058 one-click; GET is what a human gets when they click
+      // the visible "Unsubscribe" link in the message body, which is the SAME
+      // url. POST-only meant that link answered 405 — the header worked and the
+      // link everybody actually clicks did not.
+      methods: [HttpMethod.GET, HttpMethod.POST],
       integration: new HttpLambdaIntegration("UnsubscribeInt", unsubscribeFn),
     });
     // Admin routes require a valid admin-pool JWT; the handler then enforces

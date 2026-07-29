@@ -14,7 +14,8 @@
     "@addressium/rbac": "0.1.0",
     "@addressium/segment": "0.1.0",
     "@aws-sdk/client-dynamodb": "^3.600.0",
-    "jose": "^6.2.4"
+    "jose": "^6.2.4",
+    "@addressium/svc-automations": "0.1.0"
   },
   "devDependencies": {
     "dynalite": "^4.0.0"

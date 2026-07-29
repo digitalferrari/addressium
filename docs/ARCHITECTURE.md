@@ -1427,6 +1427,26 @@ built in and enforced, not optional:
   setup wizard; the console surfaces authentication status per domain.
 - **One-click unsubscribe**: RFC 8058 `List-Unsubscribe` and
   `List-Unsubscribe-Post` headers on every campaign message.
+
+  `/unsubscribe` answers **both GET and POST**, and they are different
+  operations (#234). POST is the machine path a mailbox provider uses, and it
+  performs the unsubscribe. GET is the human path: the same URL is also the
+  `unsubscribe_url` merge tag — the visible "Unsubscribe" link in the body of
+  every message — and a browser click is a GET. The route was POST-only, so the
+  header worked and the link everyone actually clicks returned **405**.
+
+  GET renders a one-button confirm page rather than acting directly, because
+  mail security scanners and link prefetchers follow GET links; a GET that acted
+  would silently unsubscribe anyone whose employer runs a URL scanner. The page
+  is self-contained, has no JavaScript (mail is opened in stripped-down
+  webviews), and ships `default-src 'none'`.
+
+  A link whose signing key has been retired, or whose token has expired, gets
+  its own page and a `410` rather than "invalid link" — see `SECURITY.md` §4.6.
+  There is deliberately **no "enter your email" box** on that page: this route
+  is unauthenticated, so such a form would be a mass-unsubscribe tool for
+  anybody who can guess an address. Proving ownership of an address is what the
+  preference centre in #74 is for.
 - **CAN-SPAM**: enforced physical mailing address and unsubscribe link in every
   template's footer; campaigns cannot send without them configured.
 - **Suppression**: enforced before every send with a configurable scope model

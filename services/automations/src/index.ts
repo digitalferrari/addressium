@@ -337,3 +337,4 @@ export async function reengagementDispatchHandler(event?: { maxSubscribers?: num
   });
   return { ok: true, swept, skipped };
 }
+export { rotateConfirmSecretHandler, newKeyMaterial, type RotationEvent } from "./rotate-confirm-secret.js";

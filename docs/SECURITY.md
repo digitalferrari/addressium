@@ -351,6 +351,46 @@ vector.
   **HMAC-sign outbound** webhooks; always **timing-safe** comparison.
 - Scheduled key/secret rotation with a JWKS overlap window.
 
+**`ConfirmSecret` rotates by APPENDING (#234).** This one secret HMAC-signs two
+things that live in strangers' inboxes for years: the double opt-in confirmation
+link, clicked days after signup, and the RFC 8058 one-click unsubscribe link,
+which is present in *every message ever sent* and which the law requires to work.
+
+A single-key signer therefore made the secret **unrotatable in any practical
+sense** — rotating it invalidated every outstanding link at the instant of
+rotation, including the unsubscribe link in a two-year-old archived message. And
+bolting a stock `RotationSchedule` onto it would have been *worse than no
+rotation*: it would have broken those links on a schedule, quietly, forever.
+
+What is in place instead:
+
+- The secret holds a **keyring**, newest key first. Signing uses the newest key;
+  verification accepts any key in the ring. Tokens carry a **`kid`**, so
+  verification is a map lookup rather than N HMACs, and the kid is part of the
+  signed body so it cannot be swapped to steer verification at another key.
+- **Rotation prepends and never drops.** The ring *is* the overlap window.
+  Unsubscribe tokens carry a five-year TTL, so a key stops being load-bearing
+  five years after the last message signed with it — not on a cadence a rotation
+  Lambda gets to decide. Retiring a key is a deliberate operator action.
+- The rotation function's **`testSecret` step refuses to promote** a version
+  that cannot verify a token signed by the outgoing key. A rotation that would
+  orphan live links fails instead of shipping, and the failure message says so.
+- Cadence is **yearly**, not the 30-day default. This key never leaves Secrets
+  Manager and the handler memory that reads it, and every rotation permanently
+  adds a key to the ring — a 30-day cadence would accumulate ~60 keys before the
+  oldest stopped mattering, for no gain.
+- A key we no longer hold produces a **`RetiredKeyError`**, distinct from a bad
+  signature. A forgery and our own retirement decision are the same HMAC failure
+  and completely different events; the unsubscribe path branches on it to explain
+  the situation rather than telling someone exercising a legal right that their
+  link is invalid.
+
+The bootstrap case is deliberate: on a first deploy CloudFormation generates a
+bare random string, which is read as a single-key ring. A fresh install works
+with no rotation infrastructure in place. A **malformed** keyring throws rather
+than degrading to "treat the blob as one secret" — that fallback appears to work,
+because new links verify, while silently orphaning every token ever issued.
+
 ### 4.7 Data protection & privacy
 
 - **Encryption** at rest and in transit (TLS 1.2+). The DynamoDB table uses a

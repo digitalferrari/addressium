@@ -23,6 +23,8 @@ import { InvokeCommand, LambdaClient } from "@aws-sdk/client-lambda";
 import { schemas, APP_VERSION, EXPECTED_SCHEMA_VERSION, type AlertConfig } from "@addressium/core";
 import {
   HmacConfirmationSigner,
+  RetiredKeyError,
+  TokenExpiredError,
   SystemClock,
   applyEntitlementSync,
   applyIdentitySync,
@@ -476,20 +478,122 @@ export async function schedulesListHandler(event: HttpEvent): Promise<HttpResult
   }
 }
 
-/** POST /unsubscribe?token=... — RFC 8058 one-click, no login (§4.2). */
+/**
+ * GET/POST /unsubscribe?token=… — RFC 8058 one-click, no login (§4.2).
+ *
+ * The two methods are NOT the same operation, and conflating them is how an
+ * unsubscribe link ends up firing on its own:
+ *
+ * - **POST** is the machine path. A mailbox provider acting on the
+ *   `List-Unsubscribe-Post` header sends it, and it performs the unsubscribe.
+ * - **GET** is the human path. The same URL is also the `unsubscribe_url` merge
+ *   tag — the visible "Unsubscribe" link in the body of every message — and a
+ *   browser click is a GET. The route was POST-only, so that link returned 405
+ *   (#234): the header worked and the link everybody actually clicks did not.
+ *
+ * GET renders a confirm page rather than unsubscribing directly, because mail
+ * security scanners and link prefetchers follow GET links. A GET that acted
+ * would silently unsubscribe people whose employer runs a URL scanner.
+ */
 export async function unsubscribeHandler(event: HttpEvent): Promise<HttpResult> {
+  const token =
+    event.queryStringParameters?.token ??
+    new URLSearchParams(event.body ?? "").get("token") ??
+    "";
+  const method = (event.requestContext?.http?.method ?? "POST").toUpperCase();
+
   try {
-    const token =
-      event.queryStringParameters?.token ??
-      new URLSearchParams(event.body ?? "").get("token") ??
-      "";
     const { orgId, sub, listId } = (await confirmSigner()).verify(token);
     if (!listId) throw new Error("token has no list");
+    if (method === "GET") return unsubscribePage(token);
     await unsubscribeFromList(stores(), clock, { orgId, subscriberId: sub, listId });
-    return json(200, { status: "unsubscribed" });
+    return method === "POST" && !event.queryStringParameters?.token
+      ? json(200, { status: "unsubscribed" })
+      : unsubscribeDonePage();
   } catch (e) {
+    // A retired signing key and an expired token are OUR doing, not the
+    // recipient's, and they are not attacks (#234). Saying "invalid link" to
+    // someone exercising a legal right, because we rotated a secret, is the
+    // outcome the keyring exists to avoid — so these get their own page and,
+    // for the machine path, their own status code.
+    if (e instanceof RetiredKeyError || e instanceof TokenExpiredError) {
+      const why =
+        e instanceof RetiredKeyError
+          ? "This unsubscribe link was signed with a key this system no longer holds."
+          : "This unsubscribe link has expired.";
+      return method === "GET"
+        ? htmlPage(410, unsubscribeExpiredHtml(why))
+        : json(410, { status: "link_expired", error: why });
+    }
     return fail(e);
   }
+}
+
+const htmlPage = (statusCode: number, body: string): HttpResult => ({
+  statusCode,
+  headers: {
+    "content-type": "text/html; charset=utf-8",
+    // Self-contained page, no scripts, no external anything — it is served from
+    // the API origin and must not become a place an injected script can run.
+    "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'",
+    "referrer-policy": "no-referrer",
+    "x-content-type-options": "nosniff",
+    // The token is in the URL on the GET. Nothing should cache this.
+    "cache-control": "no-store",
+  },
+  body,
+});
+
+const PAGE_STYLE =
+  "font:16px/1.5 system-ui,sans-serif;max-width:34rem;margin:4rem auto;padding:0 1.5rem;color:#111";
+
+/** Escape for interpolation into HTML text/attributes. */
+const esc = (s: string): string =>
+  s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
+
+/**
+ * The confirm page. One button, which POSTs the token back.
+ *
+ * Deliberately a plain form with no JavaScript: this page has to work in the
+ * in-app browsers and stripped-down webviews people open mail in, and an
+ * unsubscribe that needs JS to run is an unsubscribe that sometimes doesn't.
+ */
+function unsubscribePage(token: string): HttpResult {
+  return htmlPage(
+    200,
+    `<div style="${PAGE_STYLE}"><h1>Unsubscribe</h1>` +
+      `<p>Confirm that you want to stop receiving this newsletter.</p>` +
+      `<form method="POST" action=""><input type="hidden" name="token" value="${esc(token)}">` +
+      `<button type="submit" style="font:inherit;padding:.6rem 1.2rem;cursor:pointer">Unsubscribe me</button>` +
+      `</form></div>`,
+  );
+}
+
+function unsubscribeDonePage(): HttpResult {
+  return htmlPage(
+    200,
+    `<div style="${PAGE_STYLE}"><h1>Unsubscribed</h1>` +
+      `<p>You will not receive this newsletter again. You can close this page.</p></div>`,
+  );
+}
+
+/**
+ * The graceful failure (#234).
+ *
+ * There is deliberately no "enter your email address" box here. This page is
+ * unauthenticated, so a form like that is a mass-unsubscribe tool: anyone could
+ * remove any address they can guess. Proving ownership of an address is exactly
+ * what the preference centre in #74 is for, and until that exists the honest
+ * advice is the one below rather than a convenient hole.
+ */
+function unsubscribeExpiredHtml(why: string): string {
+  return (
+    `<div style="${PAGE_STYLE}"><h1>This link no longer works</h1>` +
+    `<p>${esc(why)} Nothing has been changed.</p>` +
+    `<p>Open a <strong>recent</strong> message from this sender and use the unsubscribe link in it — ` +
+    `that one is current. If you have no recent message, replying to any message from the sender and ` +
+    `asking to be unsubscribed also works.</p></div>`
+  );
 }
 
 // ---- Admin CRUD (authenticated, org-scoped, RBAC-gated) — §4.1, §4.12, #18 ----
