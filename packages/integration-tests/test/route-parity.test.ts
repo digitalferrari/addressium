@@ -66,7 +66,10 @@ test("every admin route in CDK has a handler in the router", () => {
 test("the router declares no handler for a route CDK never registers", () => {
   // Dead entries are harmless at runtime but signal a rename that only got
   // half-applied — which is how the *next* route goes missing.
-  const declared = adminRoutesDeclaredInCdk();
+  // BOTH sources: the `adminRoute` helper and bare `api.addRoutes` calls with an
+  // authorizer. Checking only the helper made `POST /campaigns/schedule` look
+  // orphaned the moment it was added to the table (#238).
+  const declared = [...adminRoutesDeclaredInCdk(), ...addRoutesDeclaredInCdk().admin];
   const orphaned = ROUTE_KEYS.admin.filter((r) => !declared.includes(r));
   assert.deepEqual(orphaned, [], `handlers with no route: ${orphaned.join(", ")}`);
 });
@@ -85,6 +88,58 @@ test("the router declares no handler for a route CDK never registers", () => {
  * that: it added `GET /unsubscribe` to CDK, and the manifest entry had to be
  * added separately a commit later. Nothing failed in between.
  */
+/**
+ * Routes registered in CDK that are served by a DIFFERENT service, so they
+ * legitimately have no entry in the API router's tables (#238).
+ *
+ * Named individually rather than skipped by a pattern, because each one is a
+ * deliberate split with a reason, and a pattern would quietly absorb the next
+ * accidental omission:
+ *
+ * - `POST /orgs` — `services/provisioning`, which holds `kms:CreateKey` and
+ *   `ses:CreateEmailIdentity`. Folding it into the consolidated API function
+ *   would put those grants behind every admin route.
+ * - the JWKS route — `services/tokens`, which holds `kms:GetPublicKey`.
+ * - report and usage — `services/reporting`.
+ */
+const SERVED_BY_ANOTHER_SERVICE = new Set([
+  "POST /orgs",
+  "GET /orgs/{org}/.well-known/jwks.json",
+  "GET /orgs/{org}/campaigns/{campaign}/report",
+  "GET /orgs/{org}/usage",
+  "GET /orgs/{org}/usage/{period}",
+]);
+
+/** Every `api.addRoutes({...})` route, split by whether it carries an authorizer. */
+function addRoutesDeclaredInCdk(): { admin: string[]; public: string[] } {
+  const src = readFileSync(STACK, "utf8");
+  const admin: string[] = [];
+  const publicOnes: string[] = [];
+  const re = /api\.addRoutes\(\{([\s\S]{0,600}?)\}\);/g;
+  for (let m = re.exec(src); m; m = re.exec(src)) {
+    const block = m[1]!;
+    const path = block.match(/path:\s*"([^"]+)"/)?.[1];
+    const methods = block.match(/methods:\s*\[([^\]]*)\]/)?.[1] ?? "";
+    if (!path) continue;
+    for (const mm of methods.matchAll(/HttpMethod\.([A-Z]+)/g)) {
+      const key = `${mm[1]} ${path}`;
+      if (SERVED_BY_ANOTHER_SERVICE.has(key)) continue;
+      (/authorizer:/.test(block) ? admin : publicOnes).push(key);
+    }
+  }
+  return { admin, public: publicOnes };
+}
+
+test("an ADMIN route registered outside the adminRoute helper is still in the table (#238)", () => {
+  // The hole the first version of this guard left. `POST /campaigns/schedule` is
+  // registered with `api.addRoutes` + an authorizer, so the adminRoute regex
+  // missed it and the authorizer check excluded it from the public sweep — it
+  // was in NEITHER. `npm run dev` found it by answering "no route" when a send
+  // was scheduled: the deployed stack was fine, the manifest was not.
+  const missing = addRoutesDeclaredInCdk().admin.filter((r) => !ROUTE_KEYS.admin.includes(r));
+  assert.deepEqual(missing, [], `admin routes absent from ADMIN_ROUTES: ${missing.join(", ")}`);
+});
+
 function publicRoutesDeclaredInCdk(): string[] {
   const src = readFileSync(STACK, "utf8");
   const out: string[] = [];
@@ -101,7 +156,7 @@ function publicRoutesDeclaredInCdk(): string[] {
     // kms:GetPublicKey, and giving the API Lambda that grant to keep one
     // manifest tidy would be the wrong trade. Excluded by name so the exception
     // is visible rather than being a hole in the regex.
-    if (path.endsWith("/.well-known/jwks.json")) continue;
+    if (SERVED_BY_ANOTHER_SERVICE.has(`GET ${path}`)) continue;
     for (const mm of methods.matchAll(/HttpMethod\.([A-Z]+)/g)) out.push(`${mm[1]} ${path}`);
   }
   return out;

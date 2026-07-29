@@ -31,15 +31,19 @@
  * | The domain and adapter code they call | Secrets Manager → a literal value |
  * | RBAC (Cedar), validation, CORS | SES → newline-delimited JSON in `.dev-outbox/` |
  *
- * The **send queue is not faked**, and that is a known gap: routes that enqueue
- * to SQS will fail locally. See the note printed at startup and #232.
+ * SES and SQS are spoken over the WIRE (`scripts/dev-aws-stubs.mjs`), not
+ * swapped for fake adapters. The production `SesEmailSender` and `SqsSendQueue`
+ * run verbatim — which matters, because the RFC 8058 headers, the `emailClass`
+ * configuration-set routing and the base64url message tags all live in those
+ * adapters, and a fake would test the fake instead.
  */
 import { createRequire } from "node:module";
 import { createServer } from "node:http";
-import { mkdirSync, appendFileSync, rmSync } from "node:fs";
+import { mkdirSync, rmSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { DynamoDBClient, CreateTableCommand } from "@aws-sdk/client-dynamodb";
+import { startAwsStubs } from "./dev-aws-stubs.mjs";
 
 const require = createRequire(import.meta.url);
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -47,6 +51,7 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const PORT = Number(process.env.PORT ?? 4000);
 const TABLE = "addressium-dev";
 const OUTBOX = resolve(ROOT, ".dev-outbox");
+const DEV_ORG = process.env.DEV_ORG ?? "summit";
 
 // ---------------------------------------------------------------------------
 // Environment. Set BEFORE importing the API, because its module-level singletons
@@ -66,6 +71,19 @@ process.env.WEBHOOK_SECRET_ARN ??= "local-dev-webhook-secret";
 process.env.UNSUBSCRIBE_URL_BASE ??= `http://localhost:${PORT}/unsubscribe`;
 process.env.PUBLIC_SITE_BASE ??= `http://localhost:${PORT}`;
 process.env.APP_ORIGINS ??= "http://localhost:5173,http://localhost:5174,http://localhost:5175";
+process.env.CONFIRM_URL_BASE ??= `http://localhost:${PORT}/confirm`;
+// Handlers resolve these lazily, so an unused one costs nothing — but a MISSING
+// one throws `missing env X` from inside a route, which reads as a code bug
+// rather than as configuration. Named here so every route is reachable.
+process.env.EXPORT_BUCKET ??= "dev-export-bucket";
+process.env.AUDIT_BUCKET ??= "dev-audit-bucket";
+process.env.SEND_QUEUE_ARN ??= "arn:aws:sqs:us-east-1:000000000000:dev-send";
+process.env.SCHEDULER_ROLE_ARN ??= "arn:aws:iam::000000000000:role/dev-scheduler";
+process.env.SCHEDULER_GROUP ??= "dev";
+process.env.LAUNCH_FN_ARN ??= "arn:aws:lambda:us-east-1:000000000000:function:dev-launch";
+process.env.SUBSCRIBER_ACCOUNT_FN ??= "dev-subscriber-account";
+process.env.SES_MAX_SEND_RATE ??= "14";
+process.env.UNSUBSCRIBE_URL_BASE ??= `http://localhost:${PORT}/unsubscribe`;
 
 const dynalite = require("dynalite");
 
@@ -158,6 +176,41 @@ function match(routes, method, path) {
   return undefined;
 }
 
+/**
+ * Seed one organization directly into the store (#232).
+ *
+ * `POST /orgs` is served by the PROVISIONING Lambda, which sits outside the API
+ * router table this server mounts — it holds `kms:CreateKey` and
+ * `ses:CreateEmailIdentity`, and pulling it into the router would put those
+ * grants behind the consolidated API function. So the org is written directly
+ * rather than routed, and the journey starts at step one.
+ *
+ * Written through the real `DynamoStores`, so the item shape is the deployed
+ * one; nothing here knows the table layout.
+ */
+async function seedOrg() {
+  const { DynamoStores } = await import(resolve(ROOT, "packages/adapters-aws/dist/index.js"));
+  const stores = new DynamoStores(TABLE);
+  if (await stores.organizations.get(DEV_ORG)) return;
+  await stores.organizations.put({
+    orgId: DEV_ORG,
+    name: "Dev Org",
+    domains: ["dev.example"],
+    sesConfigSet: `addressium-${DEV_ORG}`,
+    sesTransactionalConfigSet: `addressium-${DEV_ORG}-transactional`,
+    ipMode: "shared",
+    dmarcPolicy: "none",
+    suppressionScope: "hybrid",
+    defaultTimezone: "UTC",
+    // `prod`, deliberately: a `dev` org is fail-closed against an empty send
+    // allowlist (§4.11), so seeding one would make every local send silently
+    // return `dev-allowlist` and look like a broken send path.
+    environment: "prod",
+    setupComplete: true,
+  });
+  console.log(`dev: seeded org "${DEV_ORG}" (domains: dev.example)`);
+}
+
 // ---------------------------------------------------------------------------
 
 const readBody = (req) =>
@@ -186,9 +239,36 @@ const devClaims = () => ({
 async function main() {
   const dynaliteServer = await startDynalite();
   rmSync(OUTBOX, { recursive: true, force: true });
-  mkdirSync(OUTBOX, { recursive: true });
+  const stubs = await startAwsStubs(OUTBOX);
 
   const api = await import(resolve(ROOT, "services/api/dist/index.js"));
+  const sender = await import(resolve(ROOT, "services/sender/dist/index.js"));
+  await seedOrg();
+
+  /**
+   * Drain the send queue through the REAL sender handler (#232).
+   *
+   * Polled after each request rather than run as an event-source mapping,
+   * because there is no Lambda service here to do it — but the handler itself is
+   * the deployed one, receiving the same SQS event shape, so the batch-item
+   * failure reporting (#177) and the per-recipient claim logic (#163) are
+   * exercised exactly as they are in production.
+   */
+  const drain = async () => {
+    for (let round = 0; round < 20; round++) {
+      const msgs = stubs.queue.receive(10);
+      if (msgs.length === 0) return;
+      try {
+        await sender.handler({
+          Records: msgs.map((m) => ({ messageId: m.id, receiptHandle: m.id, body: m.body })),
+        });
+      } catch (e) {
+        console.error("dev: sender batch threw", e);
+      }
+      for (const m of msgs) stubs.queue.delete(m.id);
+    }
+    console.warn("dev: send queue still not empty after 20 rounds — a fan-out loop?");
+  };
   const adminRoutes = api.ROUTE_KEYS.admin.map(compile);
   const publicRoutes = api.ROUTE_KEYS.public.map(compile);
   const appOrigins = process.env.APP_ORIGINS.split(",").map((o) => o.trim());
@@ -241,6 +321,10 @@ async function main() {
       console.error(`${req.method} ${url.pathname} threw`, e);
       result = { statusCode: 500, headers: {}, body: JSON.stringify({ error: String(e) }) };
     }
+    // Anything that enqueues is drained before the response returns, so a
+    // developer sees the mail in the outbox by the time curl exits rather than
+    // wondering whether the send is asynchronous or broken.
+    await drain();
     console.log(`${req.method} ${url.pathname} → ${result.statusCode}`);
     res.writeHead(result.statusCode, { ...cors, ...result.headers });
     res.end(result.body);
@@ -258,24 +342,19 @@ async function main() {
   Point the SPAs at it:   VITE_API_BASE=http://localhost:${PORT} npm run dev -w apps/admin-web
   Act as a scoped role:   DEV_ROLE=analyst DEV_ORGS=summit npm run dev
 
-  KNOWN GAP (#232): routes that enqueue to SQS — launching a campaign — are not
-  served, because there is no local queue. The signup → confirm → opt-in half of
-  the journey works; the send half does not yet.
+  Mail:  .dev-outbox/mail.ndjson (the real SES adapter's payload, headers and all)
+  Org:   "${DEV_ORG}" is seeded on boot — POST /orgs is served by the provisioning
+         Lambda, which is outside the API router, so it is not mounted here.
 `);
 
   const shutdown = () => {
     server.close();
+    stubs.close();
     dynaliteServer.close();
     process.exit(0);
   };
   process.on("SIGINT", shutdown);
   process.on("SIGTERM", shutdown);
-}
-
-/** Where the local SES stand-in files a message (see adapters-aws/ses.ts). */
-export function devOutboxAppend(message) {
-  mkdirSync(OUTBOX, { recursive: true });
-  appendFileSync(resolve(OUTBOX, "mail.ndjson"), `${JSON.stringify(message)}\n`);
 }
 
 main().catch((e) => {

@@ -1769,17 +1769,34 @@ the router to a handler, opens CORS to `*`, or ungates the local-secret path. A
 dev server that mirrors routes by hand rots within a week and is worse than
 none, because it answers confidently and wrongly.
 
-**Two gaps, both real (#232).** Neither is served locally yet:
+**SES, SQS and EventBridge Scheduler are spoken over the wire**, not swapped for
+fake adapters — `scripts/dev-aws-stubs.mjs` serves them and the SDK is pointed at
+it with `AWS_ENDPOINT_URL_*`. That distinction is the whole design: handing the
+handlers an in-memory `EmailSender` would make `npm run dev` a test of the fake,
+and the real `SesEmailSender` — where the RFC 8058 headers, the `emailClass`
+configuration-set routing and the base64url message tags live — would never run.
+Those are precisely the layers this repo's defects have been in. It also means
+**zero `ADDRESSIUM_LOCAL` branches in the send path**.
 
-- **Routes that enqueue to SQS.** Launching a campaign writes to a queue the
-  sender drains, and there is no local queue. So the signup → confirm → opt-in
-  half of the journey works and the send half does not.
-- **`POST /orgs`.** Provisioning is its own Lambda outside the router table, so
-  the dev server cannot create an org — which blocks the journey at step one
-  until a fixture seeds one directly.
+One deliberate behaviour difference: a one-off send is placed five minutes out in
+production so it stays cancellable (§4.6), and fires **immediately** locally.
+Waiting five minutes to learn whether your send works defeats the point; the
+window is a product decision about cancellation, not behaviour under test.
 
-Both are named rather than papered over: a dev server that quietly cannot do
-something is the failure mode this whole section is about.
+The full public journey runs locally: create list → signup → confirmation mail in
+`.dev-outbox/` → confirm → schedule a send → the real sender drains the queue →
+campaign mail in the outbox → one-click unsubscribe. The outbox holds the
+adapter's actual payload, so you read the headers rather than trust that they
+were produced.
+
+**One gap remains.** `POST /orgs` is served by `services/provisioning`, which
+holds `kms:CreateKey` and `ses:CreateEmailIdentity`; folding it into the
+consolidated API function would put those grants behind every admin route. So the
+dev server **seeds** one org on boot (`DEV_ORG`, default `summit`) rather than
+routing provisioning. Same for the JWKS route (`services/tokens`) and
+report/usage (`services/reporting`) — all five are named in
+`route-parity.test.ts` as deliberate splits, so the exceptions are visible rather
+than a hole in a regex.
 
 ### 9.4 Repository layout
 

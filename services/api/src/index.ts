@@ -1624,6 +1624,11 @@ const ADMIN_ROUTES: Record<string, RouteHandler> = {
   "GET /orgs/{org}/campaigns/{id}": campaignsHandler,
   "POST /campaigns": campaignsHandler,
   "GET /orgs/{org}/schedules": schedulesListHandler,
+  // Registered in CDK via `api.addRoutes` rather than the `adminRoute` helper,
+  // so neither half of the old parity guard saw it and the manifest simply did
+  // not have it (#238). Found by `npm run dev`, where scheduling a send answered
+  // "no route" — the deployed stack was fine, the manifest was not.
+  "POST /campaigns/schedule": scheduleCampaignHandler,
   "POST /campaigns/lifecycle": scheduleLifecycleHandler,
   "GET /orgs/{org}/templates": templatesHandler,
   "GET /orgs/{org}/templates/{id}": templatesHandler,
