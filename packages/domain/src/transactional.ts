@@ -28,6 +28,12 @@ export function buildConfirmationEmail(
     list.physicalAddress,
   ].join("\n");
   return {
+    // Transactional (#237): a double opt-in confirmation must reach someone who
+    // has unsubscribed from a DIFFERENT list, and must go out on the org's
+    // transactional configuration set so a marketing complaint spike does not
+    // drag it down. Confirmation mail failing is what stops new subscribers
+    // arriving — the reputation problem would otherwise eat its own recovery.
+    emailClass: "transactional",
     from: list.fromAddress,
     to: toEmail,
     subject: `Confirm your subscription to ${list.name}`,
@@ -64,6 +70,7 @@ export function buildBatchConfirmationEmail(
     first.physicalAddress,
   ].join("\n");
   return {
+    emailClass: "transactional",
     from: first.fromAddress,
     to: toEmail,
     subject: `Confirm your subscriptions (${lists.length})`,

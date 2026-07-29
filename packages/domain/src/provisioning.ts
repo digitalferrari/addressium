@@ -38,6 +38,13 @@ export interface SigningKey {
 
 export interface SesIdentity {
   configSet: string;
+  /**
+   * The org's TRANSACTIONAL configuration set (#237). Reputation and metrics are
+   * per-configuration-set, so opt-in confirmations need their own or a marketing
+   * complaint spike drags them down — and confirmation mail failing is what stops
+   * new subscribers arriving.
+   */
+  transactionalConfigSet?: string;
   dkimTokens: string[];
   verificationStatus: "pending" | "verified";
   /**
@@ -71,7 +78,15 @@ export interface ProvisioningProviders {
   /** Validate the operator's pool and return its id. Never creates a pool. */
   linkSubscriberPool(orgId: string, spec: SubscriberPoolSpec): Promise<{ poolId: string }>;
   createSigningKey(orgId: string): Promise<SigningKey>;
-  ensureSesDomainIdentity(orgId: string, domain: string): Promise<SesIdentity>;
+  /**
+   * @param dedicatedIpPoolName an SES pool the OPERATOR created (#237). Assigned
+   * to both configuration sets when present; addressium never creates one.
+   */
+  ensureSesDomainIdentity(
+    orgId: string,
+    domain: string,
+    dedicatedIpPoolName?: string,
+  ): Promise<SesIdentity>;
 }
 
 export interface DnsRecord {
@@ -222,7 +237,7 @@ export async function provisionOrganization(
       audience: input.siteDomain,
     };
   }
-  const ses = await providers.ensureSesDomainIdentity(orgId, input.primaryDomain);
+  const ses = await providers.ensureSesDomainIdentity(orgId, input.primaryDomain, input.dedicatedIpPoolName);
 
   const domains = [...new Set([input.primaryDomain, input.siteDomain])];
   const org: Organization = {
@@ -233,9 +248,13 @@ export async function provisionOrganization(
     ...(subscriberPoolId ? { subscriberPoolId } : {}),
     ...(magicLink ? { magicLink } : {}),
     sesConfigSet: ses.configSet,
+    ...(ses.transactionalConfigSet ? { sesTransactionalConfigSet: ses.transactionalConfigSet } : {}),
     ...(ses.mailFromDomain ? { mailFromDomain: ses.mailFromDomain } : {}),
     dmarcPolicy: input.dmarcPolicy,
-    ipMode: input.dedicatedIp ? "dedicated" : "shared",
+    // Derived, not declared (#237): "dedicated" means a pool is actually
+    // assigned, so the record cannot claim a capability the deployment lacks.
+    ipMode: input.dedicatedIpPoolName ? "dedicated" : "shared",
+    ...(input.dedicatedIpPoolName ? { dedicatedIpPoolName: input.dedicatedIpPoolName } : {}),
     suppressionScope: input.suppressionScope,
     environment: input.environment,
     ...(input.devAllowlist ? { devAllowlist: input.devAllowlist } : {}),

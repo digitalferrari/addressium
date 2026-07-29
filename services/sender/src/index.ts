@@ -170,7 +170,7 @@ export async function handler(event: SqsEvent) {
           clock,
         )
       : undefined;
-    const ses = new SesEmailSender(org.sesConfigSet);
+    const ses = new SesEmailSender(org.sesConfigSet, undefined, org.sesTransactionalConfigSet);
 
     results.push(
       await sendCampaign(s, ses, magic, clock, descriptor, {

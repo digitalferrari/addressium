@@ -228,7 +228,7 @@ test("a url identical to its label is not printed twice", () => {
 const orgInput: schemas.CreateOrgInput = {
   name: "Northwind Times", primaryDomain: "northwindtimes.example",
   siteDomain: "northwindtimes.example", region: "us-east-1", defaultTimezone: "UTC",
-  magicLinks: false, dedicatedIp: false, dmarcPolicy: "none",
+  magicLinks: false, dmarcPolicy: "none",
     suppressionScope: "hybrid", environment: "prod",
 };
 const fakeProviders = (): ProvisioningProviders => ({

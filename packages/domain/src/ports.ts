@@ -443,6 +443,15 @@ export interface SentMessage {
    * carry no way to identify the recipient and are unprocessable (#184).
    */
   tags?: { orgId: string; campaignId: string; subscriberId: string };
+  /**
+   * Marketing or transactional (#237). Drives which SES configuration set the
+   * message goes out on, so a marketing complaint spike does not drag
+   * confirmation mail down with it — and confirmation mail failing is what
+   * stops new subscribers arriving, i.e. the reputation problem would otherwise
+   * eat its own recovery path. Absent is read as `marketing`, the safer default:
+   * it applies the STRICTER eligibility rules.
+   */
+  emailClass?: import("@addressium/core").EmailClass;
 }
 export interface EmailSender {
   send(msg: SentMessage): Promise<void>;

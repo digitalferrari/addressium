@@ -1374,3 +1374,17 @@ test("the diversion alarm names BOTH causes, since one is not replayable (#236)"
   assert.match(desc, /replay/i, "the transform cause has no next step");
   assert.match(desc, /CANNOT recover/i, "nothing warns that replay is useless for the quota case");
 });
+
+test("provisioning may ASSIGN a dedicated IP pool but not create one (#237)", () => {
+  // The flag used to be read by nobody. It is implemented now — but addressium
+  // still must not create a billable pool on its own initiative, so the absence
+  // of the create permission is the guarantee, not a comment.
+  const grants = Object.values(template().findResources("AWS::IAM::Policy")).flatMap((p) =>
+    ((p.Properties as { PolicyDocument: { Statement: Record<string, unknown>[] } }).PolicyDocument
+      .Statement ?? []).flatMap((st) => actionsOf(st)),
+  );
+  assert.ok(grants.includes("ses:PutConfigurationSetDeliveryOptions"), "cannot assign the pool");
+  for (const forbidden of ["ses:CreateDedicatedIpPool", "ses:PutDedicatedIpInPool", "ses:*"]) {
+    assert.ok(!grants.includes(forbidden), `a role may create billable IP capacity: ${forbidden}`);
+  }
+});

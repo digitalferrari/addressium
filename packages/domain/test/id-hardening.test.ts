@@ -164,7 +164,6 @@ const orgInput: schemas.CreateOrgInput = {
   region: "us-east-1",
   defaultTimezone: "UTC",
   magicLinks: false,
-  dedicatedIp: false,
   dmarcPolicy: "none",
     suppressionScope: "hybrid",
   environment: "prod",

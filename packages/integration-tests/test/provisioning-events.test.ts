@@ -164,3 +164,64 @@ test("an org provisioned before #200 gets suppression added on re-provision", as
   assert.ok(put, "an existing config set keeps whatever suppression it was created with — none");
   assert.deepEqual([...(put.input.SuppressedReasons as string[])].sort(), ["BOUNCE", "COMPLAINT"]);
 });
+
+// ---------------------------------------------------------------------------
+// #237 — class separation and the dedicated IP pool
+// ---------------------------------------------------------------------------
+
+test("each org gets a SECOND configuration set for transactional mail", async () => {
+  // Reputation and metrics are per-configuration-set. Sharing one meant a
+  // marketing complaint spike dragged double opt-in confirmations down with it —
+  // and confirmation mail failing is what stops new subscribers arriving, so the
+  // reputation problem ate its own recovery path.
+  process.env.SES_EVENTS_TOPIC_ARN = "arn:aws:sns:us-east-1:123456789012:SesEventsTopic";
+  const { p, ses } = providers();
+  const res = await p.ensureSesDomainIdentity("acme", "mail.acme.example");
+  assert.equal(res.transactionalConfigSet, "addressium-acme-transactional");
+
+  const created = ses.calls
+    .filter((c) => c.name === "CreateConfigurationSetCommand")
+    .map((c) => c.input.ConfigurationSetName);
+  assert.deepEqual(created.sort(), ["addressium-acme", "addressium-acme-transactional"]);
+});
+
+test("the transactional set gets the SAME event destination", async () => {
+  // The class changes whose reputation a message affects, never whether a bounce
+  // is recorded. A config set with no destination publishes nothing (#208), so
+  // omitting it here would make every confirmation bounce invisible.
+  process.env.SES_EVENTS_TOPIC_ARN = "arn:aws:sns:us-east-1:123456789012:SesEventsTopic";
+  const { p, ses } = providers();
+  await p.ensureSesDomainIdentity("acme", "mail.acme.example");
+  const dests = ses.calls
+    .filter((c) => c.name === "CreateConfigurationSetEventDestinationCommand")
+    .map((c) => c.input.ConfigurationSetName);
+  assert.ok(dests.includes("addressium-acme-transactional"), "transactional events would be dead");
+});
+
+test("a dedicated IP pool is ASSIGNED, never created", async () => {
+  // The flag used to be read by nobody: no pool, no assignment, so an org marked
+  // "dedicated" sent on shared IPs with a record claiming otherwise. It is now
+  // assigned — but addressium still does not CREATE pools, because a dedicated
+  // IP is a standing ~$25/month charge needing a warm-up plan, and provisioning
+  // one from a checkbox bills an operator for infrastructure they did not ask
+  // for (the #225 reasoning).
+  process.env.SES_EVENTS_TOPIC_ARN = "arn:aws:sns:us-east-1:123456789012:SesEventsTopic";
+  const { p, ses } = providers();
+  await p.ensureSesDomainIdentity("acme", "mail.acme.example", "acme-pool");
+
+  const assigned = ses.calls
+    .filter((c) => c.name === "PutConfigurationSetDeliveryOptionsCommand")
+    .map((c) => c.input.SendingPoolName);
+  assert.deepEqual(assigned, ["acme-pool", "acme-pool"], "both config sets must use the pool");
+  assert.ok(
+    !ses.calls.some((c) => c.name === "CreateDedicatedIpPoolCommand"),
+    "addressium must not create a billable pool on its own",
+  );
+});
+
+test("no pool named means no assignment call at all", async () => {
+  process.env.SES_EVENTS_TOPIC_ARN = "arn:aws:sns:us-east-1:123456789012:SesEventsTopic";
+  const { p, ses } = providers();
+  await p.ensureSesDomainIdentity("acme", "mail.acme.example");
+  assert.ok(!ses.calls.some((c) => c.name === "PutConfigurationSetDeliveryOptionsCommand"));
+});

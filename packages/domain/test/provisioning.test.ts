@@ -24,7 +24,6 @@ const input: schemas.CreateOrgInput = {
   defaultTimezone: "America/Denver",
   magicLinks: true,
   subscriberPool: { poolId: "pool-123" },
-  dedicatedIp: false,
   dmarcPolicy: "none",
     suppressionScope: "hybrid",
   environment: "prod",

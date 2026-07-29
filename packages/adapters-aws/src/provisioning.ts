@@ -15,6 +15,7 @@ import {
   CreateConfigurationSetEventDestinationCommand,
   UpdateConfigurationSetEventDestinationCommand,
   PutConfigurationSetSuppressionOptionsCommand,
+  PutConfigurationSetDeliveryOptionsCommand,
   PutEmailIdentityMailFromAttributesCommand,
   type EventDestinationDefinition,
 } from "@aws-sdk/client-sesv2";
@@ -89,8 +90,13 @@ export class AwsProvisioningProviders implements ProvisioningProviders {
     return { kmsKeyArn: arn, kid: keyId };
   }
 
-  async ensureSesDomainIdentity(orgId: string, domain: string): Promise<SesIdentity> {
+  async ensureSesDomainIdentity(
+    orgId: string,
+    domain: string,
+    dedicatedIpPoolName?: string,
+  ): Promise<SesIdentity> {
     const configSet = `addressium-${orgId}`;
+    const transactionalConfigSet = `addressium-${orgId}-transactional`;
     try {
       await this.ses.send(
         new CreateConfigurationSetCommand({
@@ -121,6 +127,32 @@ export class AwsProvisioningProviders implements ProvisioningProviders {
     }
     await this.ensureEventDestination(configSet);
 
+    // A SECOND configuration set for transactional mail (#237). Reputation and
+    // metrics are per-config-set, so sharing one meant a marketing complaint
+    // spike dragged double opt-in confirmations down with it — and confirmation
+    // mail failing is what stops new subscribers arriving, so the reputation
+    // problem ate its own recovery path.
+    //
+    // Same suppression and the same event destination: the class changes WHOSE
+    // reputation a message affects, never whether a bounce is recorded.
+    try {
+      await this.ses.send(
+        new CreateConfigurationSetCommand({
+          ConfigurationSetName: transactionalConfigSet,
+          SuppressionOptions: { SuppressedReasons: ["BOUNCE", "COMPLAINT"] },
+        }),
+      );
+    } catch (e) {
+      if ((e as { name?: string }).name !== "AlreadyExistsException") throw e;
+      await this.ses.send(
+        new PutConfigurationSetSuppressionOptionsCommand({
+          ConfigurationSetName: transactionalConfigSet,
+          SuppressedReasons: ["BOUNCE", "COMPLAINT"],
+        }),
+      );
+    }
+    await this.ensureEventDestination(transactionalConfigSet);
+
     let dkimTokens: string[] = [];
     let verified = false;
     try {
@@ -139,11 +171,40 @@ export class AwsProvisioningProviders implements ProvisioningProviders {
       dkimTokens = created.DkimAttributes?.Tokens ?? [];
     }
 
+    // Assign the operator's dedicated IP pool, if they created one (#237).
+    // addressium does not CREATE pools: a dedicated IP is a standing ~$25/month
+    // charge that needs a deliberate warm-up plan, and provisioning one as a
+    // side effect of a checkbox would bill an operator for infrastructure they
+    // did not knowingly ask for — the same reasoning as WebACLs in #225.
+    const pool = dedicatedIpPoolName?.trim();
+    if (pool) {
+      for (const set of [configSet, transactionalConfigSet]) {
+        try {
+          await this.ses.send(
+            new PutConfigurationSetDeliveryOptionsCommand({
+              ConfigurationSetName: set,
+              SendingPoolName: pool,
+            }),
+          );
+        } catch (e) {
+          // Loud but not fatal: mail still goes out on shared IPs. Silence here
+          // would recreate exactly the defect being fixed — a record claiming
+          // "dedicated" with nothing behind it.
+          console.error("provisioning: could not assign dedicated IP pool — sending stays on shared IPs", {
+            configSet: set,
+            pool,
+            error: (e as Error).message,
+          });
+        }
+      }
+    }
+
     const mailFromDomain = mailFromDomainFor(domain);
     await this.ensureMailFrom(domain, mailFromDomain);
 
     return {
       configSet,
+      transactionalConfigSet,
       dkimTokens,
       verificationStatus: verified ? "verified" : "pending",
       mailFromDomain,

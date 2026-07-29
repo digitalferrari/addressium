@@ -27,11 +27,35 @@ export const decodeTag = (s: string): string => Buffer.from(s, "base64url").toSt
 export class SesEmailSender implements EmailSender {
   private readonly client: SESv2Client;
 
+  /**
+   * @param configurationSetName the org's MARKETING configuration set.
+   * @param client injected in tests.
+   * @param transactionalConfigurationSetName the org's TRANSACTIONAL set (#237).
+   *
+   * Two sets, because reputation and metrics are per-configuration-set. Sharing
+   * one meant a double opt-in confirmation carried the same reputation as a
+   * marketing blast — so when the marketing complaint rate climbed it dragged
+   * confirmation mail with it, and confirmation mail failing is exactly what
+   * stops new subscribers arriving. The reputation problem would eat its own
+   * recovery path.
+   *
+   * Absent, transactional falls back to the marketing set rather than to NO set:
+   * a message sent with no configuration set publishes no events at all, and a
+   * silent event plane is the failure mode #208 was.
+   */
   constructor(
     private readonly configurationSetName?: string,
     client?: SESv2Client,
+    private readonly transactionalConfigurationSetName?: string,
   ) {
     this.client = client ?? new SESv2Client({});
+  }
+
+  /** The configuration set this message goes out on (#237). */
+  private configSetFor(emailClass: string | undefined): string | undefined {
+    return emailClass === "transactional"
+      ? (this.transactionalConfigurationSetName ?? this.configurationSetName)
+      : this.configurationSetName;
   }
 
   async send(msg: SentMessage): Promise<void> {
@@ -49,7 +73,7 @@ export class SesEmailSender implements EmailSender {
       new SendEmailCommand({
         FromEmailAddress: msg.from,
         Destination: { ToAddresses: [msg.to] },
-        ConfigurationSetName: this.configurationSetName,
+        ConfigurationSetName: this.configSetFor(msg.emailClass),
         // Stamped onto every SES event for this message, which is the only way
         // the event feed can resolve a bounce back to a subscriber (#184).
         ...(msg.tags

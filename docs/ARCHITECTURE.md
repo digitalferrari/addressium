@@ -1412,9 +1412,50 @@ a bounce arriving and our handler recording it, and any path that skips the
 check. Re-mailing an address SES already knows is dead is a direct reputation
 cost.
 
-Still open from #200 and split into its own issue: `EmailClass`
-(marketing/transactional separation), a second configuration set, class-aware
-eligibility, and the `ipMode` flag that no infrastructure implements.
+**Marketing vs transactional is now a real distinction (#237).** `EmailClass`
+decides *eligibility*, not just labelling, and the line falls between a statement
+about the **address** and a statement about **marketing**:
+
+| Suppression source | Marketing | Transactional |
+|---|---|---|
+| `bounce`, `complaint` | blocked | **blocked** |
+| `manual` (an admin acted) | blocked | **blocked** |
+| `unsubscribe`, `inactive` | blocked | **allowed** |
+
+Leaving a newsletter says nothing about the receipt or the confirmation the same
+person triggers ten minutes later, and withholding those is its own failure. A
+hard bounce or a spam complaint binds everything. `manual` is treated as binding
+because an admin who reaches for the suppression button means "stop mailing this
+person", and reading that as "stop the newsletters only" narrows an instruction
+whose reason we cannot see.
+
+Two safety properties are deliberate. Omitting `emailClass` reads as
+`marketing` — the **stricter** rules — so a caller that forgets cannot bypass
+the gate. And a subscriber flagged `suppressed` with **no** suppression entry to
+explain it fails closed even for transactional: the flag carries no source, and
+an unexplained suppression is not one to reason past.
+
+Each org now gets **two configuration sets**, `addressium-<org>` and
+`addressium-<org>-transactional`, with the same suppression options and the same
+event destination — the class changes *whose reputation* a message affects, never
+whether a bounce is recorded. Sharing one meant a marketing complaint spike
+dragged double opt-in confirmations down with it, and confirmation mail failing
+is what stops new subscribers arriving: the reputation problem ate its own
+recovery path. An org provisioned before this has only one set, and transactional
+falls back to it rather than to *no* set — a message with no configuration set
+publishes no events at all, which is the failure mode #208 was.
+
+**`ipMode` now means something.** It was set from a `dedicatedIp` boolean and
+read by nobody: no pool in CDK, no `PutDedicatedIpPool`, no assignment anywhere.
+An operator could tick "dedicated IP", pay nothing extra, get shared IPs, and
+have a database record saying otherwise. It is now **derived** from
+`dedicatedIpPoolName` — a pool the operator created themselves, assigned to both
+configuration sets at provisioning. addressium does not create pools, for the
+same reason it does not create WebACLs (#225): a dedicated IP is a standing
+~$25/month charge needing a deliberate warm-up plan, and provisioning one as a
+side effect of a checkbox bills someone for infrastructure they did not knowingly
+ask for. The IAM grant carries `PutConfigurationSetDeliveryOptions` and
+deliberately **not** `CreateDedicatedIpPool`, asserted by a CDK test.
 
 ---
 

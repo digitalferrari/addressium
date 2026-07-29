@@ -425,7 +425,15 @@ export const createOrgSchema = z
      * returned by provisioning says so.
      */
     dmarcPolicy: z.enum(["none", "quarantine", "reject"]).default("none"),
-    dedicatedIp: z.boolean().default(false),
+    /**
+     * An SES dedicated IP pool you have already created (#237). addressium does
+     * not create pools — they are a standing charge and need a warm-up plan, so
+     * provisioning one from a checkbox would bill you for infrastructure you did
+     * not knowingly ask for. This REPLACES the old `dedicatedIp` boolean, which
+     * set a field nothing read: no pool was ever created or assigned, so an org
+     * marked "dedicated" sent on shared IPs with a record claiming otherwise.
+     */
+    dedicatedIpPoolName: z.string().min(1).optional(),
     suppressionScope: z.enum(["global", "org", "hybrid"]).default("hybrid"),
     /** `dev` marks a test silo (same workflows, labeled + excluded from cost rollups). */
     environment: z.enum(["prod", "dev"]).default("prod"),

@@ -197,7 +197,7 @@ export async function signupHandler(event: HttpEvent): Promise<HttpResult> {
     if (list) {
       const org = await stores().organizations.get(res.subscription.orgId);
       const confirmUrl = `${env("CONFIRM_URL_BASE")}?token=${encodeURIComponent(res.confirmationToken)}`;
-      const ses = new SesEmailSender(org?.sesConfigSet);
+      const ses = new SesEmailSender(org?.sesConfigSet, undefined, org?.sesTransactionalConfigSet);
       await ses.send(buildConfirmationEmail(list, res.subscriber.email, confirmUrl));
     }
     return json(202, { subscriberId: res.subscriber.sub, status: res.subscription.status });
@@ -232,7 +232,7 @@ export async function signupBatchHandler(event: HttpEvent): Promise<HttpResult> 
     if (res.lists.length > 0) {
       const org = await stores().organizations.get(res.subscriber.orgId);
       const confirmUrl = `${env("CONFIRM_URL_BASE")}?token=${encodeURIComponent(res.confirmationToken)}`;
-      const ses = new SesEmailSender(org?.sesConfigSet);
+      const ses = new SesEmailSender(org?.sesConfigSet, undefined, org?.sesTransactionalConfigSet);
       await ses.send(buildBatchConfirmationEmail(res.lists, res.subscriber.email, confirmUrl));
     }
     return json(202, { subscriberId: res.subscriber.sub, status: "pending", lists: res.lists.map((l) => l.listId) });

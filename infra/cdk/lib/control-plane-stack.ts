@@ -1308,6 +1308,11 @@ export class ControlPlaneStack extends Stack {
           // bounce/complaint suppression on the org's configuration set.
           "ses:PutEmailIdentityMailFromAttributes",
           "ses:PutConfigurationSetSuppressionOptions",
+          // The dedicated IP pool an operator created is ASSIGNED here (#237).
+          // CreateDedicatedIpPool is deliberately absent: a dedicated IP is a
+          // standing charge, and provisioning one from a checkbox would bill an
+          // operator for infrastructure they did not knowingly ask for.
+          "ses:PutConfigurationSetDeliveryOptions",
           // CreateUserPool is deliberately absent: pools are link-only (#18,
           // #226). Provisioning validates the operator's existing pool with
           // DescribeUserPool and never creates one.

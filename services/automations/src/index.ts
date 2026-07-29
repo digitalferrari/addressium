@@ -171,7 +171,7 @@ export async function dripStepHandler(event: DripStepEvent) {
     const org = await s.organizations.get(event.orgId);
     if (!org) throw new Error(`unknown org ${event.orgId}`);
     const magic = signerFor(org);
-    const ses = new SesEmailSender(org.sesConfigSet);
+    const ses = new SesEmailSender(org.sesConfigSet, undefined, org.sesTransactionalConfigSet);
     // Resolve the step's stored template and render it through the shared
     // pipeline (#95) — same merge-escape + link-tokenization + click-map as a
     // campaign. A step with no templateId falls back to a minimal subject block.
@@ -225,7 +225,7 @@ export async function reengagementSweepHandler(event: ReengagementSweepEvent) {
   const org = await s.organizations.get(event.orgId);
   if (!org) throw new Error(`unknown org ${event.orgId}`);
   const magic = signerFor(org);
-  const ses = new SesEmailSender(org.sesConfigSet);
+  const ses = new SesEmailSender(org.sesConfigSet, undefined, org.sesTransactionalConfigSet);
   const subject = event.subject ?? "Still want our newsletters?";
   const template: EmailTemplate = event.template ?? {
     blocks: [

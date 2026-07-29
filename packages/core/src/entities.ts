@@ -30,6 +30,18 @@ export type SubscriptionStatus =
 export type Cadence = "one_off" | "daily" | "weekly" | "biweekly" | "monthly";
 export type TemplateMode = "visual" | "mjml" | "raw_html";
 export type SuppressionSource = "bounce" | "complaint" | "manual" | "unsubscribe" | "inactive";
+/**
+ * What kind of message this is (#237).
+ *
+ * The distinction is not cosmetic — it decides ELIGIBILITY. A newsletter
+ * unsubscribe is a statement about marketing, not about the password-reset mail
+ * or the receipt the same person triggers ten minutes later; sending those
+ * anyway is normal and lawful. A hard bounce or a spam complaint is a statement
+ * about the ADDRESS, and binds both classes absolutely.
+ *
+ * `SUPPRESSION_BINDING_ON_TRANSACTIONAL` in the domain is where that line lives.
+ */
+export type EmailClass = "marketing" | "transactional";
 export type SuppressionScope = "global" | "org";
 export type DeploymentSuppressionScope = "global" | "org" | "hybrid";
 export type MergeTagSource = "profile" | "feed" | "system" | "token_claim";
@@ -141,6 +153,13 @@ export interface Organization {
   };
   sesConfigSet: string;
   /**
+   * The org's TRANSACTIONAL configuration set (#237). Absent on orgs provisioned
+   * before it existed — the sender then falls back to `sesConfigSet` rather than
+   * to no set at all, because a message with no configuration set publishes no
+   * events, and a silent event plane is the failure mode #208 was.
+   */
+  sesTransactionalConfigSet?: string;
+  /**
    * Custom MAIL FROM subdomain, e.g. `bounce.example.com` (#200). Absent on orgs
    * provisioned before it existed, which keeps the SES default return path and
    * therefore an SPF pass that DMARC will not count as aligned.
@@ -155,7 +174,29 @@ export interface Organization {
    * at `p=none` the domain is still freely spoofable.
    */
   dmarcPolicy?: DmarcPolicy;
+  /**
+   * Whether this org's mail leaves on a dedicated IP pool (#237).
+   *
+   * DERIVED from `dedicatedIpPoolName`, never set independently. It used to be
+   * set from a `dedicatedIp` boolean on the create request and read by NOBODY —
+   * no pool in CDK, no `PutDedicatedIpPool`, no assignment on any configuration
+   * set. An operator could tick "dedicated IP", pay nothing extra, get shared
+   * IPs, and have a database record saying otherwise. A field that reports a
+   * capability the system does not have is worse than an absent one, because the
+   * console shows it.
+   */
   ipMode: IpMode;
+  /**
+   * An SES dedicated IP pool the OPERATOR created, assigned to this org's
+   * configuration sets (#237).
+   *
+   * addressium does not create pools, for the same reason it does not create
+   * WebACLs (#225): dedicated IPs are a standing charge (~$25/month each) and
+   * need a deliberate warm-up plan, and provisioning one as a side effect of a
+   * checkbox would bill the operator for infrastructure they did not knowingly
+   * ask for. Create the pool in SES, then set this.
+   */
+  dedicatedIpPoolName?: string;
   suppressionScope: DeploymentSuppressionScope;
   /**
    * IANA time zone (e.g. "America/Denver"). Storage stays UTC; this is the zone

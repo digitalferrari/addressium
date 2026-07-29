@@ -6,7 +6,15 @@
  * the org has the feature on), renders, and hands the message to the EmailSender
  * (SES in prod). Records a "sent" event per recipient.
  */
-import type { EmailArchive, EngagementEvent, List, OrgEnvironment, Subscriber } from "@addressium/core";
+import type {
+  EmailArchive,
+  EmailClass,
+  EngagementEvent,
+  List,
+  OrgEnvironment,
+  Subscriber,
+  SuppressionSource,
+} from "@addressium/core";
 import type {
   Clock,
   EmailSender,
@@ -306,6 +314,13 @@ export interface SendOneInput {
   throttle?: SendThrottle;
   /** See SendOptions.unsubscribeLink — same contract for per-recipient sends. */
   unsubscribeLink?: UnsubscribeLinkBuilder;
+  /**
+   * Marketing (default) or transactional (#237). Only `transactional` relaxes
+   * the eligibility gate, and only for suppressions that are statements about
+   * marketing — see `SUPPRESSION_BINDING_ON_TRANSACTIONAL`. Omitting it gets the
+   * stricter behaviour, so a caller that forgets cannot accidentally bypass it.
+   */
+  emailClass?: EmailClass;
 }
 
 /**
@@ -321,13 +336,67 @@ export interface SendOneInput {
  * Nothing consulted `status` before, so a suppressed subscriber whose email
  * changed was mailable while their own record said `suppressed`.
  */
+/**
+ * Suppression sources that bind a TRANSACTIONAL message too (#237).
+ *
+ * The line is between a statement about the ADDRESS and a statement about
+ * marketing:
+ *
+ * - `bounce` / `complaint` — the address is dead, or its owner reported us to
+ *   their provider. Both bind absolutely. Continuing to mail either is a direct
+ *   reputation cost and, for a complaint, an explicit request to stop.
+ * - `manual` — an operator suppressed this address deliberately. Treated as
+ *   binding: an admin who reaches for the suppression button means "stop
+ *   mailing this person", and reading that as "stop the newsletters only" would
+ *   silently narrow an instruction we cannot see the reason for.
+ * - `unsubscribe` / `inactive` — statements about MARKETING. Someone who leaves
+ *   a newsletter, or who stopped opening it, has said nothing about the receipt
+ *   or the password reset they trigger ten minutes later, and withholding those
+ *   is its own failure.
+ */
+const SUPPRESSION_BINDING_ON_TRANSACTIONAL = new Set<SuppressionSource>([
+  "bounce",
+  "complaint",
+  "manual",
+]);
+
+/**
+ * May we send this class of message to this subscriber? (§4.13, #193, #237)
+ *
+ * Two checks, because the identifier differs. `status` is keyed by the durable
+ * `sub` and survives every rename, but it is org-local and does not know about a
+ * global complaint against an address this org has never seen. Nothing consulted
+ * `status` before, so a suppressed subscriber whose email changed was mailable
+ * while their own record said `suppressed`.
+ *
+ * `emailClass` decides how much of that binds. It defaults to `marketing`, the
+ * STRICTER reading: a caller that forgets to declare its class gets the safe
+ * behaviour, not a bypass of the whole gate.
+ */
 async function mayMail(
   stores: Stores,
   orgId: string,
   subscriber: Subscriber,
+  emailClass: EmailClass = "marketing",
 ): Promise<boolean> {
-  if (subscriber.status === "suppressed") return false;
-  return !(await stores.suppression.isSuppressed(orgId, subscriber.email));
+  if (emailClass !== "transactional") {
+    if (subscriber.status === "suppressed") return false;
+    return !(await stores.suppression.isSuppressed(orgId, subscriber.email));
+  }
+
+  // Transactional. `isSuppressed` alone cannot answer this — it is a boolean
+  // that folds every source together — so read the entries and look at WHY.
+  const entries = await stores.suppression.entriesFor(orgId, subscriber.email);
+  if (entries.some((e) => SUPPRESSION_BINDING_ON_TRANSACTIONAL.has(e.source))) return false;
+
+  // The subscriber-level flag has no source attached, so it is ambiguous on its
+  // own. Resolve it against the entries: a `suppressed` subscriber with NO
+  // binding entry (and, above, no entry at all) is one whose suppression came
+  // from an unsubscribe or an inactivity sweep, and transactional mail is still
+  // legitimate. If the flag is set and we found no entries at all, fail closed —
+  // an unexplained suppression is not one to reason past.
+  if (subscriber.status === "suppressed" && entries.length === 0) return false;
+  return true;
 }
 
 export interface SendOneResult {
@@ -394,7 +463,7 @@ export async function sendToSubscriber(
     await release();
     return { sent: false, reason: "unknown-subscriber" };
   }
-  if (!(await mayMail(stores, input.orgId, subscriber))) {
+  if (!(await mayMail(stores, input.orgId, subscriber, input.emailClass))) {
     await release();
     return { sent: false, reason: "suppressed" };
   }
@@ -413,6 +482,7 @@ export async function sendToSubscriber(
       token,
     );
     await sender.send({
+      emailClass: input.emailClass ?? "marketing",
       from: list.fromAddress,
       to: subscriber.email,
       subject: input.subject,
