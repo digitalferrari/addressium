@@ -30,7 +30,7 @@ the same owner.
 | **Segments** | Dynamic predicates over attributes and engagement |
 | **Drip sequences** | Multi-step journeys with waits measured in days |
 | **Re-engagement & sunset** | Win-back sequence, then a clean unsubscribe for the unreachable |
-| **Reporting** | Opens, clicks, bounces, complaints, unsubscribes, delivery rates, per-link click maps |
+| **Reporting** | Opens, clicks, bounces, complaints, unsubscribes, delivery rates, per-link click maps. Rejects, rendering failures and delivery delays are counted too, so a broken template alarms mid-send instead of surfacing after it. |
 | **Suppression** | Automatic on bounce/complaint. Bounces suppress globally, unsubscribes per-org. Your existing SES account suppression list imports in bulk, so a migration does not re-mail addresses you already knew were dead. |
 | **One-click unsubscribe** | RFC 8058 — required by Gmail and Yahoo for bulk senders |
 | **Deliverability auto-halt** | Stops a campaign mid-flight when bounce/complaint rates breach your thresholds |

@@ -1534,3 +1534,38 @@ test("the suppression importer can read the account list and nothing else (#240)
     );
   }
 });
+
+test("a rendering failure alarms while the send is still running (#241)", () => {
+  // It is the one event in the SES feed that points at OUR bug — a merge tag that
+  // did not resolve — and it is campaign-wide by nature: a template broken for one
+  // recipient is broken for every one. The handler must not fail its batch over
+  // it, so the send keeps going, which means the counter alone is read AFTER the
+  // damage. This fires during.
+  const t = template();
+  const filters = t.findResources("AWS::Logs::MetricFilter");
+  const hit = Object.values(filters).find(
+    (f) => (f.Properties as { FilterPattern: string }).FilterPattern === '"events: rendering failure"',
+  );
+  assert.ok(hit, "no MetricFilter watches the rendering-failure log line");
+
+  const transforms = (hit.Properties as { MetricTransformations: { MetricName: string }[] })
+    .MetricTransformations;
+  assert.equal(transforms[0]?.MetricName, "RenderingFailures");
+
+  // Watching the EVENTS log group specifically — the handler that logs it. A
+  // filter on the wrong group matches nothing and alarms never, which looks
+  // identical to a healthy deployment.
+  const logGroupRef = (hit.Properties as { LogGroupName: { Ref?: string } }).LogGroupName?.Ref ?? "";
+  assert.ok(logGroupRef.startsWith("EventsFnLogs"), `filter watches ${logGroupRef}`);
+
+  const alarms = t.findResources("AWS::CloudWatch::Alarm");
+  const alarm = Object.values(alarms).find(
+    (a) => (a.Properties as { MetricName?: string }).MetricName === "RenderingFailures",
+  );
+  assert.ok(alarm, "the metric exists but nothing alarms on it");
+  // And it must reach somebody — an alarm with no action is a dashboard tile.
+  assert.ok(
+    ((alarm.Properties as { AlarmActions?: unknown[] }).AlarmActions ?? []).length > 0,
+    "the rendering-failure alarm notifies nobody",
+  );
+});

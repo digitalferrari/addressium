@@ -35,7 +35,7 @@ test("campaigns.list returns only the org's campaigns", async () => {
     templateId: "t",
     audience: { listId: "l" },
     status: "draft",
-    counters: { sent: 0, delivered: 0, opens: 0, clicks: 0, bounces: 0, complaints: 0, unsubscribes: 0 },
+    counters: { sent: 0, delivered: 0, opens: 0, clicks: 0, bounces: 0, complaints: 0, unsubscribes: 0, rejects: 0, renderingFailures: 0, deliveryDelays: 0 },
   });
   await stores.campaigns.put(mk("o1", "c1"));
   await stores.campaigns.put(mk("o1", "c2"));

@@ -35,6 +35,9 @@ const counters = (over: Partial<HotCounters>): HotCounters => ({
   bounces: 0,
   complaints: 0,
   unsubscribes: 0,
+  rejects: 0,
+  renderingFailures: 0,
+  deliveryDelays: 0,
   ...over,
 });
 

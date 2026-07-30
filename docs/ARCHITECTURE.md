@@ -402,6 +402,32 @@ events → SNS → SQS → Lambda. The processor:
 - Appends to the **Events** table (append-only engagement log). Redelivery is
   harmless: the sort key carries a **deterministic `eventId`**, so a repeated
   event overwrites its own row rather than double-counting.
+- **Handles every SES event type except one, and the exception is deliberate**
+  (#241). `Reject`, `Rendering Failure` and `DeliveryDelay` used to fall through
+  an `ACTIONABLE` lookup that did not name them, so `normalize` resolved them to
+  `undefined` and the handler acknowledged them as unresolvable — no error
+  anywhere, the information simply did not exist. Each is now its own event type
+  and its own counter, because folding any of them into an existing one makes the
+  number it joins a lie:
+  - **`reject`** — SES accepted the message and then refused to send it (a virus,
+    blocked content). Not `delivered`, and **not a bounce**: nothing reached a
+    receiver, so suppressing the address would punish a subscriber for our
+    attachment. `sent - delivered - bounces - rejects` is how far a send got.
+  - **`rendering_failure`** — a merge tag did not resolve, so SES could not build
+    the message. The one event in the feed that points at **our** bug rather than
+    a recipient's mailbox, and campaign-wide by nature. So it is not merely
+    counted: the handler logs it at error level and a **CloudWatch MetricFilter +
+    alarm** (`RenderingFailures`) fires while the send is still running, which is
+    the only time the information is worth anything. The log literal is shared
+    between handler and filter and asserted on both sides by a test.
+  - **`delivery_delay`** — a full mailbox or a throttling receiver, still being
+    retried. Informational, and it **must not suppress**: most delays clear, and
+    suppression is global (§4.13), so acting on one would kill a valid subscriber
+    everywhere for a transient condition. The same reasoning as the
+    Permanent-only bounce gate (#211).
+  - SES's **`Subscription`** stays unmapped on purpose. We never enable SES's own
+    subscription page — unsubscribe is RFC 8058 through our handler (§4.4) — so an
+    event about a preference we do not honour would write a row nothing reads.
 - Updates **hot counters** on the campaign record (#221): the event and the
   counter increment commit in **one `TransactWriteItems`**, made exactly-once
   by the deterministic `eventId` above, and readers prefer the stored counters
@@ -1783,8 +1809,8 @@ link can ever grant, not from assuming it stays private:
   termination protection and log retention, so a typo in a JSON file nobody
   compiles was a production incident waiting for a `cdk destroy`.
 - **Cost posture**: near-$0 at idle — no always-on compute or database. The
-  standing bill for a one-org install is **$5.70/month**: 29 CloudWatch alarms
-  ($2.90), the stack's customer-managed data key ($1.00), one KMS signing key
+  standing bill for a one-org install is **$5.80/month**: 30 CloudWatch alarms
+  ($3.00), the stack's customer-managed data key ($1.00), one KMS signing key
   per org ($1.00), 2 Secrets Manager secrets
   ($0.80). That is the tested model in
   [`packages/domain/src/cost.ts`](../packages/domain/src/cost.ts), and the same
@@ -2182,8 +2208,8 @@ describes the target; this is the part that is still unearned. It mirrors
   GENERIC template carrying merge *tags*, not one recipient's rendered values. So
   there is no subject data there to erase today. If per-recipient bodies are ever
   archived, that changes and this line stops being true.
-- **The counts that are safe to quote** — 29 alarms, 27 log groups, 65 API routes
-  (50 behind the JWT authorizer), 345 resources in a default synth — are
+- **The counts that are safe to quote** — 30 alarms, 27 log groups, 65 API routes
+  (50 behind the JWT authorizer), 347 resources in a default synth — are
   reproducible with `npm run build && cd infra/cdk && npx cdk synth`. They are
   template facts,
   which is a weaker claim than it sounds. Dev and prod now synthesize the same

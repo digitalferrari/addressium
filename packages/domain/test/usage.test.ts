@@ -50,7 +50,7 @@ test("sumEmailsSent rolls up campaign hot counters", () => {
     templateId: "t",
     audience: {},
     status: "sent",
-    counters: { sent, delivered: sent, opens: 0, clicks: 0, bounces: 0, complaints: 0, unsubscribes: 0 },
+    counters: { sent, delivered: sent, opens: 0, clicks: 0, bounces: 0, complaints: 0, unsubscribes: 0, rejects: 0, renderingFailures: 0, deliveryDelays: 0 },
   });
   assert.equal(sumEmailsSent([mk(100), mk(250)]), 350);
 });
@@ -111,7 +111,7 @@ test("metering is per-period, not the lifetime counter", async () => {
     templateId: "t",
     audience: {},
     status: "sent",
-    counters: { sent: 500, delivered: 500, opens: 0, clicks: 0, bounces: 0, complaints: 0, unsubscribes: 0 },
+    counters: { sent: 500, delivered: 500, opens: 0, clicks: 0, bounces: 0, complaints: 0, unsubscribes: 0, rejects: 0, renderingFailures: 0, deliveryDelays: 0 },
   });
   for (const at of ["2026-06-20T00:00:00.000Z", "2026-07-02T00:00:00.000Z", "2026-07-03T00:00:00.000Z"]) {
     await stores.events.append({ orgId: "summit", campaignId: "c1", subscriberId: `s-${at}`, type: "sent", at });
@@ -145,7 +145,7 @@ test("the scheduled meter does NOT erase the operator's AWS-side figures", async
     templateId: "t",
     audience: {},
     status: "sent",
-    counters: { sent: 0, delivered: 0, opens: 0, clicks: 0, bounces: 0, complaints: 0, unsubscribes: 0 },
+    counters: { sent: 0, delivered: 0, opens: 0, clicks: 0, bounces: 0, complaints: 0, unsubscribes: 0, rejects: 0, renderingFailures: 0, deliveryDelays: 0 },
   });
   await stores.events.append({
     orgId: "summit",

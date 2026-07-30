@@ -28,7 +28,7 @@ const campaign = (): Campaign => ({
   templateId: "t",
   audience: { listId: "l" },
   status: "sending",
-  counters: { sent: 0, delivered: 0, opens: 0, clicks: 0, bounces: 0, complaints: 0, unsubscribes: 0 },
+  counters: { sent: 0, delivered: 0, opens: 0, clicks: 0, bounces: 0, complaints: 0, unsubscribes: 0, rejects: 0, renderingFailures: 0, deliveryDelays: 0 },
 });
 
 const ev = (
@@ -108,7 +108,7 @@ test("every event type maps to its own counter", async () => {
     clicks: 1,
     bounces: 1,
     complaints: 1,
-    unsubscribes: 1,
+    unsubscribes: 1, rejects: 0, renderingFailures: 0, deliveryDelays: 0
   });
 });
 

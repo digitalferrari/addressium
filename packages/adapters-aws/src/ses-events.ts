@@ -16,7 +16,15 @@ import { SES_TAG, decodeTag } from "./ses.js";
 
 /** Our internal, already-resolved shape (direct invoke and tests). */
 export interface Notification {
-  eventType: "Open" | "Click" | "Bounce" | "Complaint" | "Delivery";
+  eventType:
+    | "Open"
+    | "Click"
+    | "Bounce"
+    | "Complaint"
+    | "Delivery"
+    | "Reject"
+    | "RenderingFailure"
+    | "DeliveryDelay";
   orgId: string;
   campaignId: string;
   subscriberId: string;
@@ -27,6 +35,12 @@ export interface Notification {
   listId?: string;
   /** SES bounce classification; only `Permanent` may suppress. */
   bounceType?: string;
+  /** Why SES refused or could not build the message (Reject / Rendering Failure). */
+  reason?: string;
+  /** The template SES could not render, when it says (#241). */
+  templateName?: string;
+  /** SES's delay classification, e.g. `MailboxFull`, `TransientCommunicationFailure`. */
+  delayType?: string;
   /** SES message id, used to make at-least-once delivery idempotent. */
   messageId?: string;
   /** Stable id for THIS occurrence — see EngagementEvent.eventId (#183). */
@@ -53,6 +67,15 @@ export interface SesNotification {
   click?: { link?: string; timestamp?: string };
   open?: { timestamp?: string };
   delivery?: { timestamp?: string };
+  /** SES accepted then refused the message; `reason` is e.g. "Bad content" (#241). */
+  reject?: { reason?: string };
+  /**
+   * A merge tag that did not resolve, so SES could not build the message (#241).
+   * SES spells the key `failure` even though the event is `Rendering Failure`.
+   */
+  failure?: { errorMessage?: string; templateName?: string };
+  /** Still being retried; `expirationTime` is when SES gives up (#241). */
+  deliveryDelay?: { delayType?: string; expirationTime?: string; timestamp?: string };
 }
 
 /** One envelope-peeled payload, with the SQS receipt it arrived on (if any). */
@@ -124,6 +147,16 @@ const ACTIONABLE: Record<string, Notification["eventType"] | undefined> = {
   // says `Delivery`, the older SNS notification schema says `Delivery` too but
   // arrives under `notificationType`, which `normalize` already folds together.
   Delivery: "Delivery",
+  // The three SES publishes that we used to acknowledge and discard (#241).
+  // Spelled exactly as SES sends them — note the SPACE in "Rendering Failure",
+  // which is why this is a lookup table and not a normalizing transform.
+  Reject: "Reject",
+  "Rendering Failure": "RenderingFailure",
+  DeliveryDelay: "DeliveryDelay",
+  // `Subscription` (list-management events from SES's own subscription page) stays
+  // unmapped DELIBERATELY, not by omission: we never enable that page, our
+  // unsubscribe is RFC 8058 through our own handler (§4.4), and an event about a
+  // preference we do not honour would write an engagement row nothing reads.
 };
 
 /**
@@ -175,6 +208,12 @@ export function normalize(input: unknown): Notification | undefined {
     x.click?.timestamp ??
     x.open?.timestamp ??
     x.delivery?.timestamp ??
+    x.deliveryDelay?.timestamp ??
+    // Reject and Rendering Failure carry NO timestamp of their own in the SES
+    // payload, so they fall through to the mail timestamp. That is constant per
+    // message, which is exactly right here: both are terminal per send, so two
+    // notifications of one failure collapse onto one eventId rather than counting
+    // the same broken template twice.
     x.mail?.timestamp;
 
   const messageId = x.mail?.messageId;
@@ -193,6 +232,12 @@ export function normalize(input: unknown): Notification | undefined {
     email,
     link: x.click?.link,
     bounceType: x.bounce?.bounceType,
+    // Why the send failed, for the two events an operator has to act on rather
+    // than merely count. A rendering failure names OUR broken template; a reject
+    // names the content SES refused.
+    reason: x.failure?.errorMessage ?? x.reject?.reason,
+    templateName: x.failure?.templateName,
+    delayType: x.deliveryDelay?.delayType,
     messageId,
     eventId,
   };

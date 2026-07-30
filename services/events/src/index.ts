@@ -25,6 +25,7 @@ import {
   recordClick,
   recordComplaint,
   recordDelivered,
+  recordSendOutcome,
   recordOpen,
 } from "@addressium/domain";
 
@@ -63,6 +64,51 @@ async function apply(notif: Notification) {
   if (notif.eventType === "Delivery") {
     await recordDelivered(s, clock, notif.orgId, notif.campaignId, notif.subscriberId, notif.eventId);
     return { ok: true };
+  }
+  // The three SES outcomes that used to fall through to `return { ok: true }`
+  // (#241). None of them may suppress: a reject is our content, not the
+  // recipient's mailbox, and a delay is transient by definition (the same
+  // reasoning as the Permanent-only bounce gate, #211).
+  if (
+    notif.eventType === "Reject" ||
+    notif.eventType === "RenderingFailure" ||
+    notif.eventType === "DeliveryDelay"
+  ) {
+    const type =
+      notif.eventType === "Reject"
+        ? "reject"
+        : notif.eventType === "RenderingFailure"
+          ? "rendering_failure"
+          : "delivery_delay";
+    await recordSendOutcome(s, clock, {
+      orgId: notif.orgId,
+      campaignId: notif.campaignId,
+      subscriberId: notif.subscriberId,
+      type,
+      eventId: notif.eventId,
+    });
+    if (notif.eventType === "RenderingFailure") {
+      // Loud, and at error level, because this one is OUR defect: a merge tag
+      // that failed to resolve for this recipient will fail for the rest of the
+      // campaign. A counter in a dashboard is not a signal anybody sees during a
+      // send, so this line is what the ConfirmRenderingFailure alarm watches —
+      // the literal is shared with the CDK MetricFilter and asserted on both
+      // sides.
+      console.error("events: rendering failure", {
+        orgId: notif.orgId,
+        campaignId: notif.campaignId,
+        templateName: notif.templateName,
+        reason: notif.reason,
+      });
+    } else {
+      console.warn(`events: ${type} recorded`, {
+        orgId: notif.orgId,
+        campaignId: notif.campaignId,
+        ...(notif.reason ? { reason: notif.reason } : {}),
+        ...(notif.delayType ? { delayType: notif.delayType } : {}),
+      });
+    }
+    return { ok: true, [type]: true };
   }
   if (notif.eventType === "Open") {
     await recordOpen(s, clock, notif.orgId, notif.campaignId, notif.subscriberId, notif.eventId);

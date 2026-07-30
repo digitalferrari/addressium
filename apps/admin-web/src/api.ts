@@ -79,7 +79,7 @@ export interface ClickMapRow {
 }
 export interface CampaignReport {
   campaignId: string;
-  counters: { sent: number; delivered: number; opens: number; clicks: number; bounces: number; complaints: number; unsubscribes: number };
+  counters: { sent: number; delivered: number; opens: number; clicks: number; bounces: number; complaints: number; unsubscribes: number, rejects: 0, renderingFailures: 0, deliveryDelays: 0 };
   rates: { openRate: number; clickRate: number; bounceRate: number; complaintRate: number };
   clickMap: { sent: number; rows: ClickMapRow[] };
 }

@@ -1757,6 +1757,35 @@ export class ControlPlaneStack extends Stack {
       treatMissingData: TreatMissingData.NOT_BREACHING,
       alarmDescription: "addressium: confirmations are not enrolling into drip sequences (#245)",
     }));
+    // A rendering failure is the one event in the SES feed that points at OUR bug
+    // rather than a recipient's mailbox: a merge tag that did not resolve, so SES
+    // could not build the message at all (#241). It is also campaign-wide by
+    // nature — a template broken for one recipient is broken for every one — and
+    // the send keeps going regardless, because the handler must not fail a batch
+    // over it.
+    //
+    // So the counter is not enough. `HotCounters.renderingFailures` sits in a
+    // per-campaign report an operator opens AFTER the send; this fires while it is
+    // still running, which is the only time the information is worth anything.
+    const renderingFailures = new MetricFilter(this, "RenderingFailureFilter", {
+      logGroup: eventsFn.logGroup,
+      metricNamespace: `addressium/${props.stage}`,
+      metricName: "RenderingFailures",
+      // Matches the literal the events handler logs. Shared between producer and
+      // filter, and asserted on both sides by a source-text guard — a reworded log
+      // line with no filter change would silently stop alarming.
+      filterPattern: FilterPattern.literal('"events: rendering failure"'),
+      metricValue: "1",
+      defaultValue: 0,
+    });
+    alarm("RenderingFailureAlarm", new Alarm(this, "RenderingFailureAlarm", {
+      metric: renderingFailures.metric({ period: Duration.minutes(5), statistic: "Sum" }),
+      threshold: 0,
+      comparisonOperator: ComparisonOperator.GREATER_THAN_THRESHOLD,
+      evaluationPeriods: 1,
+      treatMissingData: TreatMissingData.NOT_BREACHING,
+      alarmDescription: "addressium: a campaign template is failing to render (#241)",
+    }));
     // Raw message delivery: the queue body is the SES notification itself
     // rather than an SNS envelope wrapping it. `unwrapRecords` peels the
     // envelope defensively anyway, so flipping this cannot silently break

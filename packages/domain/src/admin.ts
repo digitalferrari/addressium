@@ -22,6 +22,12 @@ import type {
 import { schemas } from "@addressium/core";
 import type { Clock, Stores } from "./ports.js";
 
+/**
+ * The zero for every counter. Spread it rather than writing the literal out:
+ * `HotCounters` gained three fields in #241, and every hand-written literal in
+ * the repo became a compile error at once. A base to spread makes the next
+ * addition a one-line change here instead of twenty.
+ */
 export const ZERO_COUNTERS: HotCounters = {
   sent: 0,
   delivered: 0,
@@ -29,7 +35,7 @@ export const ZERO_COUNTERS: HotCounters = {
   clicks: 0,
   bounces: 0,
   complaints: 0,
-  unsubscribes: 0,
+  unsubscribes: 0, rejects: 0, renderingFailures: 0, deliveryDelays: 0
 };
 
 /** The domain part of an address, lowercased. Empty string if there isn't one. */

@@ -56,6 +56,53 @@ export async function recordOpen(
  * Idempotent through `eventId` like every other event: SNS is at-least-once, and
  * a redelivered notification must not inflate the count it is supposed to fix.
  */
+/**
+ * Record the three SES outcomes that used to be dropped on the floor (#241).
+ *
+ * All three were in SES's feed the whole time and none was in the `ACTIONABLE`
+ * map, so `normalize` resolved them to `undefined` and the handler acknowledged
+ * them as unresolvable. What each one costs, and why none of them is a bounce:
+ *
+ *  - **`reject`** — SES accepted the message and then refused to send it (a virus,
+ *    blocked content). Nothing was delivered and no RECEIVER rejected anything, so
+ *    suppressing the address would punish a subscriber for our attachment. Counted
+ *    apart from both `delivered` and `bounces`, because folded into either one the
+ *    number it joins becomes a lie.
+ *  - **`rendering_failure`** — a merge tag did not resolve, so SES could not build
+ *    the message at all. This is the one event in the feed that points at OUR bug
+ *    rather than a recipient's mailbox, which is why the handler logs it at error
+ *    level and an alarm watches for it: a template broken for one recipient is
+ *    broken for the whole campaign, and the count alone would sit in a dashboard
+ *    nobody opens until the send is over.
+ *  - **`delivery_delay`** — a full mailbox or a throttling receiver, still being
+ *    retried. It MUST NOT suppress: most delays resolve, and suppressing on one
+ *    would kill a valid subscriber globally for a condition that clears. Exactly
+ *    the reasoning behind the transient-bounce gate (#211), which is why these
+ *    three go through their own recorder rather than anywhere near `recordBounce`.
+ *
+ * Idempotent through `eventId` like every other event.
+ */
+export async function recordSendOutcome(
+  stores: Stores,
+  clock: Clock,
+  input: {
+    orgId: string;
+    campaignId: string;
+    subscriberId: string;
+    type: Extract<EngagementEvent["type"], "reject" | "rendering_failure" | "delivery_delay">;
+    eventId?: string;
+  },
+): Promise<void> {
+  await stores.events.append({
+    orgId: input.orgId,
+    campaignId: input.campaignId,
+    subscriberId: input.subscriberId,
+    type: input.type,
+    at: clock.now().toISOString(),
+    eventId: input.eventId,
+  });
+}
+
 export async function recordDelivered(
   stores: Stores,
   clock: Clock,

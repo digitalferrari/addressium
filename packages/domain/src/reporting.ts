@@ -24,6 +24,12 @@ export function deriveCounters(events: EngagementEvent[]): HotCounters {
     bounces: raw("bounce"),
     complaints: raw("complaint"),
     unsubscribes: raw("unsubscribe"),
+    rejects: raw("reject"),
+    renderingFailures: raw("rendering_failure"),
+    // Raw, not unique: the same message can be delayed several times, and each
+    // one is a separate signal about the receiver. Collapsing them would hide a
+    // receiver deferring the whole campaign repeatedly.
+    deliveryDelays: raw("delivery_delay"),
   };
 }
 

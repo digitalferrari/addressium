@@ -62,7 +62,29 @@ export type EventType =
   | "click"
   | "bounce"
   | "complaint"
-  | "unsubscribe";
+  | "unsubscribe"
+  /**
+   * SES accepted the message and then refused to send it — a virus or blocked
+   * content (#241). Deliberately NOT `bounce`: nothing was delivered and no
+   * receiver rejected it, so suppressing the address would punish a subscriber
+   * for our attachment. It is also not `delivered`, which is why it needs a type
+   * of its own — folded into either one, `sent` overstates what left the building
+   * and the operator has no signal at all.
+   */
+  | "reject"
+  /**
+   * A merge tag failed to substitute, so SES could not build the message (#241).
+   * The one event in the feed that points at OUR bug rather than a recipient's
+   * mailbox, which is why it is surfaced loudly rather than merely counted.
+   */
+  | "rendering_failure"
+  /**
+   * Temporary trouble on the way to the inbox — a full mailbox, a throttling
+   * receiver, an expired handshake (#241). Informational: it is the early warning
+   * ahead of a possible bounce, and it MUST NOT suppress, because most delays
+   * resolve on their own. Same reasoning as the transient-bounce gate (#211).
+   */
+  | "delivery_delay";
 
 export interface Consent {
   timestamp: string; // ISO-8601
@@ -455,6 +477,17 @@ export interface HotCounters {
   bounces: number;
   complaints: number;
   unsubscribes: number;
+  /**
+   * Accepted by SES then refused (#241). Kept apart from `bounces` and
+   * `delivered` on purpose: it is neither, and merging it into either one makes
+   * the number it joins a lie. `sent - delivered - bounces - rejects` is how far
+   * the send actually got.
+   */
+  rejects: number;
+  /** Messages SES could not build — a merge tag that did not resolve (#241). */
+  renderingFailures: number;
+  /** Deliveries SES is still retrying (#241). Informational, never suppressing. */
+  deliveryDelays: number;
 }
 
 export interface Template {

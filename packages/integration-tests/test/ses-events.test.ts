@@ -69,9 +69,15 @@ test("an untagged or non-actionable event resolves to undefined, not a bad guess
   // Sent before tagging existed, or not one of ours.
   assert.equal(normalize({ eventType: "Bounce", mail: { tags: {} } }), undefined);
   // Types we don't act on must not be mistaken for actionable ones. `Delivery`
-  // used to be in this list and is now ingested (#210) — see below.
+  // used to be in this list and is now ingested (#210); `Reject`,
+  // `Rendering Failure` and `DeliveryDelay` followed it in #241 — see
+  // ses-event-outcomes.test.ts. What is left is SES's `Subscription`, dropped
+  // deliberately: we never enable SES's own subscription page, so an event about a
+  // preference we do not honour would write a row nothing reads.
+  assert.equal(normalize({ eventType: "Subscription", mail: { tags } }), undefined);
+  // And the spelling matters. SES sends `Rendering Failure` WITH a space; our
+  // internal name for it has none, and the internal name is not a wire value.
   assert.equal(normalize({ eventType: "RenderingFailure", mail: { tags } }), undefined);
-  assert.equal(normalize({ eventType: "DeliveryDelay", mail: { tags } }), undefined);
   assert.equal(normalize(null), undefined);
 });
 

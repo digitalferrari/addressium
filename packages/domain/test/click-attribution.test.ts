@@ -95,7 +95,7 @@ test("end to end: a click on a personalised link lands in the click map", async 
     templateId: "t",
     audience: { listId: "l" },
     status: "sent",
-    counters: { sent: 1, delivered: 0, opens: 0, clicks: 0, bounces: 0, complaints: 0, unsubscribes: 0 },
+    counters: { sent: 1, delivered: 0, opens: 0, clicks: 0, bounces: 0, complaints: 0, unsubscribes: 0, rejects: 0, renderingFailures: 0, deliveryDelays: 0 },
   });
 
   const linkId = await recordClick(stores, clock, {

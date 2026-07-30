@@ -83,7 +83,7 @@ async function seedBreach(stores: Stores, complaints: number, sends: number) {
     audience: { listId: "ledger" },
     status: "sending",
     templateId: "t1",
-    counters: { sent: 0, delivered: 0, opens: 0, clicks: 0, bounces: 0, complaints: 0, unsubscribes: 0 },
+    counters: { sent: 0, delivered: 0, opens: 0, clicks: 0, bounces: 0, complaints: 0, unsubscribes: 0, rejects: 0, renderingFailures: 0, deliveryDelays: 0 },
   };
   await stores.campaigns.put(campaign);
   const ev = (i: number, type: EngagementEvent["type"]): EngagementEvent => ({
@@ -214,10 +214,10 @@ test("the reputation metric can actually breach a threshold", async () => {
   // fire — an alert visible in the console that is structurally incapable of
   // firing is worse than an absent one, because its presence reads as coverage.
   const clean: HotCounters = {
-    sent: 1000, delivered: 1000, opens: 0, clicks: 0, bounces: 0, complaints: 0, unsubscribes: 0,
+    sent: 1000, delivered: 1000, opens: 0, clicks: 0, bounces: 0, complaints: 0, unsubscribes: 0, rejects: 0, renderingFailures: 0, deliveryDelays: 0
   };
   const bad: HotCounters = {
-    sent: 1000, delivered: 900, opens: 0, clicks: 0, bounces: 100, complaints: 5, unsubscribes: 0,
+    sent: 1000, delivered: 900, opens: 0, clicks: 0, bounces: 100, complaints: 5, unsubscribes: 0, rejects: 0, renderingFailures: 0, deliveryDelays: 0
   };
   const config: AlertConfig = {
     orgId: "o",
@@ -238,7 +238,7 @@ test("reputation weights complaints far above bounces", async () => {
   // 5% bounces is survivable; 0.5% complaints is not. The score has to rank them
   // that way or it is measuring the wrong thing.
   const mk = (bounces: number, complaints: number): HotCounters => ({
-    sent: 1000, delivered: 1000 - bounces, opens: 0, clicks: 0, bounces, complaints, unsubscribes: 0,
+    sent: 1000, delivered: 1000 - bounces, opens: 0, clicks: 0, bounces, complaints, unsubscribes: 0, rejects: 0, renderingFailures: 0, deliveryDelays: 0
   });
   const config: AlertConfig = { orgId: "o", notifyTargets: [], rules: [{ metric: "reputation", warnAt: 1, haltAt: 1000, enabled: true }] };
   const bouncy = evaluateAlerts(config, mk(20, 0))[0]!.value;

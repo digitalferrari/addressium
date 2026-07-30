@@ -254,7 +254,7 @@ cost is roughly:
 | Secrets Manager — 2 × $0.40 | $0.80 |
 | KMS — $1 for the stack's data key + $1 per org key | $1.00 + $1.00 × orgs |
 | DynamoDB / S3 / Lambda / SQS / SNS at test volume | ~$1.00 |
-| **Baseline** | **≈ $5.70 + $1/org** |
+| **Baseline** | **≈ $5.80 + $1/org** |
 
 Plus $0.10 per 1,000 emails. WAF, if the operator adds one, is theirs and
 typically already paid for.

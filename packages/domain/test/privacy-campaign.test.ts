@@ -73,7 +73,7 @@ test("campaign and series stores round-trip", async () => {
     cadence: "daily",
     templateId: "t1",
     adSlotFills: [],
-    aggregate: { sent: 0, delivered: 0, opens: 0, clicks: 0, bounces: 0, complaints: 0, unsubscribes: 0 },
+    aggregate: { sent: 0, delivered: 0, opens: 0, clicks: 0, bounces: 0, complaints: 0, unsubscribes: 0, rejects: 0, renderingFailures: 0, deliveryDelays: 0 },
   };
   await stores.series.put(series);
   assert.equal((await stores.series.get(ORG, "s1"))?.cadence, "daily");
@@ -87,7 +87,7 @@ test("campaign and series stores round-trip", async () => {
     templateId: "t1",
     audience: { listId: LIST },
     status: "draft",
-    counters: { sent: 0, delivered: 0, opens: 0, clicks: 0, bounces: 0, complaints: 0, unsubscribes: 0 },
+    counters: { sent: 0, delivered: 0, opens: 0, clicks: 0, bounces: 0, complaints: 0, unsubscribes: 0, rejects: 0, renderingFailures: 0, deliveryDelays: 0 },
   };
   await stores.campaigns.put(campaign);
   assert.equal((await stores.campaigns.get(ORG, "c1"))?.status, "draft");

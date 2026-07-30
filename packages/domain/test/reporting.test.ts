@@ -46,7 +46,7 @@ test("deliverabilityRates are fractions of sent and 0 when nothing sent", () => 
     clicks: 1,
     bounces: 1,
     complaints: 0,
-    unsubscribes: 0,
+    unsubscribes: 0, rejects: 0, renderingFailures: 0, deliveryDelays: 0
   });
   assert.equal(r.openRate, 0.5);
   assert.equal(r.bounceRate, 0.25);
@@ -57,7 +57,7 @@ test("deliverabilityRates are fractions of sent and 0 when nothing sent", () => 
     clicks: 0,
     bounces: 0,
     complaints: 0,
-    unsubscribes: 0,
+    unsubscribes: 0, rejects: 0, renderingFailures: 0, deliveryDelays: 0
   });
   assert.equal(empty.openRate, 0);
 });

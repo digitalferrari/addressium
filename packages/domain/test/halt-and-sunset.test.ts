@@ -54,7 +54,7 @@ test("a halted campaign sends to nobody", async () => {
   await stores.campaigns.put({
     orgId: ORG, campaignId: "daily-1", subject: "Hi", status: "halted",
     type: "one_off", audience: { listId: LIST },
-    counters: { sent: 0, delivered: 0, opens: 0, clicks: 0, bounces: 0, complaints: 0, unsubscribes: 0 },
+    counters: { sent: 0, delivered: 0, opens: 0, clicks: 0, bounces: 0, complaints: 0, unsubscribes: 0, rejects: 0, renderingFailures: 0, deliveryDelays: 0 },
   } as never);
 
   const sender = new CaptureSender();
@@ -69,7 +69,7 @@ test("a campaign that is not halted still sends normally", async () => {
   await stores.campaigns.put({
     orgId: ORG, campaignId: "daily-1", subject: "Hi", status: "sending",
     type: "one_off", audience: { listId: LIST },
-    counters: { sent: 0, delivered: 0, opens: 0, clicks: 0, bounces: 0, complaints: 0, unsubscribes: 0 },
+    counters: { sent: 0, delivered: 0, opens: 0, clicks: 0, bounces: 0, complaints: 0, unsubscribes: 0, rejects: 0, renderingFailures: 0, deliveryDelays: 0 },
   } as never);
 
   const sender = new CaptureSender();

@@ -270,7 +270,7 @@ test("clicking the seed's editorial link lands in the campaign click map", async
   await stores.campaigns.put({
     orgId: ORG, campaignId: "smoke", type: "one_off", subject: "Test send",
     templateId: PRIMARY_TEST_TEMPLATE_ID, audience: { listId: LIST }, status: "sent",
-    counters: { sent: 1, delivered: 0, opens: 0, clicks: 0, bounces: 0, complaints: 0, unsubscribes: 0 },
+    counters: { sent: 1, delivered: 0, opens: 0, clicks: 0, bounces: 0, complaints: 0, unsubscribes: 0, rejects: 0, renderingFailures: 0, deliveryDelays: 0 },
   });
   const sender = recordingSender();
   await sendCampaign(stores, sender, undefined, clock, {

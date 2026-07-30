@@ -332,6 +332,9 @@ export class MemEvents implements EventStore {
     bounce: "bounces",
     complaint: "complaints",
     unsubscribe: "unsubscribes",
+    reject: "rejects",
+    rendering_failure: "renderingFailures",
+    delivery_delay: "deliveryDelays",
   };
 
   async append(e: EngagementEvent) {

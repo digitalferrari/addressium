@@ -93,7 +93,7 @@ export const DEFAULT_COST_INPUT: SendCostInput = {
   clickRate: 0.05,
   bounceRate: 0.02,
   orgs: 1,
-  alarms: 29,
+  alarms: 30,
   secrets: 2,
 };
 

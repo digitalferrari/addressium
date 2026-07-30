@@ -77,7 +77,7 @@ async function seed(): Promise<Stores> {
     await stores.campaigns.put({
       orgId: ORG, campaignId, type: "one_off", subject: "s", templateId: "t",
       audience: { listId: LIST }, status: "sent",
-      counters: { sent: 2, delivered: 2, opens: 1, clicks: 0, bounces: 0, complaints: 0, unsubscribes: 0 },
+      counters: { sent: 2, delivered: 2, opens: 1, clicks: 0, bounces: 0, complaints: 0, unsubscribes: 0, rejects: 0, renderingFailures: 0, deliveryDelays: 0 },
     });
     await stores.events.append({
       orgId: ORG, campaignId, subscriberId: "s1", type: "sent", at: "2026-02-01T00:00:00.000Z",
