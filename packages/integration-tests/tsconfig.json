@@ -25,6 +25,12 @@
     },
     {
       "path": "../magiclink-verify"
+    },
+    {
+      "path": "../../services/api"
+    },
+    {
+      "path": "../../services/automations"
     }
   ]
 }

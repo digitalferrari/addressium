@@ -1,5 +1,6 @@
 /**
- * Local stand-ins for SES and SQS, spoken over the wire (#232).
+ * Local stand-ins for SES, SQS, EventBridge Scheduler and Step Functions, spoken
+ * over the wire (#232, #245).
  *
  * ## Why an HTTP server rather than a fake adapter
  *
@@ -75,12 +76,14 @@ class Queue {
  * Start the stubs and point the SDK at them.
  *
  * @param outbox directory the mail sink appends to
- * @returns `{ queue, close, outboxPath }`
+ * @returns `{ queue, executions, close, outboxPath }`
  */
 export async function startAwsStubs(outbox) {
   mkdirSync(outbox, { recursive: true });
   const outboxPath = resolve(outbox, "mail.ndjson");
   const queue = new Queue();
+  /** Drip executions started this session, keyed by execution name (#245). */
+  const executions = new Map();
 
   const server = createServer(async (req, res) => {
     const body = await readBody(req);
@@ -135,8 +138,55 @@ export async function startAwsStubs(outbox) {
       return reply(200, { ScheduleArn: `arn:aws:scheduler:local::schedule/${randomUUID()}` });
     }
 
-    // ---- SQS: JSON protocol, dispatched on X-Amz-Target ----
+    // ---- SQS / Step Functions: JSON protocol, dispatched on X-Amz-Target ----
     const target = String(req.headers["x-amz-target"] ?? "").split(".").pop();
+
+    // ---- Step Functions: drip enrollment (#245) ----
+    //
+    // The machine itself is NOT simulated. A drip's first Wait is measured in
+    // days, so there is nothing useful to run locally, and pretending to run it
+    // would be the "silently appears to succeed" failure this file exists to
+    // avoid.
+    //
+    // What IS worth exercising is the starter: the real `SfnDripStarter` builds a
+    // real StartExecutionCommand, so the execution NAME — which is the entire
+    // idempotency mechanism — is computed for real. A repeated name answers
+    // ExecutionAlreadyExists exactly as Step Functions would, so confirming twice
+    // locally proves the swallow works instead of proving nothing.
+    if (target === "StartExecution") {
+      const { name, input, stateMachineArn } = JSON.parse(body || "{}");
+      if (executions.has(name)) {
+        console.log(`dev-aws-stubs: drip execution ${name} already exists (idempotent no-op)`);
+        return reply(400, {
+          __type: "ExecutionAlreadyExists",
+          message: `Execution Already Exists: '${name}'`,
+        });
+      }
+      executions.set(name, { stateMachineArn, input });
+      console.log(`dev-aws-stubs: drip enrollment started ${name} ${input}`);
+      return reply(200, {
+        executionArn: `arn:aws:states:local::execution/dev-drip/${name}`,
+        startDate: Date.now() / 1000,
+      });
+    }
+    // The starter follows an ExecutionAlreadyExists with this, because "already
+    // running" and "already ran and FAILED" are different facts and only the first
+    // is an enrollment working. Locally every execution is RUNNING — nothing here
+    // advances one — so the answer is the same one real Step Functions gives for a
+    // second click, and the swallow stays reachable. Without this slice the call
+    // would 501 below, which the adapter treats as "cannot tell" and swallows
+    // anyway: the same outcome, arrived at by not knowing.
+    if (target === "DescribeExecution") {
+      const { executionArn } = JSON.parse(body || "{}");
+      const name = String(executionArn ?? "").split(":").pop();
+      if (!executions.has(name)) {
+        return reply(400, {
+          __type: "ExecutionDoesNotExist",
+          message: `Execution Does Not Exist: '${executionArn}'`,
+        });
+      }
+      return reply(200, { executionArn, status: "RUNNING", startDate: Date.now() / 1000 });
+    }
     if (target === "SendMessage") {
       const { MessageBody } = JSON.parse(body || "{}");
       return reply(200, { MessageId: queue.send(MessageBody) });
@@ -172,7 +222,8 @@ export async function startAwsStubs(outbox) {
   process.env.AWS_ENDPOINT_URL_SES = endpoint;
   process.env.AWS_ENDPOINT_URL_SQS = endpoint;
   process.env.AWS_ENDPOINT_URL_SCHEDULER = endpoint;
+  process.env.AWS_ENDPOINT_URL_SFN = endpoint;
   process.env.SEND_QUEUE_URL ??= `${endpoint}/queue`;
 
-  return { queue, outboxPath, endpoint, close: () => server.close() };
+  return { queue, executions, outboxPath, endpoint, close: () => server.close() };
 }

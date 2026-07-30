@@ -51,6 +51,29 @@ test("evaluateDripStep exits on suppressed / unsubscribed / bounced", () => {
   assert.equal(evaluateDripStep(step, undefined, undefined).type, "exit");
 });
 
+test("evaluateDripStep sends ONLY to a confirmed subscription of the step's list (#245)", () => {
+  // Nothing downstream re-checks this. `sendToSubscriber` → `mayMail` looks at the
+  // subscriber's org status and the suppression list and never at the list
+  // subscription, because a broadcast derives its recipients FROM the list — it
+  // fans out over the sparse confirmed index, so consent is implicit in the
+  // audience. A drip step is handed a bare subscriberId by the state machine
+  // instead, so it is the one place that has to ask — and it used to exit only on
+  // unsubscribed/bounced/complained, which let both of these send marketing mail
+  // on a list the subscriber never confirmed. Unreachable until enrollment
+  // existed; live the moment it did.
+  const missing = evaluateDripStep(step, sub(), undefined);
+  assert.equal(missing.type, "exit");
+  assert.match((missing as { reason: string }).reason, /no subscription to ledger/);
+
+  // Signed up, never clicked. Sending here would pre-empt double opt-in.
+  const pending = evaluateDripStep(step, sub(), subscription({ status: "pending" }));
+  assert.equal(pending.type, "exit");
+  assert.match((pending as { reason: string }).reason, /subscription pending/);
+
+  assert.equal(evaluateDripStep(step, sub(), subscription({ status: "complained" })).type, "exit");
+  assert.equal(evaluateDripStep(step, sub(), subscription({ status: "confirmed" })).type, "send");
+});
+
 test("evaluateDripStep skips when an entitlement gate is not met", () => {
   assert.equal(evaluateDripStep(paidStep, sub({ entitlement: "free" }), subscription()).type, "skip");
   assert.equal(evaluateDripStep(paidStep, sub({ entitlement: "paid" }), subscription()).type, "send");

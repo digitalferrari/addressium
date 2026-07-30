@@ -23,6 +23,7 @@ export {
 export { KmsMagicLinkSigner, type KmsMagicLinkSignerConfig } from "./kms.js";
 export { SqsSendQueue } from "./sqs.js";
 export { EventBridgeScheduler, type EventBridgeSchedulerConfig } from "./scheduler.js";
+export { SfnDripStarter, type SfnDripStarterConfig } from "./sfn.js";
 export { getSecret } from "./secrets.js";
 export { KmsJwksProvider, spkiDerToJwk, type Jwk } from "./jwks.js";
 export { SnsAlertPublisher } from "./sns.js";

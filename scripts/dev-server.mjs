@@ -82,6 +82,10 @@ process.env.SCHEDULER_ROLE_ARN ??= "arn:aws:iam::000000000000:role/dev-scheduler
 process.env.SCHEDULER_GROUP ??= "dev";
 process.env.LAUNCH_FN_ARN ??= "arn:aws:lambda:us-east-1:000000000000:function:dev-launch";
 process.env.SUBSCRIBER_ACCOUNT_FN ??= "dev-subscriber-account";
+// Drip enrollment (#245). Without it, confirming a signup logs a swallowed
+// `missing env DRIP_STATE_MACHINE_ARN` and hand-enrollment answers 400 — the
+// CDK/dev drift #238 and #232 exist to prevent. The stub answers StartExecution.
+process.env.DRIP_STATE_MACHINE_ARN ??= "arn:aws:states:us-east-1:000000000000:stateMachine:dev-drip";
 process.env.SES_MAX_SEND_RATE ??= "14";
 process.env.UNSUBSCRIBE_URL_BASE ??= `http://localhost:${PORT}/unsubscribe`;
 

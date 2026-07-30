@@ -554,6 +554,48 @@ export interface CampaignScheduler {
   cancel(name: string): Promise<void>;
 }
 
+/**
+ * One subscriber's enrollment into one drip sequence — the whole execution input
+ * the drip state machine needs to run (§4.6, #245).
+ *
+ * The machine starts at its WAIT rather than at step 0 (#201), so the caller
+ * supplies both the first step and the wait in front of it: `start` is a request
+ * to ENROLL, not to send. Every field is required because the machine's step Task
+ * reads each one by JSONPath, and a JSONPath onto a field the input omits is a
+ * `States.Runtime` failure at the first transition rather than a validation error
+ * anywhere useful.
+ */
+export interface DripEnrollment {
+  orgId: string;
+  sequenceId: string;
+  subscriberId: string;
+  /** Index of the first step to run. Always 0 for a new enrollment. */
+  nextStepIndex: number;
+  /** Seconds the machine waits before running `nextStepIndex`. */
+  nextWaitSeconds: number;
+  /**
+   * WHICH enrollment this is — stable across retries of one opt-in, different
+   * for a genuine re-subscribe. It is both the idempotency key (the execution
+   * name is derived from it) and the send-claim namespace for every step in the
+   * run, so a subscriber who leaves and comes back gets the sequence again
+   * instead of finding every claim already burned (the #207 failure, one
+   * automation over). See `enrollmentIdFor` in drip.ts for how it is derived.
+   */
+  enrollmentId: string;
+}
+
+/**
+ * Starts a drip/journey execution for one subscriber (Step Functions in prod,
+ * captured in tests — §4.6, #245).
+ *
+ * Implementations MUST be idempotent per `enrollmentId`: a subscriber who clicks
+ * the confirmation link three times enrolls once, and a caller may safely retry.
+ * Callers therefore do not — and must not — track what they have already started.
+ */
+export interface DripStarter {
+  start(enrollment: DripEnrollment): Promise<void>;
+}
+
 export interface Clock {
   now(): Date;
 }

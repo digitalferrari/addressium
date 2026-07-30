@@ -303,6 +303,24 @@ export const saveDripSequenceSchema = z.object({
 });
 export type SaveDripSequenceInput = z.infer<typeof saveDripSequenceSchema>;
 
+/**
+ * Enroll one subscriber into one manual-trigger drip sequence (admin, #245).
+ *
+ * `enrollmentId` is an optional idempotency key. Absent, the handler uses the
+ * current instant, so two clicks of "Enroll" are two enrollments — which is the
+ * honest reading of a deliberate operator action, and the opposite of the signup
+ * path, where the identity is the subscriber's own opt-in request and a
+ * triple-clicked confirmation link must collapse to one. A console that wants
+ * click-safety sends a key.
+ */
+export const enrollDripSequenceSchema = z.object({
+  orgId: idSchema,
+  sequenceId: idSchema,
+  subscriberId: z.string().min(1).max(64),
+  enrollmentId: z.string().min(1).max(128).optional(),
+});
+export type EnrollDripSequenceInput = z.infer<typeof enrollDripSequenceSchema>;
+
 /** Replace a subscriber's merge-tag attributes from the console (#205). */
 export const setSubscriberAttributesSchema = z.object({
   orgId: idSchema,

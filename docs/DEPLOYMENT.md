@@ -124,8 +124,8 @@ Pass with `-c key=value` on `cdk deploy`, or add to `cdk.json` → `context`:
 > **Leave the two analytics flags off unless you are specifically testing them.**
 > They are opt-in, off by default, and demoted out of the core design by #64 —
 > not removed. Both carry standing cost well above the rest of the stack
-> combined. Concretely, on a `dev` synth: default is 338 resources / 28 Lambda
-> functions; `-c enableAnalytics=true -c enableOpenSearchMirror=true` is 380
+> combined. Concretely, on a `dev` synth: default is 343 resources / 28 Lambda
+> functions; `-c enableAnalytics=true -c enableOpenSearchMirror=true` is 385
 > resources / 32 Lambda functions, and emits three more stack outputs
 > (`SegmentCollectionEndpoint`, `AnalyticsBucketName`,
 > `AnalyticsReplayFunctionName`). Neither flag is set
@@ -441,9 +441,10 @@ are unset. There is still no `doctor` command.
   own `AlertConfig.snsTopicArn` — operator-supplied already, per org — and a
   `halt`-level breach flips the campaign to `halted` so the sender stops. Set
   that topic when you provision the org; with none set, nothing is published.
-- **Infrastructure alarms.** 28 CloudWatch alarms in a default synth: the send
+- **Infrastructure alarms.** 29 CloudWatch alarms in a default synth: the send
   queue and events queue with their DLQs, errors and throttles across every
-  handler, DynamoDB throttles and system errors. With the analytics tier on
+  handler, DynamoDB throttles and system errors, and drip enrollments the confirm
+  path swallowed (§4.6, #245). With the analytics tier on
   there are more — errors and throttles across the three analytics Lambdas
   (transform, snapshot, replay) plus two on the Firehose pipeline itself
   (#186). All publish

@@ -34,7 +34,9 @@ import type {
   CampaignScheduler,
   CampaignSeriesStore,
   CampaignStore,
+  DripEnrollment,
   DripSequenceStore,
+  DripStarter,
   EmailSender,
   EntitlementStore,
   ErasureStore,
@@ -61,6 +63,7 @@ import type {
 } from "./ports.js";
 import { ConcurrentModificationError } from "./ports.js";
 import { ZERO_COUNTERS } from "./admin.js";
+import { dripExecutionName } from "./drip.js";
 
 const subKey = (o: string, s: string) => `${o}#${s}`;
 const subnKey = (o: string, s: string, l: string) => `${o}#${s}#${l}`;
@@ -557,6 +560,25 @@ export class MemScheduler implements CampaignScheduler {
   async cancel(name: string) {
     this.oneOff.delete(name);
     this.recurring.delete(name);
+  }
+}
+
+/**
+ * Captures drip enrollments so tests can inspect exactly what would be started
+ * (#245).
+ *
+ * Keyed by execution name, which is the production idempotency mechanism — so a
+ * repeated enrollment collapses here for the same reason it collapses in Step
+ * Functions, and `started` counts EXECUTIONS rather than calls. `calls` keeps
+ * every attempt, for the tests that care about the difference.
+ */
+export class MemDripStarter implements DripStarter {
+  public started = new Map<string, DripEnrollment>();
+  public calls: DripEnrollment[] = [];
+  async start(enrollment: DripEnrollment) {
+    this.calls.push(enrollment);
+    const name = dripExecutionName(enrollment);
+    if (!this.started.has(name)) this.started.set(name, enrollment);
   }
 }
 

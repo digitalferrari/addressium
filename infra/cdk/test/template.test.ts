@@ -444,6 +444,118 @@ test("the drip handler is told the SES rate so it can pace itself (#176)", () =>
   assert.ok(env.SES_MAX_SEND_RATE, "the drip path must know the rate it is dividing");
 });
 
+test("the functions that enroll can start the drip machine, and know its ARN (#245)", () => {
+  // The absence #245 was: the state machine's ONLY consumer was a CfnOutput. No
+  // Lambda was given the ARN and no role held states:StartExecution, so every
+  // drip sequence an operator could author sat inert.
+  //
+  // Both halves are asserted per function, in one test, for the reason #176's
+  // concurrency test gives: a grant with no env var throws `missing env` inside a
+  // route, and an env var with no grant fails with AccessDenied. Either one alone
+  // LOOKS configured, which is worse than an obvious absence.
+  const t = template();
+  const fns = t.findResources("AWS::Lambda::Function");
+  const envOf = (prefix: string): Record<string, string> => {
+    const hit = Object.entries(fns).find(([k]) => k.startsWith(prefix));
+    assert.ok(hit, `${prefix} exists`);
+    return (
+      (hit[1].Properties as { Environment?: { Variables?: Record<string, string> } }).Environment
+        ?.Variables ?? {}
+    );
+  };
+  const statesActions = (prefix: string): string[] =>
+    policyFor(t, prefix)
+      .filter((s) => s.Effect !== "Deny")
+      .flatMap(actionsOf)
+      .filter((a) => a.startsWith("states:"));
+  const startsExecutions = (prefix: string): boolean =>
+    statesActions(prefix).includes("states:StartExecution");
+
+  // ConfirmFn: the signup trigger. Enrollment is gated on the double opt-in, so
+  // this is the function that owns it. AdminApiFn: the manual trigger, via
+  // POST /drip-sequences/enroll.
+  for (const prefix of ["ConfirmFn", "AdminApiFn"]) {
+    assert.ok(envOf(prefix).DRIP_STATE_MACHINE_ARN, `${prefix} does not know the machine's ARN`);
+    assert.ok(startsExecutions(prefix), `${prefix} cannot start an execution`);
+    // ...and it must be able to ASK about the execution it collided with.
+    // Without DescribeExecution the starter cannot tell a subscriber clicking
+    // twice from an enrollment that already ran and FAILED — and the name is
+    // retained for 90 days, so the second one can never be restarted. It defaults
+    // to the optimistic reading, which is #245 wearing a 200.
+    assert.ok(
+      statesActions(prefix).includes("states:DescribeExecution"),
+      `${prefix} cannot read the status of the execution it collided with`,
+    );
+    // Scoped, not `states:*`: exactly the two actions, and only on this machine.
+    assert.deepEqual(
+      [...new Set(statesActions(prefix))].sort(),
+      ["states:DescribeExecution", "states:StartExecution"],
+      `${prefix} holds Step Functions actions it does not need`,
+    );
+  }
+
+  // DripStepFn is the machine's TARGET. A step that can start executions is a
+  // step that can start itself, and it has no reason to know the ARN either.
+  assert.deepEqual(statesActions("DripStepFn"), [], "the drip STEP must not be a starter");
+  assert.equal(envOf("DripStepFn").DRIP_STATE_MACHINE_ARN, undefined);
+
+  // Not handed to every function bundled from services/api. `apiEnv` reaches 21
+  // functions across four services; the ARN belongs only where the grant is.
+  assert.equal(envOf("UnsubscribeFn").DRIP_STATE_MACHINE_ARN, undefined);
+  assert.deepEqual(statesActions("UnsubscribeFn"), []);
+
+  // The enrollment token has to survive the machine's loop. It is the send-claim
+  // namespace for every step in the run, so a Task that drops it falls back to
+  // the previous enrollment's burned claims and emails nobody at all — #207, one
+  // automation over.
+  const machines = Object.values(t.findResources("AWS::StepFunctions::StateMachine"));
+  const drip = machines.find((m) => JSON.stringify(m.Properties).includes("DripRunStep"));
+  assert.ok(drip, "the drip state machine exists");
+  const definition = JSON.stringify((drip.Properties as { DefinitionString: unknown }).DefinitionString);
+  assert.ok(definition.includes("enrollmentId.$"), "the step Task drops the enrollment token");
+});
+
+test("a confirmation that cannot enroll raises an alarm rather than a log line (#245)", () => {
+  // Enrollment on the confirm path is best-effort BY DESIGN — the confirmation is
+  // already durable when it runs, so it must not turn "you're subscribed" into a
+  // 400. The cost is that a lost grant or a missing env var returns 200 to every
+  // subscriber while no drip mail is sent at all, and a swallowed exception does
+  // NOT move the Lambda Errors metric ConfirmErrorsAlarm watches. That is #245's
+  // own failure mode: absence, behind a green dashboard.
+  const t = template();
+  const filters = Object.values(t.findResources("AWS::Logs::MetricFilter"));
+  const enrollFilter = filters.find((f) =>
+    JSON.stringify((f.Properties as { FilterPattern: unknown }).FilterPattern).includes(
+      "drip enrollment failed",
+    ),
+  );
+  assert.ok(enrollFilter, "nothing counts the swallowed enrollment failures");
+  const transforms = (enrollFilter.Properties as {
+    MetricTransformations: { MetricName: string; MetricNamespace: string }[];
+  }).MetricTransformations;
+  assert.equal(transforms[0]?.MetricName, "ConfirmDripEnrollFailures");
+
+  // The metric exists to be alarmed on; a metric nobody watches is a log line with
+  // extra steps. And it must reach the ops topic like every other alarm.
+  const alarms = Object.values(t.findResources("AWS::CloudWatch::Alarm"));
+  const enrollAlarm = alarms.find(
+    (a) =>
+      (a.Properties as { MetricName?: string }).MetricName === transforms[0]?.MetricName,
+  );
+  assert.ok(enrollAlarm, "the enrollment-failure metric has no alarm");
+  assert.ok(
+    ((enrollAlarm.Properties as { AlarmActions?: unknown[] }).AlarmActions ?? []).length > 0,
+    "the alarm notifies nobody",
+  );
+
+  // The filter has to watch the CONFIRM function's log group — the only place
+  // `enrollConfirmed` runs.
+  const logGroups = t.findResources("AWS::Logs::LogGroup");
+  const watched = (enrollFilter.Properties as { LogGroupName: { Ref?: string } }).LogGroupName;
+  assert.ok(watched.Ref?.startsWith("ConfirmFnLogs"), `filter watches ${JSON.stringify(watched)}`);
+  assert.ok(Object.keys(logGroups).some((k) => k === watched.Ref));
+});
+
 test("the drip machine waits before step 0, retries, and outlives 30 days (#201)", () => {
   const machines = Object.values(template().findResources("AWS::StepFunctions::StateMachine"));
   const drip = machines.find((m) =>

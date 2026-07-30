@@ -15,12 +15,19 @@ import {
   EventBridgeScheduler,
   GoogleRecaptchaVerifier,
   SesEmailSender,
+  SfnDripStarter,
   SqsSendQueue,
   getSecret,
   sanitizeEmailHtml,
 } from "@addressium/adapters-aws";
 import { InvokeCommand, LambdaClient } from "@aws-sdk/client-lambda";
-import { schemas, APP_VERSION, EXPECTED_SCHEMA_VERSION, type AlertConfig } from "@addressium/core";
+import {
+  schemas,
+  APP_VERSION,
+  EXPECTED_SCHEMA_VERSION,
+  type AlertConfig,
+  type Subscription,
+} from "@addressium/core";
 import {
   HmacConfirmationSigner,
   applyPreferences,
@@ -36,6 +43,8 @@ import {
   buildBatchConfirmationEmail,
   confirmOptInAny,
   effectiveOneOffTime,
+  enrollManually,
+  enrollOnConfirmation,
   evaluateSetup,
   isHoneypotTripped,
   markScheduleActive,
@@ -83,7 +92,9 @@ import {
   unsubscribeAll,
   unsubscribeFromList,
   verifyWebhookSignature,
+  type DripStarter,
   type SendDescriptor,
+  type Stores,
 } from "@addressium/domain";
 import {
   ForbiddenError,
@@ -154,6 +165,17 @@ const scheduler = () =>
     queueArn: env("SEND_QUEUE_ARN"),
     launchArn: env("LAUNCH_FN_ARN"),
   }));
+
+/**
+ * The drip starter (#245). Lazy, like every other dependency here, and for a
+ * sharper reason than tidiness: this file is the single bundle entry for fifteen
+ * Lambdas, so an `env("DRIP_STATE_MACHINE_ARN")` at module scope would throw at
+ * COLD START for all of them — including `/unsubscribe`, the one route that must
+ * never be down. A missing var must degrade drip enrollment, not the public API.
+ */
+let _dripStarter: SfnDripStarter | undefined;
+const dripStarter = () =>
+  (_dripStarter ??= new SfnDripStarter({ stateMachineArn: env("DRIP_STATE_MACHINE_ARN") }));
 
 /**
  * Request provenance for a consent record (#220).
@@ -245,8 +267,20 @@ export async function signupBatchHandler(event: HttpEvent): Promise<HttpResult> 
   }
 }
 
-/** GET /confirm?token=... — double opt-in landing; confirms every list in the token (§4.2). */
-export async function confirmHandler(event: HttpEvent): Promise<HttpResult> {
+/**
+ * GET /confirm?token=... — double opt-in landing; confirms every list in the
+ * token (§4.2).
+ *
+ * `injected` exists for tests only, and only for the drip starter (#245). The
+ * enrollment side effect is best-effort — it must never fail the confirmation —
+ * and a guard nobody can exercise is a guard nobody knows is there, so the one
+ * dependency that reaches Step Functions is injectable. Same reasoning, and the
+ * same shape, as `rotateConfirmSecretHandler`'s `SecretsClientLike`.
+ */
+export async function confirmHandler(
+  event: HttpEvent,
+  injected?: { starter?: DripStarter },
+): Promise<HttpResult> {
   try {
     const token = event.queryStringParameters?.token ?? "";
     const subs = await confirmOptInAny(stores(), await confirmSigner(), clock, token, provenance(event));
@@ -285,9 +319,50 @@ export async function confirmHandler(event: HttpEvent): Promise<HttpResult> {
         }
       }
     }
+
+    // Enroll into any signup-triggered drip sequence for the lists just
+    // confirmed (§4.6, #245). Same best-effort posture, same reason, and it must
+    // stay that way: an unguarded throw here would hand `fail(e)` a 400 for a
+    // confirmation that is already durable in DynamoDB — the subscriber sees
+    // "missing env DRIP_STATE_MACHINE_ARN" on the page that was supposed to say
+    // "you're subscribed", and re-clicking cannot fix it because the confirmation
+    // already happened.
+    await enrollConfirmed(subs, injected);
+
     return json(200, { status: first?.status ?? "confirmed", confirmed: subs.length });
   } catch (e) {
     return fail(e);
+  }
+}
+
+/**
+ * Best-effort drip enrollment for everything one confirmation confirmed (#245).
+ *
+ * `stores` and `starter` are injectable — following
+ * `rotateConfirmSecretHandler`'s precedent — so the SWALLOW is exercised in tests
+ * rather than discovered in production. That try/catch is the only thing standing
+ * between a Step Functions hiccup and a 400 on the double-opt-in landing page,
+ * and a guard nobody can test is a guard nobody knows is there.
+ *
+ * Every confirmed subscription, not `subs[0]`: a batch signup mints one token
+ * carrying every listId, so one click can confirm three lists and each may
+ * trigger a different sequence.
+ */
+export async function enrollConfirmed(
+  subs: Subscription[],
+  injected?: { stores?: Stores; starter?: DripStarter },
+): Promise<void> {
+  if (subs.length === 0) return;
+  try {
+    await enrollOnConfirmation(injected?.stores ?? stores(), injected?.starter ?? dripStarter(), subs);
+  } catch (e) {
+    // swallow — the confirmation already succeeded and is already stored; a
+    // failed enrollment costs this subscriber a welcome sequence, not their
+    // subscription.
+    console.error("confirm: drip enrollment failed", {
+      orgId: subs[0]?.orgId,
+      error: (e as Error).message,
+    });
   }
 }
 
@@ -822,6 +897,46 @@ export async function dripSequencesHandler(event: HttpEvent): Promise<HttpResult
     const orgId = event.pathParameters?.org ?? "";
     requireGrant(event, "reports:view", orgId);
     return json(200, await stores().dripSequences.list(orgId));
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+/**
+ * POST /drip-sequences/enroll — hand-enroll one subscriber (admin, §4.6, #245).
+ *
+ * The operator half of enrollment, for `trigger.kind === "manual"` sequences.
+ * `campaigns:manage` because enrolling somebody starts a sequence of real sends
+ * to them: it is the same authority as sending a campaign, and strictly more than
+ * `campaigns:schedule` (which moves send times for sends already authored).
+ * There is no drip-specific capability in the vocabulary and inventing one here
+ * would mean a permission no Cedar policy grants to any role.
+ *
+ * NOT best-effort, unlike the confirmation path: an operator who clicks "Enroll"
+ * is owed an answer, so an unknown sequence or a signup-triggered one is a 400
+ * rather than a silent log line.
+ *
+ * `injected` is for tests, exactly as on `confirmHandler`: this route starts real
+ * sends to a subscriber on operator command with no double opt-in in front of it,
+ * so its authorization check and its 400s are worth driving through the handler
+ * itself rather than through the domain function underneath.
+ */
+export async function dripEnrollHandler(
+  event: HttpEvent,
+  injected?: { starter?: DripStarter },
+): Promise<HttpResult> {
+  try {
+    const input = schemas.enrollDripSequenceSchema.parse(JSON.parse(event.body ?? "{}"));
+    requireGrant(event, "campaigns:manage", input.orgId);
+    const enrollment = await enrollManually(stores(), injected?.starter ?? dripStarter(), {
+      orgId: input.orgId,
+      sequenceId: input.sequenceId,
+      subscriberId: input.subscriberId,
+      // Absent, each click is its own enrollment — see enrollDripSequenceSchema.
+      enrollmentId: input.enrollmentId ?? `manual.${clock.now().toISOString()}`,
+    });
+    await audit(event, input.orgId, "drip.enroll", `${input.sequenceId}/${input.subscriberId}`);
+    return json(200, enrollment);
   } catch (e) {
     return fail(e);
   }
@@ -1713,6 +1828,7 @@ const ADMIN_ROUTES: Record<string, RouteHandler> = {
   "POST /segments/members": segmentMembersHandler,
   "GET /orgs/{org}/drip-sequences": dripSequencesHandler,
   "POST /drip-sequences": dripSequencesHandler,
+  "POST /drip-sequences/enroll": dripEnrollHandler,
   "GET /orgs/{org}/subscribers": subscribersListHandler,
   "GET /orgs/{org}/subscribers/{sub}": subscriberDetailHandler,
   "POST /subscribers/attributes": subscriberAttributesHandler,

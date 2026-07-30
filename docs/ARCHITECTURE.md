@@ -68,9 +68,11 @@ every org in a deployment is operated by the same owner.
   and a token-based preference centre (§4.10, #74)
 - **Broadcasts**: send now, scheduled, and recurring campaigns
 - **Re-engagement & sunset automation** (§4.22): a weekly sweep emails,
-  graduates, or sunsets cold subscribers. Code-defined **drip sequences** also
-  exist (signup/manual triggers), but nothing starts a Step Functions execution
-  yet — the state machine is provisioned, the starter is not wired (§4.6)
+  graduates, or sunsets cold subscribers. Code-defined **drip sequences** run on
+  Step Functions with two entry points: a confirmed double opt-in enrolls into
+  every sequence triggered by that list, and an operator can hand-enroll into a
+  `manual` one (§4.6). Inactivity and attribute-change triggers are designed, not
+  built
 - **Multi-organization silos** (§4.11): one deployment runs many publications,
   each isolated in its own data partition, subscriber pool, signing key and
   sending identity — one AWS account, logical silos
@@ -140,7 +142,7 @@ every org in a deployment is operated by the same owner.
 | Channel scope | Email only | Do one channel exceptionally well; keep seams for more |
 | Data store | DynamoDB (on-demand) | Pay-per-use, ~zero idle cost, scales infinitely |
 | Segmentation | GSIs + materialized tags | Covers common list filters cheaply; OpenSearch mirror later |
-| Automation | Broadcasts + re-engagement sweep; drip machine provisioned | Covers the majority of list use without a journey-builder build; the Step Functions starter is not wired yet (§4.6) |
+| Automation | Broadcasts + re-engagement sweep + signup/manual drip sequences | Covers the majority of list use without a journey-builder build; inactivity and attribute-change triggers remain designed-only (§4.6) |
 | Open/click tracking | SES built-in (config sets) | Reliable, minimal code |
 | Opt-in | Double opt-in default (per-list configurable) | Deliverability + consent provenance |
 | Templating | One MJML render pipeline, 3 authoring modes | Robust responsive email; visual, source and raw-HTML entry points |
@@ -444,13 +446,61 @@ the table also streams to Kinesis → Firehose → S3 for Athena (§4.23). It is
 
 Step Functions state machines model drip sequences: `Wait` states for delays,
 `Choice` states for branching on engagement/attributes, tasks that enqueue sends
-through the same sender pipeline. The machine and its step handler are
-provisioned, but **nothing starts an execution yet**: `DripSequence.trigger` is
-`signup` or `manual` only (inactivity and attribute-change triggers are
-designed, not built), and there is no starter wiring either — treat drip
-sequences as **designed for later** until that lands. What runs today is the
-re-engagement/sunset sweep (§4.22) and EventBridge Scheduler driving
-scheduled/recurring campaigns.
+through the same sender pipeline. Alongside them run the re-engagement/sunset
+sweep (§4.22) and EventBridge Scheduler driving scheduled/recurring campaigns.
+
+**Enrollment (#245).** `DripSequence.trigger` is `signup` or `manual`; inactivity
+and attribute-change triggers are still designed, not built. Both implemented
+triggers start an execution through the `DripStarter` port
+(`SfnDripStarter`/`StartExecution`), and only two Lambdas hold
+`states:StartExecution`: the `/confirm` handler and the admin router.
+
+- **signup** — a completed double opt-in enrolls the subscriber into every
+  sequence whose trigger names one of the lists just confirmed. One confirmation
+  can confirm several lists, so it can start several sequences. Best-effort and
+  logged: the confirmation is already durable when enrollment runs, so a Step
+  Functions failure costs a welcome sequence, never the subscription. Because that
+  swallow makes a broken deploy silent, the log line is a CloudWatch metric filter
+  with an alarm on the ops topic — a lost grant must page somebody, not merely
+  return 200.
+- **manual** — `POST /drip-sequences/enroll` (`campaigns:manage`), for sequences
+  whose trigger is `manual`. Hand-enrolling into a signup-triggered sequence is
+  refused rather than silently duplicated, and so is enrolling a subscriber who
+  has not confirmed the list step 0 mails.
+
+**Consent is checked at every step, not only at the door.** A step sends only when
+the subscriber's subscription to *that step's* list is `confirmed`; a missing or
+`pending` subscription exits the sequence. A broadcast needs no such check because
+it derives its recipients from the list itself (it fans out over the confirmed
+index, so consent is implicit in the audience), but a drip step is handed a bare
+`subscriberId` by the machine, so it is the one place that has to ask for itself.
+
+The execution input is `{ orgId, sequenceId, subscriberId, nextStepIndex: 0,
+nextWaitSeconds, enrollmentId }` — the machine begins at the `Wait`, so step 0's
+own delay is honored. Two derived identifiers carry the correctness:
+
+- The **execution name** is a sha256 of `(orgId, sequenceId, subscriberId,
+  enrollmentId)` behind a readable `drip.<org>.<sequence>` prefix, because Step
+  Functions caps names at 80 characters and rejects the colons an ISO timestamp
+  contains. It is the idempotency mechanism: a subscriber who clicks the
+  confirmation link three times enrolls once. `ExecutionAlreadyExists` is treated
+  as success **when the execution holding that name is running or succeeded** — the
+  starter reads its status (`states:DescribeExecution`, scoped to this machine) and
+  raises rather than swallows when the previous run ended in failure, because Step
+  Functions retains a closed name for 90 days and that enrollment delivered nothing.
+- `enrollmentId` is the subscription's `consent.requestedAt` — stable across
+  retries of one opt-in, new for a genuine re-subscribe — and it namespaces each
+  step's **send claim**. Without it a returning subscriber would start a real
+  execution that found every claim burned by their first run and emailed them
+  nothing (§4.22 hit exactly this, #207). The other half of that choice: a
+  re-signup mid-sequence mints a new identity and therefore a second execution,
+  while the first is still running and cannot be cancelled (nothing remembers its
+  name). So each step checks whether its own enrollment is still the current one
+  for the trigger list and **retires itself** if not — the newest enrollment wins,
+  and the two do not both deliver the remaining steps.
+
+None of this has been deployed yet; the assertions above are what the code and
+the CDK template do.
 
 **Scheduling policy — every send goes through a schedule, and one-offs keep a
 lead window.** Both "send now" and "send at" create a **one-off schedule placed
@@ -1697,8 +1747,8 @@ link can ever grant, not from assuming it stays private:
   termination protection and log retention, so a typo in a JSON file nobody
   compiles was a production incident waiting for a `cdk destroy`.
 - **Cost posture**: near-$0 at idle — no always-on compute or database. The
-  standing bill for a one-org install is **$5.60/month**: 28 CloudWatch alarms
-  ($2.80), the stack's customer-managed data key ($1.00), one KMS signing key
+  standing bill for a one-org install is **$5.70/month**: 29 CloudWatch alarms
+  ($2.90), the stack's customer-managed data key ($1.00), one KMS signing key
   per org ($1.00), 2 Secrets Manager secrets
   ($0.80). That is the tested model in
   [`packages/domain/src/cost.ts`](../packages/domain/src/cost.ts), and the same
@@ -1756,16 +1806,18 @@ Lambda throttles.
   keyed off the validated `stage` value (#190), so an unrecognised stage fails
   at synth rather than silently misconfiguring it. All groups are `DESTROY` on
   stack removal.
-- **Alarms.** 28 CloudWatch alarms, identical in every stage and unconditional:
+- **Alarms.** 29 CloudWatch alarms, identical in every stage and unconditional:
   4 on the two queue/DLQ pairs (send + events, #218), 22 on Lambdas (errors
-  and throttles across the 11 always-on functions), and 2 on
-  DynamoDB (throttles, system errors).
+  and throttles across the 11 always-on functions), 2 on
+  DynamoDB (throttles, system errors), and 1 on a log-metric filter — drip
+  enrollments the confirm path swallowed (§4.6, #245), which no Lambda `Errors`
+  metric can see because the throw never leaves the handler.
 - **Ops alerting is an external topic** (compendium #22/#32/#67). Alert routing —
   PagerDuty, Slack, an on-call rotation — is org infrastructure that a production
   account already runs; creating our own topic competes with it. The operator
   supplies `opsAlertTopicArn`, or `opsAlertEmail` for a simple setup. With an ARN
   supplied, no topic is created and none is exported. With neither set the stack
-  still deploys, and `deploy:check` warns — 28 alarms publishing to a topic with
+  still deploys, and `deploy:check` warns — 29 alarms publishing to a topic with
   no subscribers is monitoring in appearance only (#222).
 - **CloudWatch dashboard** (compendium #29) — **built**: one ops dashboard per
   stack, exported as the `OpsDashboardUrl` output.
@@ -1904,8 +1956,7 @@ signing secret".
   (DKIM/DMARC/one-click unsubscribe) + SNS
   alerts, per-campaign reporting + click table, GDPR/CCPA + audit log, CSV +
   Pinpoint importer, bootstrap + gated deploy + per-org provisioning.
-- **v1.x**: drip automations wired to a Step Functions starter (the machine is
-  provisioned — §4.6), materialized-tag segment builder,
+- **v1.x**: materialized-tag segment builder,
   magic-link token service (JWKS + entitlement sync + lite-scope tokens),
   feeds → campaign auto-build, the preference-centre page in the subscriber SPA
   (the API is built — §4.10).
@@ -1914,7 +1965,9 @@ signing secret".
   #224), the real Pinpoint-export reader and the import wizard (§4.7, #216,
   #223), operator-supplied WAF and ops topic (§4.3, §9.2, #225, #222), and
   local dev mode (§9.3, #232). The archive-body write and the Mailchimp-style
-  click overlay remain (§4.8).
+  click overlay remain (§4.8). Also the **drip starter** (§4.6, #245): the
+  machine had been provisioned with no caller, so signup and manual triggers now
+  start executions.
 - **v2 — Extensibility**: visual automation/journey builder, SSO/SAML for the
   admin pool. (The OpenSearch segmentation drop-in already ships behind
   `enableOpenSearchMirror` — the v2 work is making it a supported posture rather
@@ -2093,8 +2146,8 @@ describes the target; this is the part that is still unearned. It mirrors
   GENERIC template carrying merge *tags*, not one recipient's rendered values. So
   there is no subject data there to erase today. If per-recipient bodies are ever
   archived, that changes and this line stops being true.
-- **The counts that are safe to quote** — 28 alarms, 27 log groups, 63 API routes
-  (48 behind the JWT authorizer), 338 resources in a default synth — are
+- **The counts that are safe to quote** — 29 alarms, 27 log groups, 64 API routes
+  (49 behind the JWT authorizer), 343 resources in a default synth — are
   reproducible with `npm run build && cd infra/cdk && npx cdk synth`. They are
   template facts,
   which is a weaker claim than it sounds. Dev and prod now synthesize the same

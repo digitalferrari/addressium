@@ -51,7 +51,7 @@ import {
   GraphWidget,
   TreatMissingData,
 } from "aws-cdk-lib/aws-cloudwatch";
-import { LogGroup, RetentionDays } from "aws-cdk-lib/aws-logs";
+import { FilterPattern, LogGroup, MetricFilter, RetentionDays } from "aws-cdk-lib/aws-logs";
 import { SnsAction } from "aws-cdk-lib/aws-cloudwatch-actions";
 import { Secret } from "aws-cdk-lib/aws-secretsmanager";
 import {
@@ -1007,6 +1007,12 @@ export class ControlPlaneStack extends Stack {
         sequenceId: JsonPath.stringAt("$.sequenceId"),
         subscriberId: JsonPath.stringAt("$.subscriberId"),
         stepIndex: JsonPath.numberAt("$.nextStepIndex"),
+        // Which enrollment this run is (#245). Forwarded, not derived: it is the
+        // send-claim namespace for every step, so a subscriber who leaves and
+        // re-subscribes gets the sequence again instead of finding every claim
+        // burned by their first run (#207, one automation over). The handler
+        // echoes it back — always as a string, never null — so the loop keeps it.
+        enrollmentId: JsonPath.stringAt("$.enrollmentId"),
       }),
       outputPath: "$.Payload",
     });
@@ -1054,6 +1060,39 @@ export class ControlPlaneStack extends Stack {
     });
     table.grantReadWriteData(dripStepFn);
     new CfnOutput(this, "DripStateMachineArn", { value: dripStateMachine.stateMachineArn });
+
+    // ---- who may START a drip execution (§4.6, #245) ----
+    // The machine used to have exactly ONE consumer — the CfnOutput above. No
+    // Lambda knew the ARN and no role held states:StartExecution, so the whole
+    // drip feature was provisioned and unreachable.
+    //
+    // Two functions, and only two. `confirmFn` for the signup trigger (the double
+    // opt-in is what enrollment is gated on) and `adminApiFn` for the manual one.
+    // NOT `dripStepFn`, which is the machine's target rather than a starter — a
+    // step able to start executions is a step able to start itself. NOT
+    // `reengagementFn`, whose sweep sends directly through SES on its own
+    // EventBridge rule and never touches this machine. NOT the signup functions:
+    // a pending subscription is not consent.
+    //
+    // The env var and the grant are set together, per function, deliberately.
+    // Putting the ARN in `apiEnv` would hand it to twenty-one functions across
+    // four services while granting IAM to none — configuration that LOOKS
+    // complete, which is worse than an obvious absence. (It would also need
+    // `Lazy`, since `apiEnv` is built 300 lines before this machine exists.)
+    //
+    // `addEnvironment` rather than the `fn(...)` env argument because `confirmFn`
+    // is created before the state machine and `fn` COPIES the env object it is
+    // handed — there is no adding to it afterwards.
+    confirmFn.addEnvironment("DRIP_STATE_MACHINE_ARN", dripStateMachine.stateMachineArn);
+    dripStateMachine.grantStartExecution(confirmFn);
+    // ...and DescribeExecution on this machine's executions only, which is what
+    // lets the starter tell the two meanings of `ExecutionAlreadyExists` apart: a
+    // running (or completed) execution for the same enrollment is a subscriber
+    // clicking twice, but a CLOSED execution that ended in failure means the
+    // enrollment delivered nothing and — since Step Functions retains the name for
+    // 90 days — cannot be started again. Without this the starter can only guess,
+    // and it guesses "already enrolled".
+    dripStateMachine.grantExecution(confirmFn, "states:DescribeExecution");
 
     // ---- scheduling (EventBridge Scheduler, §4.6) ----
     const scheduleGroupName = `addressium-${props.stage}`;
@@ -1248,9 +1287,20 @@ export class ControlPlaneStack extends Stack {
       // number the operator cannot check against any bucket.
       ANALYTICS_ENABLED: String(enableAnalytics),
       ANALYTICS_EVENT_RETENTION_DAYS: String(analyticsEventRetentionDays),
+      // Manual drip enrollment (#245). This function is created AFTER the state
+      // machine, so it can take the ARN directly rather than through
+      // `addEnvironment` — the grant is beside its other grants below.
+      DRIP_STATE_MACHINE_ARN: dripStateMachine.stateMachineArn,
     });
     table.grantReadWriteData(adminApiFn);
     sendQueue.grantSendMessages(adminApiFn);
+    // POST /drip-sequences/enroll. Paired with the env var above: a function that
+    // can reach the starter but cannot call it fails at runtime, inside a route.
+    dripStateMachine.grantStartExecution(adminApiFn);
+    // Same pair as `confirmFn`: reading the status of the execution that already
+    // owns a name is how a duplicate enrollment is told apart from one that ran
+    // and failed. Scoped to this machine's executions.
+    dripStateMachine.grantExecution(adminApiFn, "states:DescribeExecution");
     // Scoped to this pool only, and to the four actions team management needs —
     // not cognito-idp:* on the account. The router is internet-facing, so a
     // wildcard here would let one compromised route reach every pool in the
@@ -1403,9 +1453,10 @@ export class ControlPlaneStack extends Stack {
     adminRoute("SegmentsPostFn", "segmentsHandler", HttpMethod.POST, "/segments");
     adminRoute("SegmentMembersGetFn", "segmentMembersHandler", HttpMethod.GET, "/orgs/{org}/segments/{segment}/members");
     adminRoute("SegmentMembersPostFn", "segmentMembersHandler", HttpMethod.POST, "/segments/members");
-    // Drip sequences (#104): list + create/edit.
+    // Drip sequences (#104): list + create/edit, and hand-enrollment (#245).
     adminRoute("DripSeqGetFn", "dripSequencesHandler", HttpMethod.GET, "/orgs/{org}/drip-sequences");
     adminRoute("DripSeqPostFn", "dripSequencesHandler", HttpMethod.POST, "/drip-sequences");
+    adminRoute("DripEnrollFn", "dripEnrollHandler", HttpMethod.POST, "/drip-sequences/enroll");
     adminRoute("SuppressFn", "subscriberSuppressHandler", HttpMethod.POST, "/subscribers/suppress");
     adminRoute("SubUnsubFn", "subscriberUnsubscribeHandler", HttpMethod.POST, "/subscribers/unsubscribe");
     // Operator-side subscriber management (#102): list/search, suppression list,
@@ -1659,6 +1710,37 @@ export class ControlPlaneStack extends Stack {
       evaluationPeriods: 1,
       treatMissingData: TreatMissingData.NOT_BREACHING,
       alarmDescription: "addressium: DynamoDB system errors",
+    }));
+    // Drip enrollment on the confirm path is best-effort ON PURPOSE: the
+    // confirmation is already durable in DynamoDB when it runs, so a Step
+    // Functions failure must not turn "you're subscribed" into a 400. The cost of
+    // that decision is that the ONLY evidence of a failure is a log line —
+    // `console.error` does not increment the Lambda `Errors` metric the
+    // ConfirmErrorsAlarm above watches, so an enrollment that silently stopped
+    // working looks identical to one that works. Which is #245 exactly: drip mail
+    // that nobody sends and nothing notices.
+    //
+    // So the log line is a metric. It fires on a missing grant, a missing
+    // DRIP_STATE_MACHINE_ARN, a throttled StartExecution, and on an enrollment
+    // whose previous execution ended in failure — every way this path can be
+    // broken by a deploy without failing a request.
+    const dripEnrollFailures = new MetricFilter(this, "ConfirmDripEnrollFailureFilter", {
+      logGroup: confirmFn.logGroup,
+      metricNamespace: `addressium/${props.stage}`,
+      metricName: "ConfirmDripEnrollFailures",
+      // Matches the literal `confirm: drip enrollment failed` that
+      // `enrollConfirmed` logs. Kept in sync by a test on both sides.
+      filterPattern: FilterPattern.literal('"confirm: drip enrollment failed"'),
+      metricValue: "1",
+      defaultValue: 0,
+    });
+    alarm("ConfirmDripEnrollFailureAlarm", new Alarm(this, "ConfirmDripEnrollFailureAlarm", {
+      metric: dripEnrollFailures.metric({ period: Duration.minutes(5), statistic: "Sum" }),
+      threshold: 0,
+      comparisonOperator: ComparisonOperator.GREATER_THAN_THRESHOLD,
+      evaluationPeriods: 1,
+      treatMissingData: TreatMissingData.NOT_BREACHING,
+      alarmDescription: "addressium: confirmations are not enrolling into drip sequences (#245)",
     }));
     // Raw message delivery: the queue body is the SES notification itself
     // rather than an SNS envelope wrapping it. `unwrapRecords` peels the

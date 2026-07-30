@@ -12,7 +12,9 @@ import type { Organization } from "@addressium/core";
 import {
   SystemClock,
   TokenBucket,
+  dripCampaignId,
   emailTemplateFromStored,
+  enrollmentSuperseded,
   escapeHtml,
   evaluateDripStep,
   nextStepIndex,
@@ -147,15 +149,49 @@ export interface DripStepEvent {
   sequenceId: string;
   subscriberId: string;
   stepIndex: number;
+  /**
+   * Which enrollment this run belongs to, supplied by the starter (#245).
+   *
+   * It exists to give each enrollment its OWN send-claim namespace. The claim is
+   * a permanent conditional Put with no TTL, so without this the key for step N
+   * was the same string for every enrollment a subscriber ever had: someone who
+   * subscribed, ran the sequence, unsubscribed and came back months later found
+   * every step's claim already burned from the first run and received ZERO
+   * emails on the second. That is #207 verbatim, one automation over — see
+   * `reengagementCampaignId`, which fixed it there with the same field.
+   *
+   * Optional for executions started before this field existed; absent, the
+   * campaign id keeps its original shape so those runs finish as they began.
+   */
+  enrollmentId?: string;
 }
 
 export async function dripStepHandler(event: DripStepEvent) {
   const s = stores();
   // Routing identity is echoed back so the state machine can loop without a
   // separate Pass to reconstruct it after the Task overwrites the state.
-  const routing = { orgId: event.orgId, sequenceId: event.sequenceId, subscriberId: event.subscriberId };
+  // `enrollmentId` is part of it: drop it here and the second iteration loses the
+  // claim namespace, which is worse than never having had one.
+  const routing = {
+    orgId: event.orgId,
+    sequenceId: event.sequenceId,
+    subscriberId: event.subscriberId,
+    // A string rather than null when absent: the machine reads this field back
+    // with `JsonPath.stringAt`, and a null there is a States.Runtime failure on
+    // the second iteration — a loop that dies at step 1 over a field that is only
+    // a namespace.
+    enrollmentId: event.enrollmentId ?? "",
+  };
   const sequence = await s.dripSequences.get(event.orgId, event.sequenceId);
   if (!sequence) throw new Error(`unknown drip sequence ${event.sequenceId}`);
+  // A newer enrollment retires this one (#245). A re-signup mid-sequence mints a
+  // fresh enrollment id and therefore a second execution, and this one cannot be
+  // cancelled from outside — nothing remembers its name. Left running, both
+  // executions would send every remaining step, each under its own claim
+  // namespace, on two offset schedules.
+  if (await enrollmentSuperseded(s, sequence, event.subscriberId, event.enrollmentId)) {
+    return { ...routing, done: true, action: "exit", reason: "superseded by a newer enrollment", nextStepIndex: null, nextWaitSeconds: null };
+  }
   const step = sequence.steps[event.stepIndex];
   if (!step) return { ...routing, done: true, action: "exit", reason: "no such step", nextStepIndex: null, nextWaitSeconds: null };
 
@@ -183,7 +219,7 @@ export async function dripStepHandler(event: DripStepEvent) {
     }
     await sendToSubscriber(s, ses, magic, clock, {
       orgId: event.orgId,
-      campaignId: `drip-${event.sequenceId}-${step.stepId}`,
+      campaignId: dripCampaignId(event.sequenceId, step.stepId, event.enrollmentId),
       subscriberId: event.subscriberId,
       listId: step.listId,
       subject: step.subject,
