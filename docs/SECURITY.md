@@ -630,9 +630,12 @@ first-class control:
 
 `npm audit` reports **GHSA-mh99-v99m-4gvg** (`brace-expansion` DoS via unbounded
 expansion) with **no fix applied**, deliberately. It reaches us only as a
-dependency that `aws-cdk-lib` **bundles** inside its own `minimatch`, so an npm
-`overrides` entry does not patch it — it deletes the bundled copy and breaks CDK
-synth outright. That was tried and reverted.
+dependency that `aws-cdk-lib` **bundles** inside its own `minimatch`, and npm
+cannot patch a bundled dep: an `overrides` entry was tried and reverted (it
+deletes the bundled copy and breaks CDK synth outright), and re-verified on
+npm 11.17 (2026-07), where the override simply never takes effect — no 5.0.8
+is installed and the bundled 5.0.7 stays. The latest release,
+aws-cdk-lib@2.262.2, still bundles the vulnerable copy.
 
 Accepting it is defensible on reachability: `aws-cdk-lib` appears in
 `infra/cdk` and **nowhere else** — no deployed service depends on it, so the
@@ -640,8 +643,10 @@ code is absent from every Lambda. The only thing that ever evaluates those globs
 is `cdk synth` on a maintainer's machine or in CI, over stack definitions from
 this repository. There is no path from an untrusted input to it.
 
-It clears when aws-cdk-lib ships a release bundling a patched `minimatch`.
-Re-check on each CDK bump rather than suppressing the warning.
+**Dependabot alert #17 (CVE-2026-14257) is dismissed as tolerable risk**
+(2026-07) citing this section. It clears when aws-cdk-lib ships a release
+bundling a patched `minimatch`. Re-check on each CDK bump rather than
+suppressing the warning.
 - Branch protection + required review; maintainer **2FA**.
 - Public trust signals: **OpenSSF Scorecard** + **Best Practices Badge**.
 - Coordinated disclosure per [`../SECURITY.md`](../SECURITY.md).
