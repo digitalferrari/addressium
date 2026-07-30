@@ -15,6 +15,7 @@ import {
   EventBridgeScheduler,
   GoogleRecaptchaVerifier,
   SesEmailSender,
+  S3ImportFileStore,
   SesSuppressionListReader,
   SfnDripStarter,
   SqsSendQueue,
@@ -22,6 +23,7 @@ import {
   sanitizeEmailHtml,
 } from "@addressium/adapters-aws";
 import { gsiEngineLimitation, type SegmentPredicate } from "@addressium/segment";
+import { randomUUID } from "node:crypto";
 import { InvokeCommand, LambdaClient } from "@aws-sdk/client-lambda";
 import {
   schemas,
@@ -48,9 +50,11 @@ import {
   enrollManually,
   enrollOnConfirmation,
   evaluateSetup,
+  importObjectKey,
   importSuppressionList,
   isHoneypotTripped,
   markScheduleActive,
+  startImportJob,
   scheduleName,
   transitionSchedule,
   type EmailTemplate,
@@ -177,6 +181,10 @@ const scheduler = () =>
  * COLD START for all of them — including `/unsubscribe`, the one route that must
  * never be down. A missing var must degrade drip enrollment, not the public API.
  */
+let _importFiles: S3ImportFileStore | undefined;
+/** Lazy like every other dependency here — see the drip starter's note below. */
+const importFiles = () => (_importFiles ??= new S3ImportFileStore(env("IMPORT_BUCKET")));
+
 let _dripStarter: SfnDripStarter | undefined;
 const dripStarter = () =>
   (_dripStarter ??= new SfnDripStarter({ stateMachineArn: env("DRIP_STATE_MACHINE_ARN") }));
@@ -1332,6 +1340,15 @@ export async function exportHandler(event: HttpEvent): Promise<HttpResult> {
  * `csv`, and the domain sniffs gzip by magic bytes from there. `csv` stays for
  * the paste-a-spreadsheet path, which is most of them.
  */
+/**
+ * Where the inline import stops and the job takes over (#242).
+ *
+ * Well under API Gateway's 10 MB so the refusal is OURS, with a message naming
+ * the async route — a 10MB-shaped failure from the gateway is an opaque 413 that
+ * tells the operator nothing about what to do instead.
+ */
+const INLINE_IMPORT_MAX_BYTES = 2 * 1024 * 1024;
+
 function uploadedFile(body: { csv?: string; fileBase64?: string }): Uint8Array | string | undefined {
   if (typeof body.fileBase64 === "string" && body.fileBase64.length > 0) {
     return new Uint8Array(Buffer.from(body.fileBase64, "base64"));
@@ -1444,6 +1461,18 @@ export async function importMappedHandler(event: HttpEvent): Promise<HttpResult>
     if (file === undefined || !body.plan?.columns) {
       return json(400, { error: "csv (or fileBase64) and plan required" });
     }
+    // The inline path is for pastes and small files ONLY (#242). Above this it
+    // is racing API Gateway's 10 MB payload limit and a 29-second integration
+    // timeout, and losing that race leaves a half-imported list with no
+    // resumption point — so refuse it here, naming the route that can, rather
+    // than accepting work that will be cut off mid-write.
+    const size = typeof file === "string" ? Buffer.byteLength(file, "utf8") : file.byteLength;
+    if (size > INLINE_IMPORT_MAX_BYTES) {
+      return json(413, {
+        error: `file is ${Math.round(size / 1024)}KB; the inline import is capped at ${INLINE_IMPORT_MAX_BYTES / 1024}KB`,
+        hint: "use POST /orgs/{org}/import/upload-url then POST /orgs/{org}/import/async",
+      });
+    }
     // Asking for `confirmed` against anything but an explicit basis is refused
     // here rather than quietly downgraded (#223). `statusFor` would fail closed
     // either way, but an operator who asked to import a confirmed list and got a
@@ -1537,6 +1566,108 @@ export async function importBatchesHandler(event: HttpEvent): Promise<HttpResult
  * route an SSRF-shaped credential-confusion primitive — "import from the account
  * I name" against our own credentials.
  */
+/**
+ * POST /orgs/{org}/import/upload-url — a presigned PUT for an import file (#242).
+ *
+ * The console uploads straight to S3. Routing the bytes through here would
+ * reintroduce API Gateway's 10 MB payload ceiling, which — with #239's
+ * `fileBase64` inflating a gzipped export by a third — an ordinary migration
+ * list clears without trying.
+ *
+ * The key is DERIVED from the batch id, never accepted from the caller: a
+ * caller-supplied key is a write primitive into our bucket, and a caller-supplied
+ * key on the *read* side would let one org name another's object.
+ */
+export async function importUploadUrlHandler(event: HttpEvent): Promise<HttpResult> {
+  try {
+    const orgId = event.pathParameters?.org ?? "";
+    requireGrant(event, "subscribers:manage", orgId);
+    const batchId = `imp_${clock.now().toISOString()}_${randomUUID().slice(0, 8)}`;
+    const key = importObjectKey(orgId, batchId);
+    const { url } = await importFiles().presignUpload(key);
+    // The batch id comes back with the URL so the console can start the job and
+    // poll for it without a second round trip to learn its own identity.
+    return json(200, { batchId, key, url });
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+/**
+ * POST /orgs/{org}/import/async — run an uploaded file as a job (#242).
+ *
+ * Returns 202 with the batch id; the run itself outlives this request. Status is
+ * `GET /orgs/{org}/import/batches?batchId=` — the batch record is marked
+ * `running` HERE, before the invoke, so an operator holding a 202 always has
+ * something to ask about even if the job Lambda never starts.
+ */
+export async function importAsyncHandler(
+  event: HttpEvent,
+  injected?: { invoke?: (payload: unknown) => Promise<void> },
+): Promise<HttpResult> {
+  try {
+    const orgId = event.pathParameters?.org ?? "";
+    requireGrant(event, "subscribers:manage", orgId);
+    const body = JSON.parse(event.body ?? "{}") as {
+      batchId?: string;
+      plan?: MappingPlan;
+      status?: "confirmed" | "pending";
+      sourceFile?: string;
+      newListDefaults?: NewListDefaults;
+    };
+    if (!body.batchId || !body.plan?.columns) {
+      return json(400, { error: "batchId and plan required" });
+    }
+    // The same refusal the inline route makes (#223). Checked BEFORE the job is
+    // queued: a consent problem discovered inside an async run is one the
+    // operator finds out about minutes later, from a batch record, having
+    // already believed the import was accepted.
+    if (body.status === "confirmed") {
+      const weak = columnsBlockingConfirmed(body.plan);
+      if (weak.length > 0) {
+        return json(400, {
+          error:
+            `cannot import as confirmed: ${weak.length} audience column(s) declare an implicit ` +
+            `or absent consent basis, which proves an existing relationship rather than opt-in`,
+          columns: weak,
+        });
+      }
+    }
+    const sourceKey = importObjectKey(orgId, body.batchId);
+    await startImportJob(stores(), clock, {
+      orgId,
+      batchId: body.batchId,
+      sourceKey,
+      ...(body.sourceFile ? { sourceFile: body.sourceFile } : {}),
+    });
+    const payload = {
+      orgId,
+      batchId: body.batchId,
+      sourceKey,
+      plan: body.plan,
+      ...(body.status ? { status: body.status } : {}),
+      ...(body.sourceFile ? { sourceFile: body.sourceFile } : {}),
+      ...(body.newListDefaults ? { newListDefaults: body.newListDefaults } : {}),
+    };
+    await (injected?.invoke ?? invokeImporter)(payload);
+    await audit(event, orgId, "import.run", body.batchId);
+    return json(202, { batchId: body.batchId, status: "running" });
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+/** Event invocation: the job takes minutes, and this request must not wait. */
+async function invokeImporter(payload: unknown): Promise<void> {
+  await new LambdaClient({}).send(
+    new InvokeCommand({
+      FunctionName: env("IMPORTER_FN"),
+      InvocationType: "Event",
+      Payload: Buffer.from(JSON.stringify(payload)),
+    }),
+  );
+}
+
 export async function importSuppressionHandler(
   event: HttpEvent,
   injected?: { reader?: SuppressionListReader },
@@ -1945,6 +2076,8 @@ const ADMIN_ROUTES: Record<string, RouteHandler> = {
   "GET /orgs/{org}/export": exportHandler,
   "POST /orgs/{org}/import/preview": importPreviewHandler,
   "POST /orgs/{org}/import/suppression": importSuppressionHandler,
+  "POST /orgs/{org}/import/upload-url": importUploadUrlHandler,
+  "POST /orgs/{org}/import/async": importAsyncHandler,
   "POST /orgs/{org}/import/mapped": importMappedHandler,
   "GET /orgs/{org}/import/batches": importBatchesHandler,
   "GET /orgs/{org}/import/mappings": importMappingsHandler,

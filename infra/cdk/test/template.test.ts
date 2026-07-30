@@ -1629,3 +1629,64 @@ test("the OpenSearch mirror is actually READ when it is enabled (#246)", () => {
   assert.deepEqual(aossActions(off, "SenderFn"), []);
   assert.equal(adminEnv(off).SEGMENT_ENGINE, "gsi");
 });
+
+test("the async import job reads S3 itself, with time to finish (#242)", () => {
+  // Inline-body import put API Gateway's 10 MB payload limit, the Lambda invoke
+  // payload limit and the 29-second integration timeout in front of the largest
+  // single write the system takes. The job exists to have none of those.
+  const t = template();
+  const fns = t.findResources("AWS::Lambda::Function");
+  const importer = Object.entries(fns).find(([k]) => k.startsWith("ImporterFn"));
+  assert.ok(importer, "the import job was never deployed as a Lambda");
+  const props = importer[1].Properties as {
+    Timeout?: number;
+    MemorySize?: number;
+    Environment?: { Variables?: Record<string, string> };
+  };
+  // A route cannot exceed 29s; this is allowed fifteen minutes, which is the
+  // whole reason it is a separate function.
+  assert.equal(props.Timeout, 900);
+  assert.ok((props.MemorySize ?? 0) >= 1024);
+  assert.ok(props.Environment?.Variables?.IMPORT_BUCKET, "the job does not know which bucket to read");
+
+  // The bytes must never traverse API Gateway: the console PUTs to S3 with a
+  // presigned URL from the API, and the JOB reads the object.
+  const s3 = (prefix: string): string[] =>
+    policyFor(t, prefix)
+      .filter((s) => s.Effect !== "Deny")
+      .flatMap(actionsOf)
+      .filter((a) => a.startsWith("s3:"));
+  assert.ok(s3("ImporterFn").some((a) => a.startsWith("s3:Get")), "the job cannot read the upload");
+  // Read-only: the job consumes what was uploaded and has no reason to write.
+  assert.ok(
+    !s3("ImporterFn").some((a) => a === "s3:PutObject"),
+    "the import job can write to the bucket it reads",
+  );
+
+  const adminEnv = (Object.entries(fns).find(([k]) => k.startsWith("AdminApiFn"))?.[1].Properties as {
+    Environment?: { Variables?: Record<string, string> };
+  }).Environment?.Variables ?? {};
+  assert.ok(adminEnv.IMPORT_BUCKET, "the API cannot presign an upload");
+  assert.ok(adminEnv.IMPORTER_FN, "the API does not know which function to start");
+  // Paired with the env var: a function that can name the job but not invoke it
+  // fails at runtime, inside a route, after writing a `running` batch record.
+  assert.ok(
+    policyFor(t, "AdminApiFn")
+      .filter((s) => s.Effect !== "Deny")
+      .flatMap(actionsOf)
+      .includes("lambda:InvokeFunction"),
+    "the API cannot invoke the import job",
+  );
+
+  // The upload bucket expires on its own: an import file is every subscriber's
+  // address and consent state in one object, and the durable artefact is the
+  // batch record, not the file.
+  const buckets = Object.entries(t.findResources("AWS::S3::Bucket")).find(([k]) =>
+    k.startsWith("ImportBucket"),
+  );
+  assert.ok(buckets, "no import bucket");
+  const rules = (buckets[1].Properties as {
+    LifecycleConfiguration?: { Rules: { ExpirationInDays?: number }[] };
+  }).LifecycleConfiguration?.Rules;
+  assert.ok(rules?.some((r) => (r.ExpirationInDays ?? 0) > 0), "import files are kept for ever");
+});

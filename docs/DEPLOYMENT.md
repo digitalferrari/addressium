@@ -124,9 +124,9 @@ Pass with `-c key=value` on `cdk deploy`, or add to `cdk.json` → `context`:
 > **Leave the two analytics flags off unless you are specifically testing them.**
 > They are opt-in, off by default, and demoted out of the core design by #64 —
 > not removed. Both carry standing cost well above the rest of the stack
-> combined. Concretely, on a `dev` synth: default is 347 resources / 28 Lambda
-> functions; `-c enableAnalytics=true -c enableOpenSearchMirror=true` is 389
-> resources / 32 Lambda functions, and emits three more stack outputs
+> combined. Concretely, on a `dev` synth: default is 357 resources / 29 Lambda
+> functions; `-c enableAnalytics=true -c enableOpenSearchMirror=true` is 399
+> resources / 33 Lambda functions, and emits three more stack outputs
 > (`SegmentCollectionEndpoint`, `AnalyticsBucketName`,
 > `AnalyticsReplayFunctionName`). Neither flag is set
 > anywhere in the repo, and neither has a default value in `cdk.json`.

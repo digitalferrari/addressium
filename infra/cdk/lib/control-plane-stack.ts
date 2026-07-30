@@ -356,6 +356,29 @@ export class ControlPlaneStack extends Stack {
         },
       ],
     });
+    /**
+     * Where a migration file lands before the import JOB reads it (#242).
+     *
+     * The console PUTs here with a presigned URL, so the bytes never traverse
+     * API Gateway — an ordinary migration list clears the 10 MB payload ceiling,
+     * and #239's base64 path inflates a gzipped export by a third on top.
+     *
+     * Expires on its own. An import file is the most sensitive object this
+     * product ever holds — every subscriber's address and consent state in one
+     * place — and there is no reason to keep it once the run that read it has
+     * finished. The batch record is the durable artefact, not the file.
+     */
+    const importBucket = new Bucket(this, "ImportBucket", {
+      blockPublicAccess: BlockPublicAccess.BLOCK_ALL,
+      enforceSSL: true,
+      lifecycleRules: [
+        {
+          id: "expire-imports",
+          expiration: Duration.days(7),
+          abortIncompleteMultipartUploadAfter: Duration.days(1),
+        },
+      ],
+    });
     // Audit log backed by S3 Object Lock (WORM) — history can't be rewritten
     // even by an admin (§4.19, docs/SECURITY.md §4.3, #29).
     //
@@ -1354,6 +1377,24 @@ export class ControlPlaneStack extends Stack {
     // lifecycle deletes everything in it after seven days (#224).
     exportBucket.grantPut(adminApiFn);
     exportBucket.grantRead(adminApiFn);
+    // The async import job (#242). Fifteen minutes and more memory than a route
+    // gets, because that is the point: the work that used to have to finish
+    // inside a 29-second integration timeout now does not.
+    const importerFn = fn("ImporterFn", svc("services/importer/src/index.ts"), "handler", {
+      ...apiEnv,
+      IMPORT_BUCKET: importBucket.bucketName,
+    });
+    (importerFn.node.defaultChild as CfnFunction).addPropertyOverride("Timeout", 900);
+    (importerFn.node.defaultChild as CfnFunction).addPropertyOverride("MemorySize", 1024);
+    table.grantReadWriteData(importerFn);
+    // READ only: the job consumes the object the console uploaded and has no
+    // reason to write one. The presigned PUT is minted by the API, which holds
+    // the write grant.
+    importBucket.grantRead(importerFn);
+    importBucket.grantPut(adminApiFn); // presign the upload
+    adminApiFn.addEnvironment("IMPORT_BUCKET", importBucket.bucketName);
+    adminApiFn.addEnvironment("IMPORTER_FN", importerFn.functionName);
+    importerFn.grantInvoke(adminApiFn);
     adminApiFn.addToRolePolicy(
       new PolicyStatement({
         effect: Effect.ALLOW,
@@ -1510,6 +1551,9 @@ export class ControlPlaneStack extends Stack {
     adminRoute("ImportPreviewFn", "importPreviewHandler", HttpMethod.POST, "/orgs/{org}/import/preview");
     adminRoute("ImportMappedFn", "importMappedHandler", HttpMethod.POST, "/orgs/{org}/import/mapped");
     adminRoute("ImportSuppressionFn", "importSuppressionHandler", HttpMethod.POST, "/orgs/{org}/import/suppression");
+    // Async import (#242): presign an upload, then run it as a job.
+    adminRoute("ImportUploadUrlFn", "importUploadUrlHandler", HttpMethod.POST, "/orgs/{org}/import/upload-url");
+    adminRoute("ImportAsyncFn", "importAsyncHandler", HttpMethod.POST, "/orgs/{org}/import/async");
     adminRoute("ImportMappingsGetFn", "importMappingsHandler", HttpMethod.GET, "/orgs/{org}/import/mappings");
     adminRoute("ImportMappingsPostFn", "importMappingsHandler", HttpMethod.POST, "/orgs/{org}/import/mappings");
     // Import history (#223) — which run wrote which memberships, so a bad file

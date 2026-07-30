@@ -697,6 +697,26 @@ export interface ImportBatch {
   subscriptionsCreated: number;
   /** Members written by this batch, so its rows can be listed without a scan. */
   rowCount: number;
+  /**
+   * Where the run got to (#242).
+   *
+   * An async import outlives the request that started it, so the batch record IS
+   * the status endpoint — there is nowhere else to ask. Absent on batches written
+   * before async imports existed, which is why every reader treats undefined as
+   * `completed` rather than as an unfinished run: those DID finish, inline,
+   * before the response was sent.
+   */
+  status?: "running" | "completed" | "failed";
+  /** When the run stopped, either way. */
+  finishedAt?: string;
+  /**
+   * Why it failed. Load-bearing: a job that dies leaves a partially-imported
+   * list, and "which rows landed" is the first question. `rowCount` answers how
+   * many, this answers why it stopped.
+   */
+  error?: string;
+  /** The S3 key the run read, for an async import. */
+  sourceKey?: string;
 }
 
 /** Cost model inputs (USD) for per-org chargeback (§11). Operator-configurable. */

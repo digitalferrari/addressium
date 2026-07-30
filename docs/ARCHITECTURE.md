@@ -660,6 +660,39 @@ the operator has no reason to check it. **Rebuild segments by hand after import.
 The list memberships they were built from arrive with the subscribers
 (`Attributes.*` → audiences, above), so the raw material is all there.
 
+**A large import is a JOB, not a request** (#242). §4.7 promised this and the
+code took the whole file inline, putting three ceilings in front of the largest
+single write the system ever takes — API Gateway's 10 MB payload limit, the
+Lambda invoke payload limit, and the 29-second integration timeout. All three are
+reachable with an ordinary migration list, and #239's `fileBase64` inflates a
+gzipped export by a third on the way through. Losing that race left a
+partially-imported list with no resumption point and no way to learn which rows
+landed.
+
+The flow: `POST /orgs/{org}/import/upload-url` mints a short-lived presigned PUT
+and returns the batch id; the console uploads **straight to S3**, so the bytes
+never traverse API Gateway; `POST /orgs/{org}/import/async` marks the batch
+`running` and event-invokes the importer Lambda, answering **202**. The job reads
+the object itself, with fifteen minutes and 1 GB rather than a route's 29 seconds.
+
+**The batch record is the status endpoint** — an async run outlives the request
+that started it, so there is nowhere else to ask. `GET
+/orgs/{org}/import/batches?batchId=` returns `running` / `completed` / `failed`
+with `finishedAt` and, on failure, why. The record is written `running` BEFORE
+the invoke, so an operator holding a 202 always has something to poll even if the
+job never starts, and it is closed either way — a crashed run reads as a run that
+stopped, not as silence. A run only counts as **failed** if it threw or imported
+nobody; a file where a few rows were malformed is `completed` with those rows
+reported, because telling an operator to re-run an import that worked is how you
+get duplicates.
+
+The **inline route stays**, capped at 2 MB with a 413 naming the async one. The
+cap is ours rather than the gateway's on purpose: a 10 MB-shaped failure from API
+Gateway is an opaque error that tells the operator nothing about what to do
+instead. The upload bucket **expires objects after 7 days** — an import file is
+every subscriber's address and consent state in one place, and the durable
+artefact is the batch record, not the file.
+
 **Import wizard** (compendium #60, #216 / #220 / #223). Before any row is
 written, the admin declares:
 
@@ -2250,8 +2283,8 @@ describes the target; this is the part that is still unearned. It mirrors
   GENERIC template carrying merge *tags*, not one recipient's rendered values. So
   there is no subject data there to erase today. If per-recipient bodies are ever
   archived, that changes and this line stops being true.
-- **The counts that are safe to quote** — 30 alarms, 27 log groups, 65 API routes
-  (50 behind the JWT authorizer), 347 resources in a default synth — are
+- **The counts that are safe to quote** — 30 alarms, 28 log groups, 67 API routes
+  (52 behind the JWT authorizer), 357 resources in a default synth — are
   reproducible with `npm run build && cd infra/cdk && npx cdk synth`. They are
   template facts,
   which is a weaker claim than it sounds. Dev and prod now synthesize the same
