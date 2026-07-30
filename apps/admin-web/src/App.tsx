@@ -19,7 +19,7 @@ import {
   type SendCostInput,
   type CostLine,
 } from "@addressium/domain/cost";
-import { api, EMPTY_EXPLICIT, isExplicitPredicate, type SegmentMember, type SubscriberDetail, type AlertRule, type Branding, type CreateOrgInput, type CreateOrgResult, type TeamMemberRow, type ColumnMapping, type ImportPreview, type MappedImportReport, type MappingPlan, type NewListDefaults, type CampaignReport, type DripStepDef, type EmailBlock, type ListPresentation, type ScheduleWhen, type SendScheduleState, type SetupState, type Template, type TemplateMode, type UsageRecord } from "./api.js";
+import { api, EMPTY_EXPLICIT, isExplicitPredicate, type SegmentMember, type SubscriberDetail, type SuppressionCheckResult, type AlertRule, type Branding, type CreateOrgInput, type CreateOrgResult, type TeamMemberRow, type ColumnMapping, type ImportPreview, type MappedImportReport, type MappingPlan, type NewListDefaults, type CampaignReport, type DripStepDef, type EmailBlock, type ListPresentation, type ScheduleWhen, type SendScheduleState, type SetupState, type Template, type TemplateMode, type UsageRecord } from "./api.js";
 
 type View = "dashboard" | "setup" | "templates" | "compose" | "report" | "usage" | "schedules" | "branding" | "presentation" | "subscribers" | "segments" | "import" | "privacy" | "drips" | "costs" | "deliverability" | "importmap" | "team" | "audit" | "newsletters" | "addorg";
 
@@ -835,6 +835,8 @@ function Subscribers({ org }: { org: string }) {
   const subs = useAsync(() => api.subscribers(org, query || undefined, cursor), [org, query, cursor, rev]);
   const supps = useAsync(() => api.suppressions(org), [org, rev]);
   const [email, setEmail] = useState("");
+  /** Empty stays manual/org-scoped exactly as before #247; bounce/complaint lands global (§4.13). */
+  const [reason, setReason] = useState<"" | "bounce" | "complaint">("");
   const [msg, setMsg] = useState("");
   /** The subscriber whose detail panel is open (#205). */
   const [openSub, setOpenSub] = useState<string | null>(null);
@@ -842,7 +844,7 @@ function Subscribers({ org }: { org: string }) {
 
   const suppress = async () => {
     setMsg("");
-    try { await api.suppress(org, email); setMsg(`Suppressed ${email}`); reload(); }
+    try { await api.suppress(org, email, reason || undefined); setMsg(`Suppressed ${email}`); reload(); }
     catch (e) { setMsg(String(e)); }
   };
   const unsubscribeAll = async (sub: string, subEmail: string) => {
@@ -915,6 +917,11 @@ function Subscribers({ org }: { org: string }) {
         <label>Manually suppress an address (does not delete)</label>
         <div className="row">
           <input placeholder="email" value={email} onChange={(e) => setEmail(e.target.value)} />
+          <select value={reason} onChange={(e) => setReason(e.target.value as "" | "bounce" | "complaint")}>
+            <option value="">Manual (this org only)</option>
+            <option value="bounce">Bounce (account-wide, mirrored to SES)</option>
+            <option value="complaint">Complaint (account-wide, mirrored to SES)</option>
+          </select>
           <button className="btn" onClick={() => void suppress()} disabled={!email}>Suppress</button>
         </div>
       </div>
@@ -962,6 +969,10 @@ function SubscriberPanel({ org, sub, onChanged }: { org: string; sub: string; on
   const [rows, setRows] = useState<Array<{ k: string; v: string }>>([]);
   const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState(false);
+  /** Local + live (SES) suppression status for this one address (#247). */
+  const [check, setCheck] = useState<SuppressionCheckResult | null>(null);
+  const [checkMsg, setCheckMsg] = useState("");
+  const [reason, setReason] = useState<"" | "bounce" | "complaint">("");
 
   const load = (d: SubscriberDetail) => {
     setDetail(d);
@@ -974,6 +985,28 @@ function SubscriberPanel({ org, sub, onChanged }: { org: string; sub: string; on
     api.subscriber(org, sub).then((d) => live && load(d)).catch((e) => live && setMsg(String(e)));
     return () => { live = false; };
   }, [org, sub]);
+
+  // Runs against `detail.email` (not `sub`) so a re-fetched detail — e.g. after
+  // suppressing — re-checks under the same effect rather than needing a second
+  // trigger wired in by hand.
+  useEffect(() => {
+    let live = true;
+    setCheck(null); setCheckMsg("");
+    if (!detail) return;
+    api.suppressionCheck(org, detail.email).then((c) => live && setCheck(c)).catch((e) => live && setCheckMsg(String(e)));
+    return () => { live = false; };
+  }, [org, detail?.email]);
+
+  const suppressThis = async () => {
+    if (!detail) return;
+    setBusy(true); setCheckMsg("");
+    try {
+      await api.suppress(org, detail.email, reason || undefined);
+      load(await api.subscriber(org, sub));
+      onChanged();
+    } catch (e) { setCheckMsg(String(e)); }
+    finally { setBusy(false); }
+  };
 
   const saveAttributes = async () => {
     setBusy(true); setMsg("");
@@ -1039,6 +1072,40 @@ function SubscriberPanel({ org, sub, onChanged }: { org: string; sub: string; on
         </p>
       )}
       {msg && <p className={msg.includes("saved") || msg.includes("set to") ? "muted" : "err"} style={{ margin: "6px 0 0" }}>{msg}</p>}
+
+      <div style={{ marginTop: 16 }}>
+        <strong>Suppression</strong>{" "}
+        <span className="muted">local record, plus a live check against the SES account list (#247)</span>
+        {checkMsg && <p className="err" style={{ margin: "6px 0 0" }}>{checkMsg}</p>}
+        {!check && !checkMsg && <p className="muted" style={{ margin: "6px 0 0" }}>Checking…</p>}
+        {check && (
+          <div style={{ margin: "6px 0 0" }}>
+            <p style={{ margin: 0 }}>
+              Local: {check.local.length === 0
+                ? <span className="muted">not suppressed here</span>
+                : check.local.map((e) => `${e.source} (${e.scope})`).join(", ")}
+            </p>
+            <p style={{ margin: 0 }}>
+              SES account list:{" "}
+              {check.liveError
+                ? <span className="err">could not check ({check.liveError})</span>
+                : check.live === undefined
+                  ? <span className="muted">not checked</span>
+                  : check.live === null
+                    ? <span className="muted">clear</span>
+                    : <span className="err">suppressed — {check.live.reason}{check.live.at ? ` on ${new Date(check.live.at).toLocaleDateString()}` : ""}</span>}
+            </p>
+          </div>
+        )}
+        <div className="row" style={{ marginTop: 8 }}>
+          <select value={reason} onChange={(e) => setReason(e.target.value as "" | "bounce" | "complaint")} disabled={busy}>
+            <option value="">Manual (this org only)</option>
+            <option value="bounce">Bounce (account-wide, mirrored to SES)</option>
+            <option value="complaint">Complaint (account-wide, mirrored to SES)</option>
+          </select>
+          <button className="btn ghost" disabled={busy} onClick={() => void suppressThis()}>Suppress this address</button>
+        </div>
+      </div>
 
       <div style={{ marginTop: 12 }}>
         <strong>Attributes</strong>{" "}

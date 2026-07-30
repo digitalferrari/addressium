@@ -642,6 +642,36 @@ export interface SuppressionListReader {
   list(): AsyncIterable<SuppressedDestination>;
 }
 
+/**
+ * A live, single-address view of the provider's account suppression list (SES
+ * in prod — §4.7, §4.13, #247). The console equivalent of
+ * `aws sesv2 get-suppressed-destination` / `put-suppressed-destination`.
+ *
+ * Distinct from `SuppressionListReader`, which walks the WHOLE account list for
+ * a bulk migration import. This is a point lookup and a single deliberate
+ * write, both scoped to one address an operator is looking at right now — a
+ * different risk shape from importing or overwriting the account list wholesale
+ * (see `ses-suppression.ts`'s note on why bulk writing back to SES is never
+ * automated).
+ */
+export interface SuppressionChecker {
+  /**
+   * The account-list entry for this address, or `undefined` if the provider
+   * says it is NOT suppressed. Must not be confused with "the check failed" —
+   * callers that need to tell those apart catch separately.
+   */
+  get(email: string): Promise<SuppressedDestination | undefined>;
+  /**
+   * Add this address to the PROVIDER's account suppression list — mirrors
+   * `put-suppressed-destination`. `reason` is deliberately narrower than
+   * `SuppressionSource`: SES's own API accepts only `BOUNCE` and `COMPLAINT`,
+   * so a `manual` (no-reason) suppression never reaches this method — it stays
+   * local only, which is also why the two reasons this DOES accept are exactly
+   * the ones that scope GLOBAL in our own store (`scopeForSuppressionSource`).
+   */
+  put(email: string, reason: "BOUNCE" | "COMPLAINT"): Promise<void>;
+}
+
 export interface Clock {
   now(): Date;
 }

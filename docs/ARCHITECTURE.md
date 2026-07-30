@@ -921,10 +921,10 @@ Staff live in the **separate admin Cognito pool**; each member holds a **role**,
 
 | Role | Can | Cannot |
 |---|---|---|
-| **Developer Admin** | Everything, incl. delete contacts, close newsletters, identity/pools/orgs, API keys, suppression, alerts, roles | — |
-| **Editor** | Create/send/schedule campaigns, **modify send times / resend**, templates, segments, manage subscribers | Delete contacts, close newsletters, config/identity |
+| **Developer Admin** | Everything, incl. delete contacts, close newsletters, identity/pools/orgs, API keys, **bulk** suppression management + alerts, roles | — |
+| **Editor** | Create/send/schedule campaigns, **modify send times / resend**, templates, segments, manage subscribers (incl. suppress/unsuppress ONE address, §4.13) | Delete contacts, close newsletters, config/identity, bulk suppression ops |
 | **Analyst (Sales)** | **Read-only** reporting & analytics | Any edit, send, delete or config |
-| **Support** | Manage individual subscribers (edit, manual unsubscribe, resend confirm) | Send campaigns, any config |
+| **Support** | Manage individual subscribers (edit, manual unsubscribe, resend confirm, suppress/unsuppress ONE address — §4.13) | Send campaigns, any config, bulk suppression ops |
 
 Enforcement is **server-side** in the API (capability + org scope on every
 mutating handler); the console hides/disables controls only as a convenience,
@@ -982,6 +982,56 @@ limit, dedupes within a batch (a paginated provider list can repeat an address)
 and retries `UnprocessedItems` — a throttled partition returns HTTP 200 with the
 leftovers in the body, so treating that as success would silently drop the
 suppressions this whole path exists to apply.
+
+**Checking and suppressing one address live** (#247) — the console equivalent of
+`aws sesv2 get-suppressed-destination` / `put-suppressed-destination`, for an
+operator looking at one subscriber rather than migrating a whole account.
+
+- `GET /orgs/{org}/suppression/check?email=` returns BOTH sources of truth: our
+  own store (`SuppressionStore.entriesFor`, exactly what `mayMail` gates real
+  sends on) and a live SES lookup. The two can legitimately disagree — SES
+  auto-suppresses from traffic outside this product, a different sender in the
+  same account, or an operator using the SES console directly — so showing only
+  one would be the wrong answer either way. `live: null` (SES was asked and
+  said clear) and `live: undefined` (the check could not be made — no checker,
+  a throttle, a permissions gap) are DIFFERENT answers on purpose; collapsing
+  them would tell an operator an address is clear when the honest answer is
+  "nobody asked." The subscriber-detail screen calls this on open.
+- `POST /subscribers/suppress` gained an optional `source`: `manual` (default,
+  unchanged from before this feature — org-scoped, no SES call), or `bounce`/
+  `complaint` — an operator recording, by hand, what an SES notification would
+  otherwise have reported. Those two take the SAME scope the automatic path
+  uses (`scopeForSuppressionSource`, one rule, shared by both callers so a
+  human typing this in cannot end up with weaker protection than SES reporting
+  it would have given) — GLOBAL — and additionally mirror to the REAL SES
+  account list via `PutSuppressedDestination`, so a subsequent
+  `get-suppressed-destination` reflects it immediately. The mirror write is
+  best-effort: the local entry is what the send path actually consults, so a
+  throttled or unreachable SES call must not undo, or even fail, a suppression
+  that already succeeded where it matters.
+- **RBAC widened**, deliberately, for `subscriberSuppressHandler` and
+  `subscriberUnsuppressHandler`: from `suppression:manage` (developer_admin
+  only) to `subscribers:manage` (developer_admin, editor, support — §4.12). A
+  front-line operator handling one subscriber's reported bounce or complaint
+  needs to act on it without dev-admin escalation, and the blast radius is no
+  wider than what already happens with zero gate at all:
+  `recordBounce`/`recordComplaint` write identically-scoped GLOBAL entries
+  automatically, triggered purely by an SES notification, with no role check
+  whatsoever. A human recording the same fact through an authenticated, audited
+  console action is not riskier than that. `liftSuppression` stays safe at the
+  same widened access because it only ever removes an ORG-scoped entry — a
+  manually-recorded bounce/complaint (GLOBAL) cannot be undone by
+  editor/support, same as an automatic one never could. The BULK operations —
+  the org-wide list view and the SES account-list import above — stay
+  `suppression:manage`-gated; only the single-address actions moved.
+- IAM: `AdminApiFn` holds exactly three suppression-list actions —
+  `ListSuppressedDestinations` (bulk read, #240), `GetSuppressedDestination` and
+  `PutSuppressedDestination` (single-address, #247) — and never
+  `DeleteSuppressedDestination`. `Put` for one address, one operator, one
+  audited action is a different risk shape from the bulk-write direction this
+  file has never automated (see `ses-suppression.ts`): closer to what an
+  operator could already do by hand in the SES console than to overwriting the
+  account's whole list.
 
 ### 4.14 Merge tags & ad tags
 

@@ -1333,19 +1333,38 @@ export class ControlPlaneStack extends Stack {
     });
     table.grantReadWriteData(adminApiFn);
     sendQueue.grantSendMessages(adminApiFn);
-    // POST /orgs/{org}/import/suppression (#240). READ-ONLY on the account
-    // suppression list, and only that one action — the migration importer needs
-    // to know what SES already refuses to mail, and nothing more. Notably NOT
-    // ses:PutSuppressedDestination or DeleteSuppressedDestination: writing to the
-    // operator's account list would change how their account behaves for every
-    // sender using it, including whatever they have not migrated yet.
+    // Three suppression-list actions, two different risk shapes (#240, #247).
     //
-    // Resource "*" because that is the only form SES accepts for this action —
+    // ListSuppressedDestinations — POST /orgs/{org}/import/suppression (#240):
+    // the migration importer needs to know what SES already refuses to mail,
+    // and nothing more.
+    //
+    // GetSuppressedDestination / PutSuppressedDestination — the per-address
+    // console actions (#247): GET /orgs/{org}/suppression/check (the console
+    // equivalent of `aws sesv2 get-suppressed-destination`) and the live mirror
+    // write inside subscriberSuppressHandler when a manual suppression is
+    // scoped GLOBAL. Deliberately NOT DeleteSuppressedDestination or a BULK
+    // write path — writing our WHOLE list into the operator's account list
+    // would change how their account behaves for every sender using it,
+    // including whatever they have not migrated yet (see ses-suppression.ts).
+    // A single deliberate write, one operator acting on one address they are
+    // looking at right now, audited on the way in, is a different risk shape
+    // entirely — closer to what an operator could already do by hand in the SES
+    // console than to a bulk import.
+    //
+    // Resource "*" for all three, because that is the only form SES accepts —
     // the account suppression list is an account-level singleton with no ARN to
-    // scope to. The narrowness here comes from the single action, not the
-    // resource.
+    // scope to. The narrowness here comes from which three actions are granted,
+    // not the resource.
     adminApiFn.addToRolePolicy(
-      new PolicyStatement({ actions: ["ses:ListSuppressedDestinations"], resources: ["*"] }),
+      new PolicyStatement({
+        actions: [
+          "ses:ListSuppressedDestinations",
+          "ses:GetSuppressedDestination",
+          "ses:PutSuppressedDestination",
+        ],
+        resources: ["*"],
+      }),
     );
     // POST /drip-sequences/enroll. Paired with the env var above: a function that
     // can reach the starter but cannot call it fails at runtime, inside a route.
@@ -1537,6 +1556,7 @@ export class ControlPlaneStack extends Stack {
     adminRoute("SubscriberAttrsFn", "subscriberAttributesHandler", HttpMethod.POST, "/subscribers/attributes");
     adminRoute("SubscriptionStatusFn", "subscriptionStatusHandler", HttpMethod.POST, "/subscribers/subscription");
     adminRoute("SuppressionsListFn", "suppressionsListHandler", HttpMethod.GET, "/orgs/{org}/suppressions");
+    adminRoute("SuppressionCheckFn", "suppressionCheckHandler", HttpMethod.GET, "/orgs/{org}/suppression/check");
     adminRoute("UnsuppressFn", "subscriberUnsuppressHandler", HttpMethod.POST, "/subscribers/unsuppress");
     // Subscriber migration (#100) + GDPR/CCPA data-subject requests (#101).
     adminRoute("ImportFn", "importHandler", HttpMethod.POST, "/orgs/{org}/import");
