@@ -244,11 +244,17 @@ test("a Reject and a Delivery for the same message do not share an eventId", () 
   assert.notEqual(reject.eventId, delivery.eventId);
 });
 
-test("Subscription stays unmapped, and it is the only SES type still dropped", () => {
-  // Deliberate: we never enable SES's own subscription page — unsubscribe is RFC
-  // 8058 through our handler — so an event about a preference we do not honour
-  // would write a row nothing reads.
+test("the two types still dropped are dropped deliberately", () => {
+  // `Subscription`: we never enable SES's own subscription page — unsubscribe is
+  // RFC 8058 through our handler (§4.4) — so an event about a preference we do not
+  // honour would write a row nothing reads.
   assert.equal(normalize({ eventType: "Subscription", mail: mail() }), undefined);
+  // `Send`: the send path writes its own `sent` event per recipient, which is the
+  // one available while a send is still in flight. Consuming SES's copy as well
+  // would double every `sent` counter in the product — and `sent` is the
+  // denominator of every rate in `deliverabilityRates`, so it would halve all of
+  // them at once.
+  assert.equal(normalize({ eventType: "Send", mail: mail() }), undefined);
 });
 
 // ---------------------------------------------------------------------------

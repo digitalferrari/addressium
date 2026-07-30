@@ -279,8 +279,16 @@ export class AwsProvisioningProviders implements ProvisioningProviders {
       Enabled: true,
       SnsDestination: { TopicArn: topicArn },
       // All types SES can publish. `DELIVERY` matters for accurate delivered
-      // counts; `REJECT`/`RENDERING_FAILURE`/`DELIVERY_DELAY` are recorded so a
-      // silent drop is visible even before a domain recorder exists for them.
+      // counts (#210); `REJECT`/`RENDERING_FAILURE`/`DELIVERY_DELAY` each have
+      // their own event type and counter as of #241 — subscribing here was
+      // already right, and that issue supplied the consumer that had been
+      // missing.
+      //
+      // `SEND` is subscribed but deliberately NOT consumed: the send path writes
+      // its own `sent` event per recipient (send.ts), which is the one we can
+      // count while a send is in flight. Acting on SES's copy too would double
+      // every `sent` counter in the product. Kept in the subscription so the
+      // Firehose analytics tier (§4.23) still sees the full stream.
       MatchingEventTypes: [
         "SEND",
         "DELIVERY",
