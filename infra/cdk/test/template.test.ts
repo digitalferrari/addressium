@@ -1569,3 +1569,63 @@ test("a rendering failure alarms while the send is still running (#241)", () => 
     "the rendering-failure alarm notifies nobody",
   );
 });
+
+test("the OpenSearch mirror is actually READ when it is enabled (#246)", () => {
+  // The mirror shipped write-only: a collection, a DynamoDB stream and an indexer
+  // Lambda, all billing, and no principal that ever queried the index. The sender
+  // built `GsiSegmentEngine` unconditionally, so the flag's advertised payoff was
+  // unreachable from the one path that sends mail.
+  const on = template({}, { enableOpenSearchMirror: "true" });
+  const senderEnv = (t: ReturnType<typeof template>): Record<string, string> => {
+    const fns = t.findResources("AWS::Lambda::Function");
+    const hit = Object.entries(fns).find(([k]) => k.startsWith("SenderFn"));
+    assert.ok(hit, "SenderFn exists");
+    return (
+      (hit[1].Properties as { Environment?: { Variables?: Record<string, string> } }).Environment
+        ?.Variables ?? {}
+    );
+  };
+  const aossActions = (t: ReturnType<typeof template>, prefix: string): string[] =>
+    policyFor(t, prefix)
+      .filter((s) => s.Effect !== "Deny")
+      .flatMap(actionsOf)
+      .filter((a) => a.startsWith("aoss:"));
+
+  assert.ok(senderEnv(on).OPENSEARCH_ENDPOINT, "the sender is not told where the collection is");
+  assert.deepEqual(aossActions(on, "SenderFn"), ["aoss:APIAccessAll"]);
+
+  // An IAM grant is only half of OpenSearch Serverless access — a principal
+  // missing from the collection's DATA-ACCESS policy gets a 403 with the IAM
+  // policy looking perfectly correct.
+  const access = Object.values(on.findResources("AWS::OpenSearchServerless::AccessPolicy"))[0];
+  assert.ok(access, "no data-access policy");
+  // `Policy` is an `Fn::Join`, not a string: the principals are role-ARN tokens,
+  // so CloudFormation assembles the JSON at deploy time. Serializing the whole
+  // structure is the only way to read what it will say.
+  const policy = JSON.stringify((access.Properties as { Policy: unknown }).Policy);
+  assert.ok(policy.includes("SenderFnServiceRole"), "the sender is not a principal on the collection");
+  assert.ok(
+    policy.includes("SegmentIndexerFnServiceRole"),
+    "the indexer lost its principal — the mirror would stop being fed",
+  );
+
+  // And the API must agree with the sender about which engine is live, or it
+  // will accept a segment the sender is guaranteed to throw on.
+  const adminEnv = (t: ReturnType<typeof template>): Record<string, string> => {
+    const fns = t.findResources("AWS::Lambda::Function");
+    const hit = Object.entries(fns).find(([k]) => k.startsWith("AdminApiFn"));
+    assert.ok(hit, "AdminApiFn exists");
+    return (
+      (hit[1].Properties as { Environment?: { Variables?: Record<string, string> } }).Environment
+        ?.Variables ?? {}
+    );
+  };
+  assert.equal(adminEnv(on).SEGMENT_ENGINE, "opensearch");
+
+  // Off by default: no endpoint, no grant, and the API says so — otherwise the
+  // save path would accept predicates the GSI engine cannot resolve.
+  const off = template();
+  assert.equal(senderEnv(off).OPENSEARCH_ENDPOINT, undefined);
+  assert.deepEqual(aossActions(off, "SenderFn"), []);
+  assert.equal(adminEnv(off).SEGMENT_ENGINE, "gsi");
+});

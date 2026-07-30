@@ -21,6 +21,7 @@ import {
   getSecret,
   sanitizeEmailHtml,
 } from "@addressium/adapters-aws";
+import { gsiEngineLimitation, type SegmentPredicate } from "@addressium/segment";
 import { InvokeCommand, LambdaClient } from "@aws-sdk/client-lambda";
 import {
   schemas,
@@ -849,6 +850,26 @@ export async function segmentsHandler(event: HttpEvent): Promise<HttpResult> {
     if (method === "POST") {
       const input = schemas.saveSegmentSchema.parse(JSON.parse(event.body ?? "{}"));
       requireGrant(event, "segments:manage", input.orgId);
+      // Refuse a predicate THIS deployment's engine cannot resolve (#246).
+      //
+      // The schema accepts engagement recency and base-list-free predicates, and
+      // the console's builder offers them, but the v1 GSI engine throws on both.
+      // Without this the operator finds out at SEND time — from a campaign that
+      // has already claimed itself — for a segment the product let them save.
+      // The OpenSearch mirror lifts both limits, so the answer depends on which
+      // engine is actually deployed; `SEGMENT_ENGINE` says which.
+      if (process.env.SEGMENT_ENGINE !== "opensearch") {
+        const limitation = gsiEngineLimitation(input.predicate as SegmentPredicate);
+        if (limitation) {
+          return json(400, {
+            error: limitation,
+            // Named, because the fix is an operator decision rather than a
+            // rewrite of the segment: this deployment can support the predicate
+            // as written, with a flag it is not currently running.
+            hint: "deploy with -c enableOpenSearchMirror=true to use this predicate, or add a `list in <listId>` condition",
+          });
+        }
+      }
       return json(200, await saveSegment(stores(), input));
     }
     const orgId = event.pathParameters?.org ?? "";

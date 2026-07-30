@@ -34,7 +34,7 @@ export { SnsAlertPublisher } from "./sns.js";
 export { AwsProvisioningProviders } from "./provisioning.js";
 export { S3AuditLog } from "./s3audit.js";
 export { S3ExportWriter, type ExportUpload } from "./s3export.js";
-export { OpenSearchBulkWriter } from "./opensearch.js";
+export { OpenSearchBulkWriter, OpenSearchQueryClient } from "./opensearch.js";
 export { GoogleRecaptchaVerifier } from "./recaptcha.js";
 export { sanitizeEmailHtml } from "./sanitize.js";
 export { CognitoSubscriberAccounts } from "./cognito-accounts.js";

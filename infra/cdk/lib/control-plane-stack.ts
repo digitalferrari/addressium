@@ -881,6 +881,17 @@ export class ControlPlaneStack extends Stack {
     );
     senderFn.addToRolePolicy(sesSendScoped());
     sendQueue.grantSendMessages(senderFn); // fan-out slices back onto the queue
+    // Which segment engine this deployment resolves with (#246). ONE expression
+    // feeding both consumers, because they must never disagree: the sender picks
+    // the engine, and the admin API refuses to SAVE a predicate that engine
+    // cannot resolve. If the API believed OpenSearch were live while the sender
+    // used the GSI engine, the product would accept a segment guaranteed to
+    // throw mid-campaign — precisely the #246 failure, one layer up.
+    //
+    // The sender additionally gets OPENSEARCH_ENDPOINT below, inside the
+    // `enableOpenSearchMirror` block, because that is where the collection it
+    // names actually exists.
+    const segmentEngine = enableOpenSearchMirror ? "opensearch" : "gsi";
     const eventsFn = fn("EventsFn", svc("services/events/src/index.ts"), "handler");
 
     // Launch handler for recurring series (EventBridge Scheduler target, §4.16).
@@ -1275,6 +1286,11 @@ export class ControlPlaneStack extends Stack {
       // Team management (#226) acts on OUR admin pool, not the operator's
       // subscriber directory.
       ADMIN_POOL_ID: adminPool.userPoolId,
+      // Which engine the SENDER will resolve with (#246) — not a grant, just the
+      // fact. `segmentsHandler` uses it to refuse a predicate that engine cannot
+      // resolve, so an operator learns at save time rather than mid-campaign.
+      // Deliberately the same `segmentEngine` value the sender's wiring reads.
+      SEGMENT_ENGINE: segmentEngine,
       // Scopes the health check to THIS deployment's alarms; every alarm this
       // stack creates is named with the construct id prefix.
       ALARM_PREFIX: `${Stack.of(this).stackName}-`,
@@ -1920,10 +1936,21 @@ export class ControlPlaneStack extends Stack {
               { ResourceType: "index", Resource: [`index/${collName}/*`], Permission: ["aoss:*"] },
               { ResourceType: "collection", Resource: [`collection/${collName}`], Permission: ["aoss:*"] },
             ],
-            Principal: [indexerFn.role?.roleArn],
+            // The sender READS the mirror (#246); the indexer writes it. Before
+            // this the collection had exactly one principal and nothing queried
+            // the index it was billing for.
+            Principal: [indexerFn.role?.roleArn, senderFn.role?.roleArn],
           },
         ]),
       });
+      // The read half (#246). Set only inside this block: the sender selects its
+      // engine on the presence of this variable, so it exists if and only if the
+      // collection does — the two cannot drift into a sender that believes in an
+      // index nobody created.
+      senderFn.addEnvironment("OPENSEARCH_ENDPOINT", collection.attrCollectionEndpoint);
+      senderFn.addToRolePolicy(
+        new PolicyStatement({ actions: ["aoss:APIAccessAll"], resources: [collection.attrArn] }),
+      );
       new CfnOutput(this, "SegmentCollectionEndpoint", { value: collection.attrCollectionEndpoint });
     }
 

@@ -9,6 +9,7 @@
 import {
   DynamoStores,
   KmsMagicLinkSigner,
+  OpenSearchQueryClient,
   SesEmailSender,
   SqsSendQueue,
   getSecret,
@@ -21,7 +22,7 @@ import {
   sendCampaign,
   type SendDescriptor,
 } from "@addressium/domain";
-import { GsiSegmentEngine } from "@addressium/segment";
+import { GsiSegmentEngine, OpenSearchSegmentEngine, type SegmentEngine } from "@addressium/segment";
 
 export interface SqsEvent {
   Records: Array<{ body: string; messageId?: string }>;
@@ -39,14 +40,34 @@ const stores = () => (_stores ??= new DynamoStores(env("TABLE_NAME")));
 let _queue: SqsSendQueue | undefined;
 const queue = () => (_queue ??= new SqsSendQueue(env("SEND_QUEUE_URL")));
 /**
- * Resolves a segment-targeted campaign to its members (#203).
+ * Resolves a segment-targeted campaign to its members (#203, #246).
  *
- * The v1 GSI engine, matching what the console's segment picker offers. Without
- * one wired here `sendCampaign` throws on a segment-targeted descriptor rather
- * than mailing the whole list, which is the direction that cannot be undone.
+ * Whichever engine the deployment actually has. Without one wired here
+ * `sendCampaign` throws on a segment-targeted descriptor rather than mailing the
+ * whole list, which is the direction that cannot be undone.
+ *
+ * This used to be `new GsiSegmentEngine(stores())` unconditionally, and it was
+ * the only non-test construction of any engine in the repo (#246). So the
+ * OpenSearch mirror — collection, DynamoDB stream, indexer Lambda, all created by
+ * `enableOpenSearchMirror` and all billing — was written to and never read.
+ * `packages/segment/src/index.ts:124` throws on an engagement predicate, and it
+ * threw *regardless of how the stack was deployed*, which made the flag's entire
+ * advertised payoff (engagement recency, predicates with no base list)
+ * unreachable from the one path that sends mail.
+ *
+ * Selected on `OPENSEARCH_ENDPOINT` rather than a separate boolean: the CDK sets
+ * that variable if and only if it created the collection, so the two cannot drift
+ * into a state where the sender believes in an index that does not exist.
  */
-let _segments: GsiSegmentEngine | undefined;
-const segments = () => (_segments ??= new GsiSegmentEngine(stores()));
+let _segments: SegmentEngine | undefined;
+const segments = (): SegmentEngine =>
+  (_segments ??= process.env.OPENSEARCH_ENDPOINT
+    ? new OpenSearchSegmentEngine(new OpenSearchQueryClient(process.env.OPENSEARCH_ENDPOINT))
+    : new GsiSegmentEngine(stores()));
+
+/** Which engine this deployment resolves segments with — for the save-time guard (#246). */
+export const activeSegmentEngine = (): "opensearch" | "gsi" =>
+  process.env.OPENSEARCH_ENDPOINT ? "opensearch" : "gsi";
 /**
  * Numeric env with a fail-fast guard. `Number("typo")` is NaN, and `NaN <= 0` is
  * false — so a malformed value slipped past every downstream guard: a NaN rate

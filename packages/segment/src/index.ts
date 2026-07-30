@@ -56,6 +56,37 @@ export interface SegmentEngine {
  */
 export * from "./opensearch.js";
 
+export const GSI_NO_BASE_LIST = "v1 segment engine requires a `list in <listId>` base condition";
+export const GSI_NO_ENGAGEMENT =
+  "engagement predicates are not supported by the v1 segment engine (#28)";
+
+/**
+ * Why the v1 GSI engine cannot resolve this predicate, or undefined if it can
+ * (#246).
+ *
+ * Extracted from `resolve` so the SAVE path can ask the same question the SEND
+ * path answers, from the same code. It matters that these are one function: the
+ * console offers engagement recency in its segment builder and the save schema
+ * accepts it, so before #246 an operator could store a predicate that was
+ * guaranteed to throw — and find out mid-campaign, from a send that had already
+ * claimed itself. Two copies of this rule would put that failure back the first
+ * time one of them changed.
+ *
+ * The OpenSearch engine has neither limitation, which is exactly why the answer
+ * depends on which engine the deployment actually runs.
+ */
+export function gsiEngineLimitation(predicate: SegmentPredicate): string | undefined {
+  // An explicit cohort names its members outright — no engine resolves it by
+  // query, so neither engine's limits apply.
+  if (isExplicit(predicate)) return undefined;
+  if (predicate.conditions.some((c) => c.field === "last_open_at")) return GSI_NO_ENGAGEMENT;
+  // `match: "any"` fans out per condition and needs no base set; only the
+  // intersecting form ranges over one list.
+  if (predicate.match === "any") return undefined;
+  const hasBase = predicate.conditions.some((c) => c.field === "list" && c.op === "in");
+  return hasBase ? undefined : GSI_NO_BASE_LIST;
+}
+
 export class GsiSegmentEngine implements SegmentEngine {
   constructor(private readonly stores: Stores) {}
 
@@ -92,12 +123,11 @@ export class GsiSegmentEngine implements SegmentEngine {
       }
       return;
     }
+    const limitation = gsiEngineLimitation(predicate);
+    if (limitation) throw new Error(limitation);
     const listCond = predicate.conditions.find(
       (c): c is { field: "list"; op: "in"; value: string } => c.field === "list" && c.op === "in",
-    );
-    if (!listCond) {
-      throw new Error("v1 segment engine requires a `list in <listId>` base condition");
-    }
+    )!;
     const base: Subscription[] = await this.stores.subscriptions.listConfirmed(orgId, listCond.value);
     for (const sub of base) {
       const subscriber = await this.stores.subscribers.get(orgId, sub.subscriberId);
@@ -121,7 +151,10 @@ export class GsiSegmentEngine implements SegmentEngine {
         case "status":
           return subscription.status === c.value;
         case "last_open_at":
-          throw new Error("engagement predicates are not supported by the v1 segment engine (#28)");
+          // Unreachable via `resolve`, which rejects the predicate up front via
+          // `gsiEngineLimitation`. Kept as the second line for any caller that
+          // reaches `matches` another way.
+          throw new Error(GSI_NO_ENGAGEMENT);
         default: {
           // `Object.hasOwn`, not `attributes[field] !== undefined` (#195):
           // indexing walks the prototype chain, so `field: "constructor"` with

@@ -15,6 +15,9 @@
       "path": "../../packages/rbac"
     },
     {
+      "path": "../../packages/segment"
+    },
+    {
       "path": "../../packages/domain"
     },
     {
