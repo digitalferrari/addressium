@@ -449,8 +449,6 @@
           <div class="field"><label>Password</label><input type="password" value="••••••••••••"></div>
           <a class="flink" href="#" onclick="return false">Forgot your password?</a>
           <button class="btn btn-primary" style="justify-content:center;padding:11px" type="submit">Sign in</button>
-          <div class="or">Single sign-on</div>
-          <button class="btn" style="justify-content:center" type="button" onclick="go('admin','dashboard')">Continue with Google Workspace</button>
         </form>
         <div class="foot" style="margin-top:16px"><span class="mfa">🔐 MFA required · TOTP</span></div>
       </div>
@@ -471,7 +469,7 @@
       </div>
       <div class="navlab">Overview</div>
       <div class="navlink on" data-screen="dashboard" onclick="nav('dashboard')"><span class="ic">▤</span> Dashboard</div>
-      <div class="navlink" data-screen="analytics" onclick="nav('analytics')"><span class="ic">◔</span> Analytics <span class="tag">click map</span></div>
+      <div class="navlink" data-screen="analytics" onclick="nav('analytics')"><span class="ic">◔</span> Analytics <span class="tag">click table</span></div>
       <div class="navlab">Audience</div>
       <div class="navlink" data-screen="newsletters" onclick="nav('newsletters')"><span class="ic">✉</span> Newsletters</div>
       <div class="navlink" data-screen="subscribers" onclick="nav('subscribers')"><span class="ic">◎</span> Subscribers</div>
@@ -491,6 +489,7 @@
       <div class="navlab">Configure</div>
       <div class="navlink" data-screen="organizations" onclick="nav('organizations')"><span class="ic">◈</span> Organizations</div>
       <div class="navlink" data-screen="roles" onclick="nav('roles')"><span class="ic">⚑</span> Roles &amp; access</div>
+      <div class="navlink" data-screen="branding" onclick="nav('branding')"><span class="ic">◐</span> Branding</div>
       <div class="navlink" data-screen="usage" onclick="nav('usage')"><span class="ic">◨</span> Usage &amp; cost</div>
       <div class="navlink" data-screen="settings" onclick="nav('settings')"><span class="ic">⚙</span> Settings</div>
       <div class="navlink" data-screen="audit" onclick="nav('audit')"><span class="ic">☷</span> Audit log</div>
@@ -506,24 +505,24 @@
         <div class="crumbs"><span id="crumbOrg">Northwind Times</span> / <b id="crumb">Dashboard</b></div>
         <div class="searchbox">🔍 <input placeholder="Search subscribers, campaigns, segments…"></div>
         <div style="flex:1"></div>
-        <button class="btn btn-sm" id="sbxBtn" onclick="toggleSandbox()" title="Toggle sandbox mode"><span id="sbxDot" style="color:var(--good)">●</span>&nbsp;Live</button>
-        <div class="envchip">us-east-1 · prod</div>
+        <div class="envchip"><span class="pill p-good" id="envPill" style="padding:1px 7px" title="Organization.environment — a dev org is a full silo with a fail-closed send allowlist"><span class="dot"></span>PROD</span> us-east-1</div>
         <button class="iconbtn" title="Notifications">🔔</button>
         <div class="avatar">DA</div>
       </div>
-      <div id="sbxBanner" style="display:none;background:var(--warn-soft);color:var(--warn);padding:9px 26px;font-size:12.5px;font-weight:650;border-bottom:1px solid var(--border)">⚠ Sandbox mode — campaigns send only to seed/test addresses. No real subscribers are emailed and stats are simulated.</div>
+      <div style="background:var(--surface-2);color:var(--ink-3);padding:9px 26px;font-size:12px;border-bottom:1px solid var(--border)">Design reference — illustrative data, no backend. addressium is pre-1.0 and has <b>never been deployed to a real AWS account</b>. Anything carrying <span class="pill p-warn">Not yet built</span> is a design the code does not implement yet.</div>
 
       <div class="content">
 
         <!-- DASHBOARD -->
         <section class="screen on" data-screen="dashboard">
           <div class="pagehead">
-            <div><h1>Dashboard</h1><p>Sending health and audience at a glance — last 30 days.</p></div>
+            <div><h1>Dashboard <span class="pill p-good" style="vertical-align:middle;margin-left:4px"><span class="dot"></span>System health: OK</span></h1><p>Sending health and audience at a glance — last 30 days. The health badge is one derived value from <span class="mono">GET /orgs/{org}/health</span>; raw CloudWatch alarms deliberately stay out of a marketing console.</p></div>
             <div class="row">
-              <button class="btn">Export</button>
+              <button class="btn" onclick="nav('data')">Export</button>
               <button class="btn btn-primary" onclick="nav('compose')">＋ New campaign</button>
             </div>
           </div>
+          <div class="row" style="justify-content:space-between"><div class="eyebrow">Audience &amp; sending · rolling 30 days</div><span class="pill p-warn">Not yet built</span></div>
           <div class="kpis">
             <div class="kpi card"><span class="lab">Total subscribers</span><span class="val num">128,430</span><span class="delta up">▲ 3.1% vs last mo.</span></div>
             <div class="kpi card"><span class="lab">Emails sent (30d)</span><span class="val num">2.41M</span><span class="delta up">▲ 8.4%</span></div>
@@ -532,8 +531,9 @@
           </div>
           <div class="grid2">
             <div class="card">
-              <div class="cardhead"><h3>Sends &amp; engagement</h3><div class="tabs"><button class="on">30d</button><button>90d</button><button>1y</button></div></div>
-              <div class="cardpad">
+              <div class="cardhead"><h3>Sends &amp; engagement</h3><span class="pill p-warn">Not yet built</span></div>
+              <div class="cardpad" style="display:flex;flex-direction:column;gap:12px">
+                <div class="note warn"><span class="ic">⚠</span><div>Trend charts over time — list growth, deliverability and engagement — are <b>not yet built</b>. What ships today is the per-campaign report: counters, rates and the per-link click table. <span class="flink" style="font-weight:600;cursor:pointer" onclick="nav('analytics')">See a real report →</span></div></div>
                 <svg class="spark" width="100%" height="150" viewBox="0 0 560 150" preserveAspectRatio="none">
                   <defs><linearGradient id="g1" x1="0" y1="0" x2="0" y2="1">
                     <stop offset="0" stop-color="var(--accent)" stop-opacity=".28"/><stop offset="1" stop-color="var(--accent)" stop-opacity="0"/></linearGradient></defs>
@@ -547,16 +547,17 @@
               </div>
             </div>
             <div class="card">
-              <div class="cardhead"><h3>Deliverability</h3><span class="pill p-good"><span class="dot"></span> Healthy</span></div>
+              <div class="cardhead"><h3>Deliverability · latest edition</h3><span class="pill p-good"><span class="dot"></span> Healthy</span></div>
               <div class="health">
                 <div class="hrow"><span style="width:96px;font-size:12.5px;font-weight:600">Delivered</span><span class="hbar"><i style="width:99.2%;background:var(--good)"></i></span><span class="hv num">99.2%</span></div>
                 <div class="hrow"><span style="width:96px;font-size:12.5px;font-weight:600">Bounces</span><span class="hbar"><i style="width:6%;background:var(--warn)"></i></span><span class="hv num">0.6%</span></div>
                 <div class="hrow"><span style="width:96px;font-size:12.5px;font-weight:600">Complaints</span><span class="hbar"><i style="width:3%;background:var(--crit)"></i></span><span class="hv num">0.03%</span></div>
                 <hr class="divider">
-                <div class="kv"><dt>DKIM</dt><dd><span class="pill p-good"><span class="dot"></span>Passing</span></dd>
-                <dt>SPF</dt><dd><span class="pill p-good"><span class="dot"></span>Passing</span></dd>
-                <dt>DMARC</dt><dd><span class="pill p-good"><span class="dot"></span>p=reject</span></dd>
-                <dt>SES quota</dt><dd class="num">312k / day · 340 msg/s</dd></div>
+                <div class="kv"><dt>Complaint rule</dt><dd>warn 0.1% · <b>halt 0.3%</b></dd>
+                <dt>Bounce rule</dt><dd>warn 2% · <b>halt 5%</b></dd>
+                <dt>Auto-halt</dt><dd><span class="pill p-good"><span class="dot"></span>Armed</span></dd>
+                <dt>Org setup</dt><dd><span class="pill p-good"><span class="dot"></span>3 / 3 required</span></dd></div>
+                <div class="muted" style="font-size:12px">Rates are the Jul 20 edition’s own counters, not a 30-day aggregate. The thresholds come from <span class="mono">GET /orgs/{org}/alerts</span>, the setup line from <span class="mono">GET /orgs/{org}/setup</span>. DKIM/SPF/DMARC state and the SES send quota are <b>not readable</b> — see <span class="flink" style="font-weight:600;cursor:pointer" onclick="nav('settings')">Settings → Domains</span>.</div>
               </div>
             </div>
           </div>
@@ -578,7 +579,7 @@
           <div class="card"><table>
             <thead><tr><th>Newsletter</th><th>Opt-in</th><th>Subscribers</th><th>From address</th><th>Cadence</th><th>Access</th><th>Signups</th><th></th></tr></thead>
             <tbody>
-              <tr><td class="t-strong">The Morning Ledger</td><td><span class="pill p-accent">Double opt-in</span></td><td class="num">96,204</td><td class="mono muted">ledger@northwindtimes.example</td><td>Daily · 6am ET</td><td><span class="pill p-neutral">Free</span></td><td><span class="pill p-good vis"><span class="dot"></span>Open</span></td><td><button class="btn btn-ghost btn-sm" onclick="toggleClose(this)">Close</button></td></tr>
+              <tr><td class="t-strong">The Morning Ledger</td><td><span class="pill p-accent">Double opt-in</span></td><td class="num">97,408</td><td class="mono muted">ledger@northwindtimes.example</td><td>Daily · 6am ET</td><td><span class="pill p-neutral">Free</span></td><td><span class="pill p-good vis"><span class="dot"></span>Open</span></td><td><button class="btn btn-ghost btn-sm" onclick="toggleClose(this)">Close</button></td></tr>
               <tr><td class="t-strong">Market Signal</td><td><span class="pill p-accent">Double opt-in</span></td><td class="num">8,410</td><td class="mono muted">signal@northwindtimes.example</td><td>Weekly</td><td><span class="pill p-paid"><span class="dot"></span>Paid</span></td><td><span class="pill p-good vis"><span class="dot"></span>Open</span></td><td><button class="btn btn-ghost btn-sm" onclick="toggleClose(this)">Close</button></td></tr>
               <tr><td class="t-strong">Field Notes</td><td><span class="pill p-accent">Double opt-in</span></td><td class="num">54,880</td><td class="mono muted">notes@northwindtimes.example</td><td>Weekly · Thu</td><td><span class="pill p-neutral">Free</span></td><td><span class="pill p-good vis"><span class="dot"></span>Open</span></td><td><button class="btn btn-ghost btn-sm" onclick="toggleClose(this)">Close</button></td></tr>
               <tr><td class="t-strong">Weekend Long Read</td><td><span class="pill p-accent">Double opt-in</span></td><td class="num">61,300</td><td class="mono muted">read@northwindtimes.example</td><td>Weekly · Sat</td><td><span class="pill p-neutral">Free</span></td><td><span class="pill p-good vis"><span class="dot"></span>Open</span></td><td><button class="btn btn-ghost btn-sm" onclick="toggleClose(this)">Close</button></td></tr>
@@ -589,7 +590,8 @@
 
         <!-- SUBSCRIBERS -->
         <section class="screen" data-screen="subscribers">
-          <div class="pagehead"><div><h1>Subscribers</h1><p>Every subscriber is a Cognito account (shared pool) keyed by <span class="mono">sub</span>. Click a row to view, manually unsubscribe, or suppress.</p></div><div class="row"><button class="btn" onclick="nav('data')">Import / export</button><button class="btn btn-primary">＋ Add subscriber</button></div></div>
+          <div class="pagehead"><div><h1>Subscribers</h1><p>The addressium subscriber record is the primary identity — <span class="mono">sub</span> is a UUID minted at signup. A Cognito pool is optional and link-only, joined on <span class="mono">externalId</span>; no pool has to exist anywhere to run a list. Click a row to view, manually unsubscribe, or suppress.</p></div><div class="row"><button class="btn btn-primary" onclick="nav('data')">Import / export</button></div></div>
+          <div class="note info"><span class="ic">▹</span><div><b>There is no “add subscriber” here, on purpose.</b> A subscriber is created by a <b>public signup</b> (which captures the consent timestamp, IP and source URL), by an <b>import</b> (which makes you declare the consent basis first), or by the <b>identity webhook</b> matched on <span class="mono">externalId</span> — never by an operator typing an address into the console, because that record would carry no consent evidence at all. The same rule shows up in segments: adding an address to an explicit cohort that is not already a subscriber is <b>rejected rather than created</b>. The admin routes here read, unsubscribe and suppress; none of them creates.</div></div>
           <div class="toolbar">
             <div class="searchbox" style="max-width:280px">🔍 <input placeholder="Email or name"></div>
             <button class="filterchip on">All</button>
@@ -600,41 +602,44 @@
             <div style="flex:1"></div><span class="muted" style="font-size:12.5px">128,430 people</span>
           </div>
           <div class="card"><table>
-            <thead><tr><th>Subscriber</th><th>Status</th><th>Entitlement</th><th>Lists</th><th>Last open</th><th>Cognito sub</th></tr></thead>
+            <thead><tr><th>Subscriber</th><th>Status</th><th>Entitlement</th><th>Lists</th><th><span title="Subscriber.lastEngagedAt — advanced on CLICKS only. Opens are deliberately not counted: Apple Mail Privacy Protection auto-opens make them noise. There is no per-subscriber open-recency field.">Last click</span></th><th><span title="Subscriber.sub — addressium's own id">sub</span></th></tr></thead>
             <tbody>
-              <tr style="cursor:pointer" onclick="nav('subscriber-detail')"><td><div class="cellwho"><span class="avatar-sm">JR</span><div><div class="t-strong">Jordan Reyes</div><div class="muted mono" style="font-size:11.5px">jordan.reyes@gmail.com</div></div></div></td><td><span class="pill p-good"><span class="dot"></span>Confirmed</span></td><td><span class="pill p-paid"><span class="dot"></span>Paid</span></td><td class="num">3</td><td>2h ago</td><td class="mono muted" style="font-size:11.5px">a1f3…9c2</td></tr>
-              <tr><td><div class="cellwho"><span class="avatar-sm">MO</span><div><div class="t-strong">Mei Okafor</div><div class="muted mono" style="font-size:11.5px">mei@okafor.studio</div></div></div></td><td><span class="pill p-good"><span class="dot"></span>Confirmed</span></td><td><span class="pill p-neutral">Free</span></td><td class="num">2</td><td>1d ago</td><td class="mono muted" style="font-size:11.5px">7be0…14a</td></tr>
-              <tr><td><div class="cellwho"><span class="avatar-sm">TS</span><div><div class="t-strong">Tomás Silva</div><div class="muted mono" style="font-size:11.5px">tsilva@proton.me</div></div></div></td><td><span class="pill p-warn"><span class="dot"></span>Pending</span></td><td><span class="pill p-neutral">Free</span></td><td class="num">1</td><td>—</td><td class="mono muted" style="font-size:11.5px">c40d…8f1</td></tr>
-              <tr><td><div class="cellwho"><span class="avatar-sm">AH</span><div><div class="t-strong">Aisha Hassan</div><div class="muted mono" style="font-size:11.5px">aisha.h@outlook.com</div></div></div></td><td><span class="pill p-good"><span class="dot"></span>Confirmed</span></td><td><span class="pill p-paid"><span class="dot"></span>Paid</span></td><td class="num">4</td><td>5h ago</td><td class="mono muted" style="font-size:11.5px">2d99…30b</td></tr>
-              <tr><td><div class="cellwho"><span class="avatar-sm">DK</span><div><div class="t-strong">Daniel Kim</div><div class="muted mono" style="font-size:11.5px">dan.kim@gmail.com</div></div></div></td><td><span class="pill p-crit"><span class="dot"></span>Unsubscribed</span></td><td><span class="pill p-neutral">Free</span></td><td class="num">0</td><td>12d ago</td><td class="mono muted" style="font-size:11.5px">5aa1…7e4</td></tr>
+              <tr style="cursor:pointer" onclick="nav('subscriber-detail')"><td><div class="cellwho"><span class="avatar-sm">JR</span><div><div class="t-strong">Jordan Reyes</div><div class="muted mono" style="font-size:11.5px">jordan.reyes@example.com</div></div></div></td><td><span class="pill p-good"><span class="dot"></span>Confirmed</span></td><td><span class="pill p-paid"><span class="dot"></span>Paid</span></td><td class="num">3</td><td>2h ago</td><td class="mono muted" style="font-size:11.5px">a1f3…9c2</td></tr>
+              <tr><td><div class="cellwho"><span class="avatar-sm">MO</span><div><div class="t-strong">Mei Okafor</div><div class="muted mono" style="font-size:11.5px">mei@okafor.example</div></div></div></td><td><span class="pill p-good"><span class="dot"></span>Confirmed</span></td><td><span class="pill p-neutral">Free</span></td><td class="num">2</td><td>1d ago</td><td class="mono muted" style="font-size:11.5px">7be0…14a</td></tr>
+              <tr><td><div class="cellwho"><span class="avatar-sm">TS</span><div><div class="t-strong">Tomás Silva</div><div class="muted mono" style="font-size:11.5px">tsilva@silva.example</div></div></div></td><td><span class="pill p-warn"><span class="dot"></span>Pending</span></td><td><span class="pill p-neutral">Free</span></td><td class="num">1</td><td>—</td><td class="mono muted" style="font-size:11.5px">c40d…8f1</td></tr>
+              <tr><td><div class="cellwho"><span class="avatar-sm">AH</span><div><div class="t-strong">Aisha Hassan</div><div class="muted mono" style="font-size:11.5px">aisha.h@example.com</div></div></div></td><td><span class="pill p-good"><span class="dot"></span>Confirmed</span></td><td><span class="pill p-paid"><span class="dot"></span>Paid</span></td><td class="num">4</td><td>5h ago</td><td class="mono muted" style="font-size:11.5px">2d99…30b</td></tr>
+              <tr><td><div class="cellwho"><span class="avatar-sm">DK</span><div><div class="t-strong">Daniel Kim</div><div class="muted mono" style="font-size:11.5px">dan.kim@example.com</div></div></div></td><td><span class="pill p-crit"><span class="dot"></span>Unsubscribed</span></td><td><span class="pill p-neutral">Free</span></td><td class="num">0</td><td>12d ago</td><td class="mono muted" style="font-size:11.5px">5aa1…7e4</td></tr>
             </tbody>
           </table></div>
         </section>
 
         <!-- SEGMENTS -->
         <section class="screen" data-screen="segments">
-          <div class="pagehead"><div><h1>Segments</h1><p>Saved filters over attributes and engagement. Resolved at send time via GSIs + materialized tags.</p></div><button class="btn btn-primary">＋ New segment</button></div>
+          <div class="pagehead"><div><h1>Segments</h1><p>Saved predicates over lists, status and attributes. The engine is chosen at deploy time: the <b>v1 GSI engine</b> (shipped default) needs a base list and cannot resolve engagement recency. The opt-in <b>OpenSearch mirror</b> lifts the base-list requirement; engagement recency is <b>not resolvable on either engine</b> today — see the builder.</p></div><button class="btn btn-primary">＋ New segment</button></div>
           <div class="grid2">
             <div class="card"><table>
-              <thead><tr><th>Segment</th><th>Size</th><th>Basis</th></tr></thead>
+              <thead><tr><th>Segment</th><th>Size</th><th>Basis</th><th>Engine</th></tr></thead>
               <tbody>
-                <tr><td class="t-strong">Engaged — opened last 30d</td><td class="num">71,220</td><td class="muted">engagement</td></tr>
-                <tr><td class="t-strong">Paid subscribers</td><td class="num">14,860</td><td class="muted">entitlement = paid</td></tr>
-                <tr><td class="t-strong">Lapsed — no open 90d</td><td class="num">18,940</td><td class="muted">engagement</td></tr>
-                <tr><td class="t-strong">NYC metro</td><td class="num">9,410</td><td class="muted">attribute · city</td></tr>
+                <tr><td class="t-strong">Paid subscribers</td><td class="num">14,860</td><td class="muted">list + entitlement = paid</td><td><span class="pill p-good">GSI</span></td></tr>
+                <tr><td class="t-strong">NYC metro</td><td class="num">9,410</td><td class="muted">list + attribute · city</td><td><span class="pill p-good">GSI</span></td></tr>
+                <tr><td class="t-strong">Launch test cohort</td><td class="num">42</td><td class="muted">explicit · 42 subscriber ids</td><td><span class="pill p-good">any</span></td></tr>
               </tbody>
-            </table></div>
+            </table>
+            <div class="note info" style="margin:0 14px 14px"><span class="ic">▹</span><div>An <b>explicit cohort</b> is a list of subscriber ids, not addresses — but <b>membership is not consent</b>. The resolved set is intersected with the list's confirmed subscriptions and never used in their place, and adding an address that is not already a subscriber is rejected rather than created.</div></div>
+            </div>
             <div class="card cardpad">
-              <div class="eyebrow">Segment builder</div>
+              <div class="row" style="justify-content:space-between"><div class="eyebrow">Segment builder</div><span class="pill p-crit">Save refused · 400</span></div>
               <h3 style="margin:8px 0 14px;font-size:15px">Lapsed — no open 90d</h3>
               <div style="display:flex;flex-direction:column;gap:10px">
                 <div class="note info"><span class="ic">▹</span><div>Match <b>ALL</b> of the following</div></div>
                 <div class="row"><span class="pill p-neutral">List</span> is <span class="pill p-accent">The Morning Ledger</span></div>
                 <div class="row"><span class="pill p-neutral">Status</span> is <span class="pill p-accent">Confirmed</span></div>
-                <div class="row"><span class="pill p-neutral">Last open</span> before <span class="pill p-accent">90 days ago</span></div>
+                <div class="row"><span class="pill p-neutral">Last open</span> before <span class="pill p-crit">90 days ago</span></div>
                 <button class="btn btn-ghost btn-sm" style="align-self:flex-start">＋ Add condition</button>
                 <hr class="divider">
-                <div class="row" style="justify-content:space-between"><span class="muted" style="font-size:12.5px">Estimated match</span><b class="num" style="font-size:18px">18,940</b></div>
+                <div class="note warn"><span class="ic">⚠</span><div><b>engagement predicates are not supported by the v1 segment engine (#28)</b><div style="margin-top:6px">deploy with <span class="mono">-c enableOpenSearchMirror=true</span> to use this predicate, or add a <span class="mono">list in &lt;listId&gt;</span> condition</div><div style="margin-top:6px">The two lines above are the API’s own 400 and hint, verbatim. Refused at <b>save</b> time, not send time — otherwise the first anyone hears of it is a campaign that has already claimed itself. The mirror is off in a default deployment.</div></div></div>
+                <div class="row" style="justify-content:space-between"><div class="eyebrow">Engagement recency, end to end</div><span class="pill p-warn">Not yet built</span></div>
+                <div class="note warn"><span class="ic">⚠</span><div><b>The flag is necessary but not sufficient — turning the mirror on would not make this segment work.</b> The mirror document has a <span class="mono">last_open_at</span> field and the mirror’s query builder can range over it, but the indexer never passes a value for it: it projects the subscriber and their confirmed lists and stops there, so <span class="mono">last_open_at</span> is always absent and the predicate would match <b>nobody</b>. There is also no open-recency field on the subscriber record to source it from — <span class="mono">lastEngagedAt</span> is clicks only, deliberately. So engagement-recency segmentation is <b>not yet built</b>, and the hint names the flag that would be the <i>first</i> step rather than the whole fix.</div></div>
               </div>
             </div>
           </div>
@@ -642,37 +647,26 @@
 
         <!-- CAMPAIGNS -->
         <section class="screen" data-screen="campaigns">
-          <div class="pagehead"><div><h1>Campaigns</h1><p>Ongoing series aggregate their editions for trend reporting; one-offs report individually. Recurring sends run on EventBridge Scheduler.</p></div><button class="btn btn-primary" onclick="nav('compose')">＋ New campaign</button></div>
+          <div class="pagehead"><div><h1>Campaigns</h1><p>One-offs and recurring series. Reporting is <b>per campaign</b>; recurring sends run on EventBridge Scheduler, and every schedule carries a lifecycle record that is the source of truth for whether it may fire.</p></div><button class="btn btn-primary" onclick="nav('compose')">＋ New campaign</button></div>
 
-          <div class="eyebrow">Ongoing series · last 30 days</div>
-          <div class="kpis" style="grid-template-columns:repeat(3,1fr)">
-            <div class="card cardpad" style="cursor:pointer;display:flex;flex-direction:column;gap:9px" onclick="nav('analytics')" title="View series report">
-              <div class="row" style="justify-content:space-between"><b style="font-size:14px">The Morning Ledger</b><span class="pill p-good"><span class="dot"></span>Daily</span></div>
-              <div class="row" style="gap:18px"><div><div class="muted" style="font-size:11px">Editions</div><b class="num">30</b></div><div><div class="muted" style="font-size:11px">Avg open</div><b class="num">43.6%</b></div><div><div class="muted" style="font-size:11px">Avg click</div><b class="num">8.1%</b></div></div>
-              <svg width="100%" height="30" viewBox="0 0 200 30" preserveAspectRatio="none"><path d="M0,22 L20,20 L40,23 L60,16 L80,18 L100,13 L120,16 L140,11 L160,14 L180,8 L200,10" fill="none" stroke="var(--accent)" stroke-width="2"/></svg>
-            </div>
-            <div class="card cardpad" style="cursor:pointer;display:flex;flex-direction:column;gap:9px" onclick="nav('analytics')" title="View series report">
-              <div class="row" style="justify-content:space-between"><b style="font-size:14px">Market Signal</b><span class="pill p-paid"><span class="dot"></span>Weekly · paid</span></div>
-              <div class="row" style="gap:18px"><div><div class="muted" style="font-size:11px">Editions</div><b class="num">4</b></div><div><div class="muted" style="font-size:11px">Avg open</div><b class="num">60.9%</b></div><div><div class="muted" style="font-size:11px">Avg click</div><b class="num">13.8%</b></div></div>
-              <svg width="100%" height="30" viewBox="0 0 200 30" preserveAspectRatio="none"><path d="M0,14 L50,12 L100,15 L150,9 L200,11" fill="none" stroke="var(--paid)" stroke-width="2"/></svg>
-            </div>
-            <div class="card cardpad" style="cursor:pointer;display:flex;flex-direction:column;gap:9px" onclick="nav('analytics')" title="View series report">
-              <div class="row" style="justify-content:space-between"><b style="font-size:14px">Field Notes</b><span class="pill p-good"><span class="dot"></span>Weekly</span></div>
-              <div class="row" style="gap:18px"><div><div class="muted" style="font-size:11px">Editions</div><b class="num">4</b></div><div><div class="muted" style="font-size:11px">Avg open</div><b class="num">39.2%</b></div><div><div class="muted" style="font-size:11px">Avg click</div><b class="num">6.4%</b></div></div>
-              <svg width="100%" height="30" viewBox="0 0 200 30" preserveAspectRatio="none"><path d="M0,16 L50,18 L100,14 L150,17 L200,13" fill="none" stroke="var(--accent)" stroke-width="2"/></svg>
-            </div>
-          </div>
+          <div class="note info"><span class="ic">▹</span><div><b>Start · pause · archive — never delete.</b> <span class="mono">POST /campaigns/lifecycle</span> moves a schedule between <span class="mono">active</span>, <span class="mono">paused</span> and <span class="mono">archived</span>. A paused series keeps ticking but builds no edition; a paused one-off is parked on its lifecycle record and re-enqueued on resume, so pausing never burns the idempotency claim. <b>Archive discards the parked send</b> — a terminal state that leaves something waiting to fire is not terminal. The EventBridge schedule and the record are never deleted.</div></div>
 
-          <div class="toolbar"><button class="filterchip on">All sends</button><button class="filterchip">Ongoing</button><button class="filterchip">One-off</button><button class="filterchip">Scheduled</button><div style="flex:1"></div><span class="muted" style="font-size:12.5px">recent sends</span></div>
+          <div class="toolbar"><button class="filterchip on">All sends</button><button class="filterchip">Ongoing</button><button class="filterchip">One-off</button><button class="filterchip">Scheduled</button><button class="filterchip">Paused</button><div style="flex:1"></div><span class="muted" style="font-size:12.5px">recent sends</span></div>
           <div class="card"><table>
             <thead><tr><th>Campaign</th><th>Type</th><th>Status</th><th>Audience</th><th>Open</th><th>Click</th><th>When</th><th></th></tr></thead>
             <tbody>
-              <tr style="cursor:pointer" onclick="nav('analytics')" title="View report"><td class="t-strong">The Morning Ledger — Jul 20</td><td><span class="pill p-neutral">Ongoing · Daily</span></td><td><span class="pill p-good"><span class="dot"></span>Sent</span></td><td class="num">96,204</td><td class="num">44.1%</td><td class="num">8.3%</td><td>2h ago</td><td><button class="btn btn-ghost btn-sm" onclick="event.stopPropagation()">Resend</button></td></tr>
-              <tr><td class="t-strong">Market Signal — Weekly Brief</td><td><span class="pill p-neutral">Ongoing · Weekly</span></td><td><span class="pill p-good"><span class="dot"></span>Sent</span></td><td class="num">8,410</td><td class="num">61.7%</td><td class="num">14.2%</td><td>Yesterday</td><td><button class="btn btn-ghost btn-sm">Resend</button></td></tr>
-              <tr><td class="t-strong">Weekend Long Read — Jul 20</td><td><span class="pill p-neutral">Ongoing · Weekly</span></td><td><span class="pill p-warn"><span class="dot"></span>Scheduled</span></td><td class="num">61,300</td><td class="muted">—</td><td class="muted">—</td><td>Sat 8:00 ET</td><td><button class="btn btn-ghost btn-sm">Reschedule</button></td></tr>
+              <tr style="cursor:pointer" onclick="nav('analytics')" title="View report"><td class="t-strong">The Morning Ledger — Jul 20</td><td><span class="pill p-neutral">Ongoing · Daily</span></td><td><span class="pill p-good"><span class="dot"></span>Sent</span></td><td class="num">96,204</td><td class="num">44.1%</td><td class="num">8.3%</td><td>2h ago</td><td><button class="btn btn-ghost btn-sm" onclick="event.stopPropagation()">Pause series</button></td></tr>
+              <tr><td class="t-strong">Market Signal — Weekly Brief</td><td><span class="pill p-neutral">Ongoing · Weekly</span></td><td><span class="pill p-good"><span class="dot"></span>Sent</span></td><td class="num">8,410</td><td class="num">61.7%</td><td class="num">14.2%</td><td>Yesterday</td><td><button class="btn btn-ghost btn-sm">Pause series</button></td></tr>
+              <tr><td class="t-strong">Weekend Long Read — Jul 20</td><td><span class="pill p-neutral">Ongoing · Weekly</span></td><td><span class="pill p-warn"><span class="dot"></span>Scheduled</span></td><td class="num">61,300</td><td class="muted">—</td><td class="muted">—</td><td>Sat 8:00 ET</td><td><button class="btn btn-ghost btn-sm">Pause</button></td></tr>
+              <tr><td class="t-strong">Field Notes — Jul 17</td><td><span class="pill p-neutral">Ongoing · Weekly</span></td><td><span class="pill p-neutral"><span class="dot"></span>Paused</span></td><td class="num">54,880</td><td class="muted">—</td><td class="muted">—</td><td>Held 2d</td><td><div class="row"><button class="btn btn-ghost btn-sm">Resume</button><button class="btn btn-ghost btn-sm" style="color:var(--crit)">Archive</button></div></td></tr>
               <tr><td class="t-strong">Product Dispatch — v4 launch</td><td><span class="pill p-accent">One-off</span></td><td><span class="pill p-neutral"><span class="dot"></span>Draft</span></td><td class="muted">—</td><td class="muted">—</td><td class="muted">—</td><td>3d ago</td><td><button class="btn btn-ghost btn-sm" onclick="nav('compose')">Edit</button></td></tr>
             </tbody>
           </table></div>
+
+          <div class="card cardpad" style="display:flex;flex-direction:column;gap:10px">
+            <div class="row" style="justify-content:space-between"><div class="eyebrow">Series-level reporting</div><span class="pill p-warn">Not yet built</span></div>
+            <p class="muted" style="margin:0;font-size:13px">A <span class="mono">CampaignSeries</span> type exists but no code writes one. There is no aggregate across editions — edition count, average open/click, trend — and no reschedule and no resend. Reporting today is per campaign, on the <span class="flink" style="font-weight:600;cursor:pointer" onclick="nav('analytics')">report screen</span>.</p>
+          </div>
         </section>
 
         <!-- COMPOSE / REVIEW -->
@@ -688,35 +682,39 @@
                 <div class="field" style="flex:1"><label>Template</label><select><option>Editorial — Daily (MJML)</option><option>Market Signal — Premium</option></select></div>
                 <div class="field" style="flex:1"><label>Send type</label><select><option>One-off</option><option>Recurring · daily</option><option>Recurring · weekly</option></select></div>
               </div>
-              <div class="note info"><span class="ic">✦</span><div><b>Magic-link on · 5 / 7 ad slots filled.</b> Editorial links get each recipient’s token; LiveIntent ad tags stay untouched. <span class="flink" style="color:var(--accent-ink);font-weight:600;cursor:pointer" onclick="nav('adtags')">Edit ad tags →</span></div></div>
+              <div class="note info"><span class="ic">✦</span><div><b>Magic-link on · 2 ad blocks in this template.</b> Editorial links get each recipient’s token; an ad block’s HTML is hard-sanitized when this campaign is scheduled, then inserted verbatim — never tokenized, never click-tracked, excluded from the click table. <span class="flink" style="color:var(--accent-ink);font-weight:600;cursor:pointer" onclick="nav('adtags')">Ad tags →</span></div></div>
             </div>
             <div class="card cardpad" style="display:flex;flex-direction:column;gap:12px">
               <div class="eyebrow">Review</div>
               <dl class="kv" style="grid-template-columns:auto 1fr;gap:10px 18px">
                 <dt>Newsletter</dt><dd>The Morning Ledger</dd>
-                <dt>Audience</dt><dd>Engaged — opened last 30d <span class="muted num">· 71,220</span></dd>
-                <dt>Suppressed</dt><dd class="num">1,204 <span class="muted">(bounces + complaints)</span></dd>
+                <dt>Audience</dt><dd>All confirmed <span class="muted num">· 97,408</span></dd>
+                <dt>Suppressed</dt><dd class="num">1,204 <span class="muted">(bounces + complaints) → <b class="num">96,204</b> mailable</span></dd>
                 <dt>From</dt><dd class="mono">ledger@northwindtimes.example</dd>
                 <dt>Unsubscribe</dt><dd><span class="pill p-good"><span class="dot"></span>One-click (RFC 8058)</span></dd>
-                <dt>Send</dt><dd>Now — throttled to 340 msg/s</dd>
+                <dt>Send</dt><dd>Now — placed <b>5 minutes out</b> · 340 msg/s</dd>
               </dl>
+              <div class="note info"><span class="ic">▹</span><div>“Send now” is still a one-off schedule, never earlier than <span class="mono">MIN_ONEOFF_LEAD_MS</span> — five minutes — so there is a window to pause before anything leaves.</div></div>
+              <div class="note info"><span class="ic">▹</span><div><b>One <span class="mono">SendEmail</span> per recipient, permanently.</b> <span class="mono">SendBulkEmail</span> would batch fifty at a time, but per-destination <span class="mono">Headers</span> do not exist on a bulk send — all fifty would share one <span class="mono">List-Unsubscribe</span>, and ours is per-subscriber. Batching would trade the one-click POST Gmail and Yahoo require for a cost saving. Not a gap; a decision.</div></div>
               <hr class="divider">
-              <div class="row" style="justify-content:flex-end"><button class="btn">Send test</button><button class="btn">Schedule</button><button class="btn btn-primary" onclick="nav('campaigns')">Send to 70,016 →</button></div>
+              <div class="note warn"><span class="ic">⚠</span><div><b>No “send test”.</b> There is no test-send route, handler or domain function anywhere — <span class="mono">POST /campaigns/schedule</span> mails a list, and nothing mails one address on request. §11 still lists it as an open question (“a rendering-preview service, or rely on test sends in v1”), so neither half is built. What you get instead is the <b>five-minute lead window</b> below and, on a dev org, a <b>fail-closed allowlist</b> that makes a real send reach only the addresses you named.</div></div>
+              <div class="row" style="justify-content:flex-end"><button class="btn">Schedule</button><button class="btn btn-primary" onclick="nav('campaigns')">Send to 96,204 →</button></div>
             </div>
           </div>
         </section>
 
         <!-- TEMPLATES -->
         <section class="screen" data-screen="templates">
-          <div class="pagehead"><div><h1>Templates</h1><p>Three authoring modes — pick the right one per team. All render through the same responsive pipeline and get the compliance footer + one-click unsubscribe injected automatically.</p></div><button class="btn btn-primary">＋ New template</button></div>
+          <div class="pagehead"><div><h1>Templates</h1><p>Three authoring modes — pick the right one per team. All render through the same responsive pipeline, and <span class="mono">List-Unsubscribe</span> headers (incl. RFC 8058 one-click) are set on every message.</p></div><button class="btn btn-primary">＋ New template</button></div>
+          <div class="note warn"><span class="ic">⚠</span><div>The compliance footer — physical address plus unsubscribe link — is a reserved <b>merge value</b>: the send path supplies <span class="mono">{{compliance_footer}}</span> and <span class="mono">{{physical_address}}</span> from the list record on every message. But <b>nothing places them for you</b> — not the pipeline, and <b>not the seeded template either</b>: the smoke-test seed declares only <span class="mono">first_name</span>, <span class="mono">list_name</span> and <span class="mono">unsubscribe_url</span>, and its three bodies contain neither reserved name. So <b>every</b> template, seeded or hand-built, has to include the footer itself or the send goes out without one. The list-level guard is the setup checklist, which refuses to call an org complete while any list is missing a physical address or footer.</div></div>
           <div class="kpis" style="grid-template-columns:repeat(3,1fr)">
             <div class="card cardpad" style="display:flex;flex-direction:column;gap:7px;cursor:pointer" onclick="nav('builder')" title="Open the visual builder"><div class="row" style="justify-content:space-between"><b style="font-size:14px">Visual builder</b><span class="pill p-good">no code</span></div><p class="muted" style="margin:0;font-size:12.5px">Drag-and-drop blocks (GrapesJS → MJML). For editors &amp; ad reps building polished sends without touching code. <span class="flink" style="color:var(--accent-ink);font-weight:600">Open →</span></p></div>
             <div class="card cardpad" style="display:flex;flex-direction:column;gap:7px"><div class="row" style="justify-content:space-between"><b style="font-size:14px">MJML</b><span class="pill p-accent">developers</span></div><p class="muted" style="margin:0;font-size:12.5px">Responsive markup + merge tags with live preview. Full control over layout.</p></div>
-            <div class="card cardpad" style="display:flex;flex-direction:column;gap:7px"><div class="row" style="justify-content:space-between"><b style="font-size:14px">Raw HTML blast</b><span class="pill p-warn">one-off</span></div><p class="muted" style="margin:0;font-size:12.5px">Paste advertiser-supplied HTML as-is. Footer + unsubscribe injected; sanitized for safety.</p></div>
+            <div class="card cardpad" style="display:flex;flex-direction:column;gap:7px"><div class="row" style="justify-content:space-between"><b style="font-size:14px">Raw HTML blast</b><span class="pill p-warn">one-off</span></div><p class="muted" style="margin:0;font-size:12.5px">Paste advertiser-supplied HTML as-is. Hard-sanitized at save and schedule time; the footer merge value is yours to include.</p></div>
           </div>
           <div class="grid2">
             <div class="card cardpad">
-              <div class="row" style="justify-content:space-between;margin-bottom:10px"><div class="eyebrow">MJML source</div><span class="pill p-neutral">v7 · autosaved</span></div>
+              <div class="row" style="justify-content:space-between;margin-bottom:10px"><div class="eyebrow">MJML source</div><span class="pill p-neutral">autosaved</span></div>
 <pre class="mono" style="margin:0;font-size:12px;line-height:1.7;color:var(--ink-2);white-space:pre-wrap;background:var(--surface-2);border:1px solid var(--border);border-radius:8px;padding:14px;overflow:auto">&lt;mj-section&gt;
   &lt;mj-column&gt;
     &lt;mj-text font-size="17px"&gt;
@@ -725,7 +723,7 @@
     &lt;mj-button href="{{ editorial_url }}"&gt;
       Read today’s lead
     &lt;/mj-button&gt;
-    &lt;mj-text&gt;{{ unsubscribe_footer }}&lt;/mj-text&gt;
+    &lt;mj-text&gt;{{ compliance_footer }}&lt;/mj-text&gt;
   &lt;/mj-column&gt;
 &lt;/mj-section&gt;</pre>
             </div>
@@ -733,7 +731,7 @@
               <div class="row" style="justify-content:space-between;margin-bottom:10px"><div class="eyebrow">Live preview</div><button class="btn btn-ghost btn-sm" onclick="openPreview()">◲ Full preview</button></div>
               <div class="email" style="max-width:100%;box-shadow:none;border:1px solid var(--border)">
                 <div class="ehead"><span class="stamp" style="width:18px;height:18px"></span> The Morning Ledger</div>
-                <div class="ebody"><h4 style="font-size:15px">Good morning, Jordan.</h4><p style="font-size:13px;margin:0">The one chart that explains this week’s market — and three things to watch before Monday.</p><button class="btn btn-primary btn-sm" style="align-self:flex-start">Read today’s lead</button><p class="muted" style="font-size:11px;margin:0">Northwind Times · 500 Market Street, Metro City, USA · Unsubscribe</p></div>
+                <div class="ebody"><h4 style="font-size:15px">Good morning, Jordan.</h4><p style="font-size:13px;margin:0">The one chart that explains this week’s market — and three things to watch before Monday.</p><button class="btn btn-primary btn-sm" style="align-self:flex-start">Read today’s lead</button><p class="muted" style="font-size:11px;margin:0">Northwind Times · 123 Main Street, Anytown, USA · Unsubscribe</p></div>
               </div>
             </div>
           </div>
@@ -741,32 +739,62 @@
 
         <!-- AUTOMATIONS -->
         <section class="screen" data-screen="automations">
-          <div class="pagehead"><div><h1>Automations</h1><p>Trigger-based drip sequences, orchestrated by Step Functions.</p></div><button class="btn btn-primary">＋ New automation</button></div>
+          <div class="pagehead"><div><h1>Automations</h1><p><b>Linear</b> drip sequences on Step Functions — waits and sends, in order. Two triggers exist: <span class="mono">signup</span> (a completed double opt-in) and <span class="mono">manual</span>. No conditional splits, branches, holdouts, goal exits or re-entry rules.</p></div><button class="btn btn-primary">＋ New sequence</button></div>
           <div class="grid2">
             <div class="card"><table>
-              <thead><tr><th>Automation</th><th>Trigger</th><th>Status</th><th>In flow</th></tr></thead>
+              <thead><tr><th>Sequence</th><th>Trigger</th><th>Steps</th><th>Consent gate</th></tr></thead>
               <tbody>
-                <tr><td class="t-strong">Welcome series</td><td class="muted">Subscription confirmed</td><td><span class="pill p-good"><span class="dot"></span>Live</span></td><td class="num">1,840</td></tr>
-                <tr><td class="t-strong">Re-engagement</td><td class="muted">No open · 60d</td><td><span class="pill p-good"><span class="dot"></span>Live</span></td><td class="num">6,210</td></tr>
-                <tr><td class="t-strong">Paid onboarding</td><td class="muted">entitlement → paid</td><td><span class="pill p-warn"><span class="dot"></span>Paused</span></td><td class="num">0</td></tr>
+                <tr><td class="t-strong">Welcome series</td><td><span class="pill p-accent mono">signup</span> <span class="muted">The Morning Ledger</span></td><td class="num">3</td><td><span class="pill p-good">per step</span></td></tr>
+                <tr><td class="t-strong">Field Notes primer</td><td><span class="pill p-accent mono">signup</span> <span class="muted">Field Notes</span></td><td class="num">2</td><td><span class="pill p-good">per step</span></td></tr>
+                <tr><td class="t-strong">Paid onboarding</td><td><span class="pill p-neutral mono">manual</span> <span class="muted">enrolled by hand</span></td><td class="num">4</td><td><span class="pill p-good">per step</span> <span class="muted" style="font-size:11.5px">+ entitlement</span></td></tr>
               </tbody>
-            </table></div>
+            </table>
+            <div class="note warn" style="margin:0 14px 14px"><span class="ic">⚠</span><div><b>There is no “how many are enrolled” column, because there is no answer to read.</b> Nothing persists an enrolment: <span class="mono">DripSequence</span> carries an org, a name, a trigger and its steps — no enrolment state — and there is no enrolment entity anywhere. A run exists only as a Step Functions <b>execution name</b>, and the API role is granted <span class="mono">states:DescribeExecution</span> for a name it already knows and nothing else; no role holds <span class="mono">ListExecutions</span>. So neither a per-sequence count nor a per-subscriber “step 2 of 3” is computable, and both used to be shown here.</div></div>
+            <div class="cardpad" style="padding-top:0">
+              <div class="row" style="justify-content:space-between;margin-bottom:8px"><div class="eyebrow">Enroll a subscriber</div><span class="pill p-warn">Not yet built</span></div>
+              <div class="row"><div class="searchbox" style="max-width:230px">🔍 <input placeholder="Email or subscriber id"></div><button class="btn btn-sm">Enroll →</button></div>
+              <div class="note warn" style="margin-top:10px"><span class="ic">⚠</span><div><span class="mono">POST /drip-sequences/enroll</span> (<span class="mono">campaigns:manage</span>) exists and works — this console screen for it does not. It refuses hand-enrolling into a <span class="mono">signup</span>-triggered sequence rather than silently duplicating, and refuses a subscriber who has not confirmed the list step 0 mails.</div></div>
+            </div>
+            </div>
             <div class="card cardpad">
               <div class="eyebrow" style="margin-bottom:14px">Welcome series</div>
               <div class="flowmap">
-                <div class="fnode"><div class="fi" style="background:var(--good-soft);color:var(--good)">✓</div><div><b>Trigger — Opt-in confirmed</b><div><small>Double opt-in verified</small></div></div></div>
+                <div class="fnode"><div class="fi" style="background:var(--good-soft);color:var(--good)">✓</div><div><b>Trigger — Opt-in confirmed</b><div><small>Double opt-in on The Morning Ledger enrolls automatically</small></div></div></div>
                 <div class="fconn"></div><span class="fwait">wait 0 min</span><div class="fconn"></div>
+                <div class="fnode"><div class="fi" style="background:var(--warn-soft);color:var(--warn)">⊙</div><div><b>Consent gate — this step’s list</b><div><small>Confirmed → send · missing or pending → exit</small></div></div></div>
+                <div class="fconn"></div>
                 <div class="fnode"><div class="fi" style="background:var(--accent-soft);color:var(--accent-ink)">✉</div><div><b>Send — Welcome + what to expect</b><div><small>Template: Welcome 01</small></div></div></div>
                 <div class="fconn"></div><span class="fwait">wait 2 days</span><div class="fconn"></div>
-                <div class="fnode"><div class="fi" style="background:var(--surface-3);color:var(--ink-2)">⑂</div><div><b>Branch — Opened welcome?</b><div><small>Yes → best-of digest · No → re-send</small></div></div></div>
+                <div class="fnode"><div class="fi" style="background:var(--accent-soft);color:var(--accent-ink)">✉</div><div><b>Send — Best of the Ledger</b><div><small>Template: Welcome 02 · consent re-checked first</small></div></div></div>
+              </div>
+              <div class="note info" style="margin-top:14px"><span class="ic">▹</span><div><b>Consent is checked at every step, not only at the door.</b> A step sends only when the subscriber’s subscription to <i>that step’s</i> list is <span class="mono">confirmed</span>; a missing or <span class="mono">pending</span> one exits the sequence. A broadcast needs no such check — it fans out over the confirmed index — but a drip step is handed a bare subscriber id, so it has to ask.</div></div>
+              <div class="note info" style="margin-top:10px"><span class="ic">▹</span><div><b>The newest enrollment wins.</b> Each run is namespaced by the subscription’s consent timestamp, which also namespaces every step’s send claim. If someone re-signs up mid-sequence, the older run checks whether it is still current and <b>retires itself</b> — so the two never both deliver, and clicking the confirmation link three times enrolls once.</div></div>
+            </div>
+          </div>
+
+          <div class="card cardpad" style="display:flex;flex-direction:column;gap:12px">
+            <div class="row" style="justify-content:space-between"><div class="eyebrow">Re-engagement → sunset · the second automation</div><span class="pill p-warn">Not yet built</span></div>
+            <p class="muted" style="margin:0;font-size:13px">The <b>sweep is built and runs</b>: one weekly EventBridge rule (Mondays 04:00 UTC) invokes a dispatcher that finds the orgs with <span class="mono">reengagement.enabled</span> and sweeps each in checkpointed pages, resuming where it stopped. What is <b>not yet built</b> is any console surface for it — <b>no route writes <span class="mono">Organization.reengagement</span></b>, so the policy below is deployment configuration, not a screen. The values shown are the shipped defaults.</p>
+            <div class="grid2" style="gap:12px">
+              <dl class="kv" style="gap:10px 16px">
+                <dt class="mono">enabled</dt><dd><span class="pill p-neutral">false</span> <span class="muted">per-org opt-in, never deployment-wide</span></dd>
+                <dt class="mono">listId</dt><dd><b>required once enabled · no default</b></dd>
+                <dt class="mono">coldAfterDays</dt><dd class="num">180</dd>
+                <dt class="mono">steps</dt><dd class="num">3 <span class="muted">win-back emails</span></dd>
+                <dt class="mono">stepIntervalDays</dt><dd class="num">7</dd>
+              </dl>
+              <div style="display:flex;flex-direction:column;gap:10px">
+                <div class="note info"><span class="ic">▹</span><div><b>Coldness is click-weighted.</b> <span class="mono">lastEngagedAt</span> advances on <b>clicks only</b> — Apple Mail Privacy Protection auto-opens mean an open no longer proves a human looked. With no click yet the anchor falls back to the consent time, and a subscriber with no anchor at all is <b>left alone</b>: never mailed, so there is nothing to judge.</div></div>
+                <div class="note info"><span class="ic">▹</span><div><b>Graduate or sunset.</b> A click at any point clears the enrolment and graduates them. A sequence that completes with no click <b>unsubscribes them from every list</b> and suppresses with <span class="mono">source: "inactive"</span> — org-scoped and self-clearable, so a later genuine re-opt-in restores them. That is the <span class="pill p-neutral" style="padding:0 5px">Inactive</span> row on <span class="flink" style="font-weight:600;cursor:pointer" onclick="nav('suppression')">Suppression</span>.</div></div>
               </div>
             </div>
+            <div class="note warn"><span class="ic">⚠</span><div><b>Off by default, and that is the design.</b> The terminal step unsubscribes people, and a shrunk list is not something an operator can undo — a default-on sweep would start silently trimming installs where nobody asked. Weekly rather than daily, because the default waits 180 days for coldness and a daily pass would pay for a full org scan to do nothing six days in seven. An org that enables the policy <b>without</b> naming a list is <b>reported</b> by the dispatcher rather than swept, because silence would look identical to “no cold subscribers” — precisely the failure this exists to prevent. Each win-back step is its own <span class="mono">reengagement:{list}#{n}</span> sub-campaign, so it aggregates separately and the send is idempotent.</div></div>
           </div>
         </section>
 
         <!-- ANALYTICS + CLICK MAP -->
         <section class="screen" data-screen="analytics">
-          <div class="pagehead"><div><h1>Analytics — The Morning Ledger, Jul 20</h1><p>Every generic email is archived, so clicks overlay onto the real message.</p></div><div class="row"><button class="btn" onclick="openPreview()">◲ Preview email</button><div class="tabs" id="atabs"><button class="on" onclick="atab('map')">Click map</button><button onclick="atab('funnel')">Funnel</button><button onclick="atab('links')">Links</button></div></div></div>
+          <div class="pagehead"><div><h1>Analytics — The Morning Ledger, Jul 20</h1><p>Per-campaign counters, deliverability rates and the per-link click table. Magic-link tokens are redacted before a click is stored.</p></div><div class="row"><button class="btn" onclick="openPreview()">◲ Preview email</button><div class="tabs" id="atabs"><button class="on" onclick="atab('links')">Links</button><button onclick="atab('map')">Click map</button><button onclick="atab('funnel')">Funnel</button></div></div></div>
           <div class="kpis">
             <div class="kpi card"><span class="lab">Delivered</span><span class="val num">95,410</span><span class="delta up">99.2%</span></div>
             <div class="kpi card"><span class="lab">Unique opens</span><span class="val num">42,076</span><span class="delta up">44.1%</span></div>
@@ -774,10 +802,11 @@
             <div class="kpi card"><span class="lab">Unsub / complaint</span><span class="val num">61</span><span class="delta">0.06%</span></div>
           </div>
 
-          <div class="apane on" data-apane="map">
+          <div class="apane" data-apane="map">
+          <div class="note warn"><span class="ic">⚠</span><div><b>Not yet built — the overlay, not the numbers.</b> A per-campaign <span class="mono">EmailArchive</span> record stores the link map and the S3 key the generic rendered body <i>would</i> live at, but writing that body is not built, so painting these badges onto it in a sandboxed iframe is not either. The click counts themselves are real and ship on the <span class="flink" style="font-weight:600;cursor:pointer" onclick="atab('links')">Links tab</span>.</div></div>
           <div class="grid2">
             <div class="card cardpad">
-              <div class="row" style="justify-content:space-between;margin-bottom:6px"><div class="eyebrow">Click map · archived copy</div><span class="pill p-neutral mono">campaign_2f9c…</span></div>
+              <div class="row" style="justify-content:space-between;margin-bottom:6px"><div class="eyebrow">Click map · archived copy</div><span class="pill p-warn">Not yet built</span></div>
               <div class="emailview">
                 <div class="email">
                   <div class="ehead"><span class="stamp" style="width:18px;height:18px"></span> The Morning Ledger</div>
@@ -809,6 +838,7 @@
           </div>
 
           <div class="apane" data-apane="funnel">
+            <div class="note warn"><span class="ic">⚠</span><div><b>Not yet built.</b> The report screen shows counters, rates and the click table; funnels, trends and per-subscriber timelines are not built. The rows below are the arithmetic those counters already support, drawn as a proposal.</div></div>
             <div class="card cardpad">
               <div class="eyebrow" style="margin-bottom:14px">Engagement funnel</div>
               <div class="funnel">
@@ -816,12 +846,13 @@
                 <div class="frow"><span class="fl">Delivered</span><div class="fbar"><i style="width:99.2%"></i><span>95,410 · 99.2%</span></div></div>
                 <div class="frow"><span class="fl">Unique opens</span><div class="fbar"><i style="width:44%"></i><span>42,076 · 44.1%</span></div></div>
                 <div class="frow"><span class="fl">Unique clicks</span><div class="fbar"><i style="width:8.3%;min-width:90px"></i><span>7,918 · 8.3%</span></div></div>
-                <div class="frow"><span class="fl">Bypassed paywall</span><div class="fbar"><i style="width:6.4%;min-width:90px"></i><span>6,140 · magic link</span></div></div>
               </div>
+              <hr class="divider" style="margin:14px 0 12px">
+              <div class="muted" style="font-size:12.5px"><span class="mono">sent − delivered − bounces − rejects</span> is how far a send got: 96,204 − 95,410 − 573 − 12 = <b>209</b> still in delivery delay, being retried.</div>
             </div>
           </div>
 
-          <div class="apane" data-apane="links">
+          <div class="apane on" data-apane="links">
             <div class="grid2">
               <div class="card"><div class="cardhead"><h3>All links</h3><span class="pill p-neutral">editorial only</span></div>
                 <table><thead><tr><th>Link</th><th>Clicks</th><th>Unique</th><th>CTR</th></tr></thead><tbody>
@@ -832,14 +863,16 @@
                   <tr><td class="muted">Unsubscribe</td><td class="num">54</td><td class="num">54</td><td class="num">0.1%</td></tr>
                 </tbody></table>
               </div>
-              <div class="card"><div class="cardhead"><h3>Opens by client</h3></div>
+              <div class="card"><div class="cardhead"><h3>Every other SES event</h3><span class="pill p-neutral">own counter each</span></div>
                 <div class="health">
-                  <div class="hrow"><span style="width:96px;font-size:12.5px;font-weight:600">Apple Mail</span><span class="hbar"><i style="width:58%;background:var(--accent)"></i></span><span class="hv num">58%</span></div>
-                  <div class="hrow"><span style="width:96px;font-size:12.5px;font-weight:600">Gmail</span><span class="hbar"><i style="width:29%;background:var(--accent)"></i></span><span class="hv num">29%</span></div>
-                  <div class="hrow"><span style="width:96px;font-size:12.5px;font-weight:600">Outlook</span><span class="hbar"><i style="width:8%;background:var(--accent)"></i></span><span class="hv num">8%</span></div>
-                  <div class="hrow"><span style="width:96px;font-size:12.5px;font-weight:600">Other</span><span class="hbar"><i style="width:5%;background:var(--accent)"></i></span><span class="hv num">5%</span></div>
+                  <div class="hrow"><span style="width:120px;font-size:12.5px;font-weight:600">Bounces</span><span class="hbar"><i style="width:60%;background:var(--crit)"></i></span><span class="hv num">573</span></div>
+                  <div class="hrow"><span style="width:120px;font-size:12.5px;font-weight:600">Rejects</span><span class="hbar"><i style="width:2%;background:var(--warn)"></i></span><span class="hv num">12</span></div>
+                  <div class="hrow"><span style="width:120px;font-size:12.5px;font-weight:600">Delivery delays</span><span class="hbar"><i style="width:22%;background:var(--warn)"></i></span><span class="hv num">209</span></div>
+                  <div class="hrow"><span style="width:120px;font-size:12.5px;font-weight:600">Rendering failures</span><span class="hbar"><i style="width:0%;background:var(--crit)"></i></span><span class="hv num">0</span></div>
                   <hr class="divider">
-                  <div class="kv"><dt>Mobile</dt><dd class="num">64%</dd><dt>Desktop</dt><dd class="num">36%</dd></div>
+                  <div class="muted" style="font-size:12.5px"><b>None of the three new ones suppresses.</b> A <b>reject</b> means SES accepted the message then refused to send it — nothing reached a receiver, so it is not a bounce and suppressing would punish a subscriber for our attachment. A <b>delivery delay</b> is a full mailbox or a throttling receiver, still being retried; suppression is global, so acting on a transient condition would kill a valid subscriber everywhere.</div>
+                  <div class="note warn"><span class="ic">⚠</span><div><b>A rendering failure alarms mid-send.</b> It means a merge tag did not resolve — the one event in the feed that points at <i>our</i> bug rather than a recipient’s mailbox, and campaign-wide by nature. The handler logs it at error level and a CloudWatch alarm (<span class="mono">RenderingFailures</span>) fires <b>while the send is still running</b>, which is the only time the information is worth anything.</div></div>
+                  <div class="muted" style="font-size:12.5px">SES <span class="mono">Send</span> and <span class="mono">Subscription</span> stay unconsumed on purpose: <span class="mono">Send</span> duplicates what the sender already counted, and we never enable SES’s own subscription page — unsubscribe is RFC 8058 through our handler — so an event about a preference we do not honour would write a row nothing reads.</div>
                 </div>
               </div>
             </div>
@@ -858,14 +891,23 @@
           </div>
 
           <div class="tabpane on" data-pane="settings-domains">
-            <div class="card"><table>
+            <div class="card"><div class="cardhead"><h3>Sending domains</h3><span class="pill p-good">Built</span></div><table>
+              <thead><tr><th>Domain</th><th>On the org record</th><th>SES identity</th><th>Config set</th></tr></thead>
+              <tbody>
+                <tr><td class="t-strong mono">northwindtimes.example</td><td><span class="pill p-accent mono">domains[0]</span></td><td><span class="pill p-good"><span class="dot"></span>Created at provisioning</span></td><td><span class="pill p-good"><span class="dot"></span>Created at provisioning</span></td></tr>
+                <tr><td class="t-strong mono">news.northwindtimes.example</td><td><span class="pill p-accent mono">domains[1]</span></td><td><span class="pill p-good"><span class="dot"></span>Created at provisioning</span></td><td><span class="pill p-good"><span class="dot"></span>Created at provisioning</span></td></tr>
+              </tbody>
+            </table>
+            <div class="note info" style="margin:0 14px 14px"><span class="ic">▹</span><div>Provisioning creates the SES domain identity (with DKIM/SPF/DMARC records to publish) and the configuration set <b>unconditionally</b>. What the console can then read back is this list of names on the organization record — nothing more. The setup checklist’s “sending domain” step is literally <span class="mono">org.domains.length &gt; 0</span>.</div></div>
+            </div>
+            <div class="card" style="opacity:.72"><div class="cardhead"><h3>Verification &amp; quota readout</h3><span class="pill p-warn">Not yet built</span></div><table>
               <thead><tr><th>Domain</th><th>DKIM</th><th>SPF</th><th>DMARC</th><th>Tracking</th></tr></thead>
               <tbody>
-                <tr><td class="t-strong mono">northwindtimes.example</td><td><span class="pill p-good"><span class="dot"></span>Verified</span></td><td><span class="pill p-good"><span class="dot"></span>Pass</span></td><td><span class="pill p-good"><span class="dot"></span>p=reject</span></td><td class="mono muted">click.northwindtimes.example</td></tr>
-                <tr><td class="t-strong mono">news.northwindtimes.example</td><td><span class="pill p-good"><span class="dot"></span>Verified</span></td><td><span class="pill p-good"><span class="dot"></span>Pass</span></td><td><span class="pill p-warn"><span class="dot"></span>p=none</span></td><td class="mono muted">click.northwindtimes.example</td></tr>
+                <tr><td class="t-strong mono">northwindtimes.example</td><td><span class="pill p-neutral">Verified</span></td><td><span class="pill p-neutral">Pass</span></td><td><span class="pill p-neutral">p=reject</span></td><td class="mono muted">click.northwindtimes.example</td></tr>
+                <tr><td class="t-strong mono">news.northwindtimes.example</td><td><span class="pill p-neutral">Verified</span></td><td><span class="pill p-neutral">Pass</span></td><td><span class="pill p-neutral">p=none</span></td><td class="mono muted">click.northwindtimes.example</td></tr>
               </tbody>
             </table></div>
-            <div class="note info"><span class="ic">✦</span><div>SES is out of the sandbox. Production quota: <b>312,000/day</b> at <b>340 msg/s</b>. Setup wizard verifies DKIM/SPF/DMARC on first deploy.</div></div>
+            <div class="note warn"><span class="ic">⚠</span><div><b>Every cell in the table above is a design, not a reading.</b> No route returns SES identity or verification state — <span class="mono">ses:GetEmailIdentity</span> is held by the <b>provisioning</b> function alone and the admin router has no SES read grant at all. Nothing in the repo calls <span class="mono">GetSendQuota</span>, so there is <b>no quota or send-rate readout</b> and no way to tell whether the account is out of the SES sandbox. And no custom click-tracking or redirect domain is configured anywhere — <span class="mono">TrackingOptions</span> appears nowhere, so <span class="mono">click.…</span> is invented. The setup module says as much in its own words: <i>“SES domain verification and sandbox-exit are AWS-side steps the wizard surfaces as guidance; everything here is derived from data we own.”</i></div></div>
           </div>
 
           <div class="tabpane" data-pane="settings-magic">
@@ -884,8 +926,9 @@
               </div>
               <div class="card cardpad" style="display:flex;flex-direction:column;gap:12px">
                 <div class="eyebrow">Entitlement</div>
-                <div class="field"><label>Claim whitelist (rides in token)</label>
-                  <div class="row"><span class="pill p-accent">sub</span><span class="pill p-accent">entitlement</span><span class="pill p-accent">entitlement_asof</span><span class="pill p-accent">first_name</span><button class="btn btn-ghost btn-sm">＋ Add</button></div></div>
+                <div class="field"><label>Claims in the token — closed set, not configurable</label>
+                  <div class="row"><span class="pill p-accent mono">sub</span><span class="pill p-accent mono">external_sub</span><span class="pill p-accent mono">scope</span><span class="pill p-accent mono">amr</span><span class="pill p-accent mono">entitlement</span><span class="pill p-accent mono">entitlement_asof</span><span class="pill p-accent mono">aud</span><span class="pill p-accent mono">iss</span><span class="pill p-accent mono">iat</span><span class="pill p-accent mono">exp</span></div></div>
+                <div class="note info"><span class="ic">▹</span><div>There is <b>no extension point</b>: the signer emits exactly these claims, so claim minimisation is enforced by construction rather than by policy. No profile field — a name, an address — can be put into a URL-borne token. An operator-configurable whitelist is <b>not yet built</b>, and the closed set is the stronger posture.</div></div>
                 <hr class="divider">
                 <div class="field"><label>Sync source of truth</label><select><option>Billing webhook (live)</option><option>Custom API</option><option>Import / manual only</option></select></div>
                 <dl class="kv" style="gap:9px 18px"><dt>Last sync</dt><dd>4 min ago · 212 updated</dd><dt>Values</dt><dd><span class="pill p-neutral">free</span> <span class="pill p-paid"><span class="dot"></span>paid</span></dd></dl>
@@ -900,7 +943,7 @@
                 <p class="muted" style="margin:0;font-size:13px">Point alerts at an SNS topic — fan out to email, SMS, Slack, PagerDuty, or a Lambda.</p>
                 <div class="field"><label>SNS topic ARN</label><input class="mono" value="arn:aws:sns:us-east-1:…:addressium-alerts"></div>
                 <div class="field"><label>Also notify</label><div class="row"><span class="pill p-accent">ops@northwindtimes.example</span><span class="pill p-accent">#deliverability</span><button class="btn btn-ghost btn-sm">＋</button></div></div>
-                <button class="btn btn-sm" style="align-self:flex-start">Send test alert</button>
+                <div class="note warn"><span class="ic">⚠</span><div>There is <b>no “send test alert”</b> — nothing publishes to the topic on request; only a real breach does. <span class="mono">snsTopicArn</span> is also <b>optional on purpose</b>: <b>halting is the safety control and notification is secondary</b>, so an org with no topic still stops a campaign that breaches — it just does so quietly.</div></div>
               </div>
               <div class="card cardpad">
                 <div class="eyebrow" style="margin-bottom:6px">Alert rules</div>
@@ -910,24 +953,38 @@
                 <div class="prefrow"><div class="info"><b>Reputation drop</b><div>SES account reputation</div></div><div class="toggle" onclick="this.classList.toggle('on')"><i></i></div></div>
               </div>
             </div>
+            <div class="card cardpad" style="display:flex;flex-direction:column;gap:12px">
+              <div class="eyebrow">Operator-supplied · addressium does not create these</div>
+              <p class="muted" style="margin:0;font-size:13px">Where an AWS account very likely already runs something, addressium <b>consumes</b> it by configuration rather than creating a competing copy. Deliverability alerts above are for the person running the lists; these are for the on-call.</p>
+              <dl class="kv" style="gap:11px 18px">
+                <dt class="mono">opsAlertTopicArn</dt><dd class="mono" style="font-size:12px">arn:aws:sns:us-east-1:…:oncall</dd>
+                <dt class="mono">apiWebAclArn</dt><dd class="muted">not set</dd>
+                <dt class="mono">cloudfrontWebAclArn</dt><dd class="muted">not set</dd>
+              </dl>
+              <div class="note warn"><span class="ic">⚠</span><div>With no WebACL associated, <b>nothing rate-limits by IP</b> — the public plane’s brakes are double opt-in, signed action tokens, schema validation, the honeypot check and reCAPTCHA where an org has configured a secret. And an alarm can fire into a topic nobody is subscribed to: set neither key and the created topic has no subscription at all. Silently shipping unprotected is worse than shipping without a WAF, so <span class="mono">deploy:check</span> warns on both.</div></div>
+            </div>
           </div>
 
           <div class="tabpane" data-pane="settings-privacy">
             <div class="grid2">
               <div class="card cardpad" style="display:flex;flex-direction:column;gap:12px">
                 <div class="eyebrow">GDPR / CCPA — data-subject requests</div>
-                <p class="muted" style="margin:0;font-size:13px">Export or erase a person by email. Erasure removes the profile + events and writes a hashed tombstone to suppression so they’re never re-added.</p>
+                <p class="muted" style="margin:0;font-size:13px">Export or erase a person by email. Erasure <b>anonymizes the profile in place</b> (email → <span class="mono">erased:&lt;sub&gt;</span>, attributes cleared, status suppressed), unsubscribes every subscription, and deletes the external-id pointer, the email reservation, the entitlement record and every event row naming them. It returns an <span class="mono">ErasureReport</span> of what it reached, not a bare <span class="mono">true</span>.</p>
                 <div class="field"><label>Subject email</label><input type="email" placeholder="person@example.com"></div>
                 <div class="row"><button class="btn">Export data (JSON)</button><button class="btn" style="color:var(--crit);border-color:var(--crit)">Erase / forget</button></div>
+                <div class="note info"><span class="ic">▹</span><div>Two things are deliberately <b>kept</b>: the suppression tombstone, which <b>holds the address</b> so the next import cannot silently re-add the person (Art. 17(3)(b) / Recital 65), and each subscription’s consent timestamps and basis, which are the org’s evidence it was once entitled to mail. Campaign counters are aggregates and are untouched.</div></div>
               </div>
               <div class="card cardpad">
                 <div class="eyebrow" style="margin-bottom:12px">Retention &amp; consent</div>
                 <dl class="kv" style="gap:12px 18px">
                   <dt>Consent capture</dt><dd>timestamp · IP · source URL</dd>
-                  <dt>Event retention</dt><dd><select style="padding:4px 8px;font-size:12.5px;width:auto"><option>13 months</option><option>25 months</option><option>Forever</option></select></dd>
+                  <dt class="mono">auditRetentionYears</dt><dd class="num">7 <span class="muted">· Object Lock, set-once</span></dd>
+                  <dt class="mono">analyticsEventRetentionDays</dt><dd class="num">730 <span class="muted">· opt-in lake only</span></dd>
+                  <dt>Operational event log</dt><dd>append-only · <span class="muted">no TTL</span></dd>
                   <dt>Right to be forgotten</dt><dd><span class="pill p-good"><span class="dot"></span>Automated</span></dd>
                   <dt>Data residency</dt><dd>us-east-1 · your account</dd>
                 </dl>
+                <div class="note warn" style="margin-top:12px"><span class="ic">⚠</span><div>A configurable retention window on the operational event log — 13 / 25 months, the knob a marketer expects — is <b>not yet built</b>. The two above are the knobs that exist.</div></div>
               </div>
             </div>
           </div>
@@ -938,40 +995,19 @@
               <thead><tr><th>Member</th><th>Role</th><th>Org access</th><th>MFA</th><th>Last active</th></tr></thead>
               <tbody>
                 <tr><td><div class="cellwho"><span class="avatar-sm">DA</span><div><div class="t-strong">Dana Alvarez</div><div class="muted mono" style="font-size:11.5px">dana@northwindtimes.example</div></div></div></td><td><span class="pill p-accent">Developer Admin</span></td><td><span class="pill p-neutral">All orgs</span></td><td><span class="pill p-good"><span class="dot"></span>TOTP</span></td><td>Now</td></tr>
-                <tr><td><div class="cellwho"><span class="avatar-sm">PW</span><div><div class="t-strong">Priya Walsh</div><div class="muted mono" style="font-size:11.5px">priya@northwindtimes.example</div></div></div></td><td><span class="pill p-accent">Editor</span></td><td><span class="pill p-neutral">Northwind · Lakeside</span></td><td><span class="pill p-good"><span class="dot"></span>TOTP</span></td><td>1h ago</td></tr>
+                <tr><td><div class="cellwho"><span class="avatar-sm">PW</span><div><div class="t-strong">Priya Walsh</div><div class="muted mono" style="font-size:11.5px">priya@northwindtimes.example</div></div></div></td><td><span class="pill p-accent">Editor</span></td><td><span class="pill p-neutral">Northwind · Lakeside</span></td><td><span class="pill p-good"><span class="dot"></span>TOTP</span></td><td>2m ago</td></tr>
                 <tr><td><div class="cellwho"><span class="avatar-sm">RB</span><div><div class="t-strong">Ruben Ba</div><div class="muted mono" style="font-size:11.5px">ruben@northwindtimes.example</div></div></div></td><td><span class="pill p-paid"><span class="dot"></span>Analyst (Sales)</span></td><td><span class="pill p-neutral">All orgs</span></td><td><span class="pill p-good"><span class="dot"></span>TOTP</span></td><td>3d ago</td></tr>
                 <tr><td><div class="cellwho"><span class="avatar-sm">MC</span><div><div class="t-strong">Marco Cruz</div><div class="muted mono" style="font-size:11.5px">marco@northwindtimes.example</div></div></div></td><td><span class="pill p-neutral">Support</span></td><td><span class="pill p-neutral">Northwind</span></td><td><span class="pill p-warn"><span class="dot"></span>Pending</span></td><td>—</td></tr>
               </tbody>
             </table></div>
           </div>
 
-          <div class="tabpane" data-pane="settings-import">
-            <div class="grid2">
-              <div class="card cardpad" style="display:flex;flex-direction:column;gap:14px">
-                <div class="eyebrow">Migrate from Amazon Pinpoint</div>
-                <p class="muted" style="margin:0;font-size:13px">Import endpoints, segments and the opt-out list from a Pinpoint export or CSV. Runs as a dry-run first.</p>
-                <div style="border:1.5px dashed var(--border-strong);border-radius:10px;padding:26px;text-align:center;color:var(--ink-3)">⬆ Drop a Pinpoint export or CSV<br><span style="font-size:12px">endpoints · segments · suppression</span></div>
-                <button class="btn btn-primary" style="align-self:flex-start">Start dry run</button>
-              </div>
-              <div class="card cardpad">
-                <div class="eyebrow" style="margin-bottom:10px">Last import — dry run</div>
-                <dl class="kv" style="gap:11px 18px">
-                  <dt>Source</dt><dd class="mono">pinpoint-export-0719.csv</dd>
-                  <dt>Created</dt><dd class="num">12,204</dd>
-                  <dt>Updated</dt><dd class="num">3,880</dd>
-                  <dt>Skipped (dupes)</dt><dd class="num">418</dd>
-                  <dt>Suppressed</dt><dd class="num">96</dd>
-                  <dt>Errors</dt><dd class="num">0</dd>
-                </dl>
-                <button class="btn" style="margin-top:14px">Commit import →</button>
-              </div>
-            </div>
-          </div>
         </section>
 
         <!-- FEEDS -->
         <section class="screen" data-screen="feeds">
-          <div class="pagehead"><div><h1>Feeds</h1><p>Pull articles from RSS / Atom / JSON feeds to auto-build campaigns. Feed fields map to merge tags.</p></div><button class="btn btn-primary">＋ Add feed</button></div>
+          <div class="pagehead"><div><h1>Feeds <span class="pill p-warn" style="vertical-align:middle">Not yet built</span></h1><p>Pull articles from RSS / Atom / JSON feeds to auto-build campaigns. Feed fields map to merge tags.</p></div><button class="btn btn-primary">＋ Add feed</button></div>
+          <div class="note warn"><span class="ic">⚠</span><div>The RSS → edition pipeline is <b>built and running</b>; this <b>screen</b> is not. Feeds are config- and code-driven today — <span class="mono">services/feeds</span> is a library imported by the launch function, with no console route behind any control below.</div></div>
           <div class="grid2">
             <div class="card"><table>
               <thead><tr><th>Feed</th><th>Maps to</th><th>Last pulled</th><th>Items</th><th>Status</th></tr></thead>
@@ -997,7 +1033,8 @@
 
         <!-- MERGE TAGS -->
         <section class="screen" data-screen="tags">
-          <div class="pagehead"><div><h1>Merge tags</h1><p>In-email replacement variables and where each value comes from at send time.</p></div><button class="btn btn-primary">＋ Add tag</button></div>
+          <div class="pagehead"><div><h1>Merge tags <span class="pill p-warn" style="vertical-align:middle">Not yet built</span></h1><p>In-email replacement variables and where each value comes from at send time.</p></div><button class="btn btn-primary">＋ Add tag</button></div>
+          <div class="note warn"><span class="ic">⚠</span><div>Merge values resolve on every send; a merge-tag <b>management screen</b> is not built, and there is no route behind “＋ Add tag”. Templates declare their placeholders in code today. The reserved names the send path supplies are <span class="mono">unsubscribe_url</span>, <span class="mono">list_name</span>, <span class="mono">compliance_footer</span> and <span class="mono">physical_address</span> — a reserved name wins over an attribute of the same name.</div></div>
           <div class="note info"><span class="ic">✦</span><div>Tags backed by a <b>token claim</b> ride in the magic link; <b>per-recipient</b> tags resolve during bulk send; <b>per-campaign</b> tags are identical for everyone.</div></div>
           <div class="card"><table>
             <thead><tr><th>Tag</th><th>Source</th><th>Scope</th><th>Example</th><th>Fallback</th></tr></thead>
@@ -1007,14 +1044,16 @@
               <tr><td class="mono t-strong">{{entitlement}}</td><td>Profile · synced</td><td><span class="pill p-accent">token claim</span></td><td><span class="pill p-paid"><span class="dot"></span>paid</span></td><td class="mono">free</td></tr>
               <tr><td class="mono t-strong">{{article_title}}</td><td>Feed field</td><td><span class="pill p-neutral">per-campaign</span></td><td class="muted">The one chart…</td><td class="muted">—</td></tr>
               <tr><td class="mono t-strong">{{unsubscribe_url}}</td><td>System</td><td><span class="pill p-neutral">per-recipient</span></td><td class="mono muted" style="font-size:11px">…/u/…</td><td class="muted">—</td></tr>
-              <tr><td class="mono t-strong">{{unsubscribe_footer}}</td><td>System · list address</td><td><span class="pill p-neutral">per-campaign</span></td><td class="muted">Northwind Times · 123 Main Street…</td><td class="muted">—</td></tr>
+              <tr><td class="mono t-strong">{{compliance_footer}}</td><td>System · reserved merge value</td><td><span class="pill p-neutral">per-campaign</span></td><td class="muted">Northwind Times · 123 Main Street…</td><td class="muted">—</td></tr>
+              <tr><td class="mono t-strong">{{physical_address}}</td><td>System · list address</td><td><span class="pill p-neutral">per-campaign</span></td><td class="muted">123 Main Street, Anytown, USA</td><td class="muted">—</td></tr>
             </tbody>
           </table></div>
         </section>
 
         <!-- AD TAGS -->
         <section class="screen" data-screen="adtags">
-          <div class="pagehead"><div><h1>Ad tags</h1><p>LiveIntent ad HTML per slot. For recurring newsletters the fills are set once at the <b>series</b> level and reused by every edition; one-off blasts set them per campaign. Inserted as-is — never tokenized or click-tracked.</p></div><button class="btn btn-primary">＋ Add slot</button></div>
+          <div class="pagehead"><div><h1>Ad tags <span class="pill p-warn" style="vertical-align:middle">Not yet built</span></h1><p>LiveIntent ad HTML per slot, inserted as-is — never tokenized or click-tracked.</p></div><button class="btn btn-primary">＋ Add slot</button></div>
+          <div class="note warn"><span class="ic">⚠</span><div>What ships is the <b>ad block</b>: a block-mode template can carry an ad block whose HTML is <b>hard-sanitized at the schedule boundary</b> — the same sanitizer a raw-HTML blast gets, deliberately, so blocks mode is no weaker than <span class="mono">raw_html</span> — and then inserted <b>verbatim</b> at render, never tokenized, never click-rewritten, excluded from the click table. What is <b>not</b> built is everything on this screen: named slot <i>fills</i> (<span class="mono">Template.adSlots</span>, <span class="mono">CampaignSeries.adSlotFills</span>) are modelled in the types but nothing consumes them, there is no management screen, and the “series default” binding depends on series structure that is itself designed-only.</div></div>
           <div class="row" style="gap:12px">
             <div class="field" style="max-width:260px"><label>Template</label><select><option>Editorial — Daily (MJML)</option><option>Market Signal — Premium</option></select></div>
             <div class="field" style="max-width:280px"><label>Applies to</label><select><option>The Morning Ledger — series default (all editions)</option><option>Market Signal — series default</option><option>One-off blast override</option></select></div>
@@ -1039,7 +1078,7 @@
   &lt;img src="https://li.example/creative/728x90.png"
        width="600" alt="Sponsored"&gt;
 &lt;/a&gt;</textarea>
-              <div class="note info" style="margin-top:10px"><span class="ic">▹</span><div>Pasted verbatim into the slot at send time. Links inside are left untouched — no magic token, no click rewriting, excluded from the click map. Saved at the series level, so every future edition reuses it until you change it.</div></div>
+              <div class="note info" style="margin-top:10px"><span class="ic">▹</span><div>Hard-sanitized when the campaign is scheduled, then pasted verbatim into the slot at render. Links inside are left untouched — no magic token, no click rewriting, excluded from the click map. Saved at the series level, so every future edition reuses it until you change it.</div></div>
               <div class="row" style="justify-content:flex-end;margin-top:10px"><button class="btn btn-primary btn-sm">Save for series</button></div>
             </div>
           </div>
@@ -1047,7 +1086,7 @@
 
         <!-- IDENTITY & POOLS -->
         <section class="screen" data-screen="identity">
-          <div class="pagehead"><div><h1>Identity &amp; pools</h1><p>Per-organization Cognito pools, app clients and magic-link signing. Stored in SSM; scoped to <b>Northwind Times</b>.</p></div><button class="btn">Save changes</button></div>
+          <div class="pagehead"><div><h1>Identity &amp; pools</h1><p>Magic-link signing, plus the optional Cognito pools an org can <b>link</b>. Held on the organization record; scoped to <b>Northwind Times</b>. Written at provisioning time and <b>read-only here</b> — no route updates an organization.</p></div></div>
           <div class="grid2">
             <div class="card cardpad" style="display:flex;flex-direction:column;gap:11px">
               <div class="row" style="justify-content:space-between"><div class="eyebrow">Admin user pool · staff</div><span class="pill p-accent">shared across orgs</span></div>
@@ -1056,10 +1095,11 @@
               <div class="field"><label>Hosted UI domain</label><input class="mono" value="admin.addressium.app" readonly></div>
             </div>
             <div class="card cardpad" style="display:flex;flex-direction:column;gap:11px">
-              <div class="row" style="justify-content:space-between"><div class="eyebrow">Subscriber user pool</div><span class="pill p-paid"><span class="dot"></span>per-org · shared w/ site</span></div>
-              <div class="field"><label>User pool ID</label><input class="mono" value="us-east-1_Smt7Rp4Wq" readonly></div>
-              <div class="field"><label>App client ID (site)</label><input class="mono" value="1f9a…summit" readonly></div>
+              <div class="row" style="justify-content:space-between"><div class="eyebrow">Subscriber user pool</div><span class="pill p-neutral">optional · linked, never created</span></div>
+              <div class="field"><label>Linked user pool ID</label><input class="mono" value="us-east-1_Smt7Rp4Wq" readonly></div>
+              <div class="field"><label>Join key</label><input class="mono" value="Subscriber.externalId ↔ pool sub" readonly></div>
               <div class="field"><label>Main-site domain</label><input class="mono" value="northwindtimes.example" readonly></div>
+              <div class="note info"><span class="ic">▹</span><div>addressium <b>references</b> this pool — it does not own it and never creates it; the stack holds no <span class="mono">CreateUserPool</span> permission anywhere. Linking validates it with <span class="mono">DescribeUserPool</span> and nothing more. An org with magic links off has no pool at all and runs a list fine.</div></div>
             </div>
           </div>
           <div class="card cardpad" style="display:flex;flex-direction:column;gap:12px">
@@ -1070,35 +1110,73 @@
               <div class="field"><label>Issuer (iss)</label><input class="mono" value="https://addressium/summit" readonly></div>
               <div class="field"><label>Audience (aud)</label><input class="mono" value="northwindtimes.example" readonly></div>
             </div>
-            <div class="note warn"><span class="ic">⚠</span><div>Each organization has its <b>own signing key, JWKS and subscriber pool</b> — silos never share tokens. Rotating here republishes only Northwind Times’s JWKS.</div></div>
+            <div class="note info"><span class="ic">▹</span><div>An org gets its <b>own KMS signing key</b> only when magic links are <b>on</b>; with the feature off it gets no key, no linked pool, no JWKS and no token at all — editorial links render untokenized and the list still works. The <b>JWKS endpoint is one shared API route</b> serving every org, not a per-org resource: it publishes each org’s key under its own <span class="mono">kid</span>, which is what keeps silos from sharing tokens.</div></div>
+            <div class="note warn"><span class="ic">⚠</span><div><b>There is no key-rotation route.</b> Rotating an org’s magic-link signing key — new key, new <span class="mono">kid</span>, republished JWKS — is <b>not yet built</b>: no route, no handler, and nothing in the console. The one rotation that ships is the confirm-token HMAC keyring, on a yearly Secrets Manager schedule with no console surface at all. Everything on this screen is <b>read-only</b>: the pool link, the domain and the identity config are written once by <span class="mono">POST /orgs</span> at provisioning time and there is no org-update route to change them afterwards.</div></div>
           </div>
         </section>
 
         <!-- DATA & EXPORTS -->
         <section class="screen" data-screen="data">
-          <div class="pagehead"><div><h1>Data &amp; exports</h1><p>Import from Pinpoint / CSV and export subscriber lists or segments — scoped to this organization.</p></div></div>
+          <div class="pagehead"><div><h1>Data &amp; exports</h1><p>Migrate a subscriber base in, take it back out again — scoped to this organization. Run the <span class="flink" style="font-weight:600;cursor:pointer" onclick="nav('suppression')">SES suppression import</span> <b>before</b> this.</p></div></div>
           <div class="grid2">
             <div class="card cardpad" style="display:flex;flex-direction:column;gap:14px">
-              <div class="eyebrow">Import</div>
-              <div style="border:1.5px dashed var(--border-strong);border-radius:10px;padding:24px;text-align:center;color:var(--ink-3)">⬆ Drop a Pinpoint export or CSV<br><span style="font-size:12px">endpoints · segments · suppression</span></div>
-              <button class="btn btn-primary" style="align-self:flex-start">Start dry run</button>
+              <div class="eyebrow">Import — step 1 · file</div>
+              <div style="border:1.5px dashed var(--border-strong);border-radius:10px;padding:24px;text-align:center;color:var(--ink-3)">⬆ Drop a CSV or a gzipped JSON Lines file<br><span style="font-size:12px">both shapes Pinpoint hands out — dotted-column CSV, or an export job’s <span class="mono">.jsonl.gz</span></span></div>
+              <div class="note info"><span class="ic">▹</span><div>Gzip is detected by <b>magic bytes</b>, not a filename or a content-type we were never given, and each endpoint object is flattened into the same dotted-path row the CSV path produces — there is deliberately <b>no second import pipeline</b>, so one set of compliance rules applies to both. A file that is neither shape is a 400 naming both. Decompression is bounded at 256 MB.</div></div>
+              <div class="note warn"><span class="ic">⚠</span><div><b>Pinpoint segments are not imported, by decision (#243).</b> Behavior, Metrics, Demographic and Recency dimensions have no counterpart here, so a partial translation would look migrated while targeting the wrong people — and nobody would think to check it. <b>Rebuild segments by hand.</b> The list memberships they were built from arrive with the subscribers.</div></div>
             </div>
             <div class="card cardpad" style="display:flex;flex-direction:column;gap:12px">
-              <div class="eyebrow">Export</div>
-              <div class="field"><label>Audience</label><select><option>The Morning Ledger — all confirmed</option><option>Segment: Paid subscribers</option><option>Everyone in Northwind Times</option></select></div>
-              <div class="field"><label>Format</label><select><option>CSV</option><option>JSON (NDJSON)</option></select></div>
-              <div class="field"><label>Fields</label><div class="row"><span class="pill p-accent">email</span><span class="pill p-accent">first_name</span><span class="pill p-accent">entitlement</span><span class="pill p-accent">status</span><button class="btn btn-ghost btn-sm">＋</button></div></div>
-              <button class="btn btn-primary" style="align-self:flex-start">Export 96,204 rows</button>
+              <div class="eyebrow">Import — step 2 · declare, before any row is written</div>
+              <div class="field"><label>Consent basis — recorded on every imported subscription</label><select><option>Explicit — double opt-in evidence exists</option><option selected>Implicit — existing relationship</option></select></div>
+              <div class="note warn"><span class="ic">⚠</span><div>Status is derived from the basis, not taken from the file: only <b>explicit</b> can produce <span class="mono">confirmed</span>, so <b>implicit</b> plus <span class="mono">status: "confirmed"</span> yields <span class="mono">pending</span>. The API refuses a confirmed import against an implicit or absent basis outright, naming the columns that blocked it. A Pinpoint <span class="mono">EffectiveDate</span> is an endpoint-update stamp and is never presented as consent.</div></div>
+              <div class="field"><label>Batch id</label><input class="mono" value="ledger-migration-0720"></div>
+              <div class="field"><label>Target audiences — one column per newsletter</label>
+                <dl class="kv" style="gap:8px 14px;margin-top:2px">
+                  <dt class="mono">Attributes.SD_Ledger</dt><dd>→ The Morning Ledger</dd>
+                  <dt class="mono">Attributes.SD_Signal</dt><dd>→ Market Signal</dd>
+                  <dt class="mono">Attributes.companyname</dt><dd class="muted">→ attribute, not a list</dd>
+                  <dt class="mono">OptOut · EndpointStatus</dt><dd><span class="pill p-crit">never mailable</span></dd>
+                </dl>
+              </div>
+              <div class="note info"><span class="ic">▹</span><div>Audience columns are <b>three-state</b>: <span class="mono">true</span> subscribes, <span class="mono">false</span> writes an <span class="mono">unsubscribed</span> row so the decline survives the next import, and <b>empty writes nothing</b> — the subscriber was never asked. Creating a list inline requires a from-address, compliance footer and physical address; defaulting them would ship a CAN-SPAM violation. The column plan is fingerprinted on the header set and offered back on the next file of the same shape.</div></div>
+              <div class="row"><button class="btn">Dry run</button><button class="btn btn-primary">Upload &amp; start job →</button></div>
             </div>
           </div>
-          <div class="card"><div class="cardhead"><h3>Recent jobs</h3></div><table>
-            <thead><tr><th>Job</th><th>Type</th><th>Rows</th><th>Status</th><th>When</th></tr></thead>
-            <tbody>
-              <tr><td class="mono">export-ledger-0720.csv</td><td>Export</td><td class="num">96,204</td><td><span class="pill p-good"><span class="dot"></span>Ready</span></td><td>Just now</td></tr>
-              <tr><td class="mono">pinpoint-export-0719.csv</td><td>Import (dry run)</td><td class="num">16,502</td><td><span class="pill p-good"><span class="dot"></span>Reviewed</span></td><td>Yesterday</td></tr>
-              <tr><td class="mono">suppression-0715.csv</td><td>Import</td><td class="num">1,204</td><td><span class="pill p-good"><span class="dot"></span>Committed</span></td><td>5 days ago</td></tr>
-            </tbody>
-          </table></div>
+          <div class="card cardpad" style="display:flex;flex-direction:column;gap:10px">
+            <div class="eyebrow">A large import is a job, not a request</div>
+            <div class="flowmap">
+              <div class="fnode"><div class="fi" style="background:var(--accent-soft);color:var(--accent-ink)">1</div><div><b><span class="mono">POST /import/upload-url</span></b><div><small>Short-lived presigned PUT, returns the batch id. The upload bucket expires objects after 7 days.</small></div></div></div>
+              <div class="fconn"></div>
+              <div class="fnode"><div class="fi" style="background:var(--accent-soft);color:var(--accent-ink)">2</div><div><b>Upload straight to S3</b><div><small>The bytes never traverse API Gateway.</small></div></div></div>
+              <div class="fconn"></div>
+              <div class="fnode"><div class="fi" style="background:var(--accent-soft);color:var(--accent-ink)">3</div><div><b><span class="mono">POST /import/async</span> → <span class="mono">202</span></b><div><small>Batch marked <span class="mono">running</span> <i>before</i> the invoke, so a 202 always has something to poll. Fifteen minutes and 1 GB, not a route’s 29 seconds.</small></div></div></div>
+              <div class="fconn"></div>
+              <div class="fnode"><div class="fi" style="background:var(--good-soft);color:var(--good)">4</div><div><b><span class="mono">GET /import/batches?batchId=</span></b><div><small>The batch record <i>is</i> the status endpoint — an async run outlives the request that started it, so there is nowhere else to ask.</small></div></div></div>
+            </div>
+            <div class="note info"><span class="ic">▹</span><div>The inline paste path stays, capped at <b>2 MB</b> with a 413 naming the async route — a 10 MB-shaped failure from API Gateway tells an operator nothing about what to do instead. A run counts as <b>failed</b> only if it threw or imported nobody; a file where a few rows were malformed is <b>completed</b> with those rows reported, because telling someone to re-run an import that worked is how you get duplicates. <span class="mono">batchId</span> is validated at the boundary — it becomes both an S3 object key and a DynamoDB sort key.</div></div>
+          </div>
+          <div class="grid2">
+            <div class="card"><div class="cardhead"><h3>Import batches</h3><span class="pill p-neutral mono">GET /import/batches</span></div><table>
+              <thead><tr><th>Batch id</th><th>Rows</th><th>Status</th><th>Finished</th></tr></thead>
+              <tbody>
+                <tr><td class="mono">ledger-migration-0720</td><td class="num">16,502</td><td><span class="pill p-accent"><span class="dot"></span>running</span></td><td class="muted">—</td></tr>
+                <tr><td class="mono">ledger-dryrun-0719</td><td class="num">16,502</td><td><span class="pill p-good"><span class="dot"></span>completed</span></td><td>Yesterday 14:08</td></tr>
+                <tr><td class="mono">signal-0716</td><td class="num">418</td><td><span class="pill p-good"><span class="dot"></span>completed</span></td><td>4 days ago <span class="muted">· 12 rows reported</span></td></tr>
+                <tr><td class="mono">courier-0712</td><td class="num">0</td><td><span class="pill p-crit"><span class="dot"></span>failed</span></td><td>8 days ago <span class="muted">· not a CSV or a gzip</span></td></tr>
+              </tbody>
+            </table></div>
+            <div class="card cardpad" style="display:flex;flex-direction:column;gap:12px">
+              <div class="eyebrow">Export</div>
+              <div class="field"><label>Audience <span class="muted">— the route takes a list, or the whole org</span></label><select><option>The Morning Ledger — confirmed only (listId)</option><option>The Morning Ledger — including unsubscribed</option><option>Everyone in Northwind Times — no listId</option></select></div>
+              <div class="field"><label>Format</label><select><option>CSV</option><option>JSON Lines (NDJSON)</option></select></div>
+              <div class="field"><label>Columns <span class="muted">— fixed, not chosen</span></label>
+                <div class="row"><span class="pill p-neutral">email</span><span class="pill p-neutral">status</span><span class="pill p-neutral">entitlement</span><span class="pill p-neutral">consent basis + timestamps</span><span class="pill p-neutral">every attribute column</span></div>
+                <div class="muted" style="font-size:11.5px;margin-top:5px">There is no field picker and no segment scope: <span class="mono">GET /orgs/{org}/export</span> reads exactly <span class="mono">format</span>, <span class="mono">listId</span> and <span class="mono">includeUnsubscribed</span>. The column set is <b>derived, not selected</b> — CSV takes a deliberate second pass over the rows to learn the attribute columns rather than buffering every row to discover them — because the file’s whole purpose is to re-import through the mapper above, and a subset would not round-trip.</div>
+              </div>
+              <button class="btn btn-primary" style="align-self:flex-start">Export 97,408 rows</button>
+              <div class="note info"><span class="ic">▹</span><div>Consent provenance rides along and the file re-imports through the mapper above, so leaving is a round trip rather than just a download. The response is a <b>presigned URL valid five minutes</b>, not a payload — it is a bearer credential for the whole subscriber base, so its short life is the control, and the bucket expires every object after seven days regardless. Export sits behind the <b>destructive-tier</b> capability, not the read-only one, and is audited.</div></div>
+            </div>
+          </div>
         </section>
 
         <!-- SUBSCRIBER DETAIL -->
@@ -1106,14 +1184,15 @@
           <div class="pagehead">
             <div><span class="flink" style="font-size:12.5px;color:var(--accent-ink);font-weight:600;cursor:pointer" onclick="nav('subscribers')">← Subscribers</span>
               <h1 style="margin-top:6px">Jordan Reyes <span class="pill p-paid" style="vertical-align:middle"><span class="dot"></span>Paid</span></h1>
-              <p>jordan.reyes@gmail.com</p></div>
-            <div class="row"><button class="btn" onclick="openPreview()">Send preview</button><button class="btn">Export data (GDPR)</button><button class="btn" style="color:var(--crit);border-color:var(--crit)" onclick="manualUnsubAll()">Unsubscribe from all</button><button class="btn" style="color:var(--crit);border-color:var(--crit)">Erase / forget</button></div>
+              <p>jordan.reyes@example.com</p></div>
+            <div class="row"><button class="btn" onclick="openPreview()">◲ Preview email</button><button class="btn">Export data (GDPR)</button><button class="btn" style="color:var(--crit);border-color:var(--crit)" onclick="manualUnsubAll()">Unsubscribe from all</button><button class="btn" style="color:var(--crit);border-color:var(--crit)">Erase / forget</button></div>
           </div>
           <div class="grid2">
             <div class="card cardpad">
               <div class="eyebrow" style="margin-bottom:12px">Identity</div>
               <dl class="kv" style="gap:11px 18px">
-                <dt>Cognito sub</dt><dd class="mono">a1f3b8c0-…-9c2</dd>
+                <dt>Subscriber <span class="mono">sub</span></dt><dd class="mono">a1f3b8c0-…-9c2</dd>
+                <dt><span class="mono">externalId</span></dt><dd class="mono">4c02…b71 <span class="muted">· linked pool</span></dd>
                 <dt>Organization</dt><dd>Northwind Times</dd>
                 <dt>Status</dt><dd><span class="pill p-good"><span class="dot"></span>Confirmed</span></dd>
                 <dt>Entitlement</dt><dd><span class="pill p-paid"><span class="dot"></span>paid</span> <span class="muted">· asof 4 min ago</span></dd>
@@ -1129,19 +1208,41 @@
                 <div class="actitem"><div class="meta"><b>Market Signal</b><div>Confirmed · weekly · paid</div></div><button class="btn btn-sm" onclick="rowUnsub(this)">Unsubscribe</button></div>
                 <div class="actitem"><div class="meta"><b>Weekend Long Read</b><div>Confirmed · weekly</div></div><button class="btn btn-sm" onclick="rowUnsub(this)">Unsubscribe</button></div>
               </div>
-              <div class="note info" style="margin:14px 18px"><span class="ic">▹</span><div>Manual unsubscribe writes a suppression entry and flips the list status immediately — the next send skips them.</div></div>
+              <div class="note info" style="margin:14px 18px"><span class="ic">▹</span><div><b>Leaving one newsletter writes no suppression entry.</b> A per-list unsubscribe flips that subscription to <span class="mono">unsubscribed</span> and nothing more — the sender only mails <span class="mono">confirmed</span> subscriptions, so no address-level suppression is needed and the other newsletters are untouched. Only <b>Unsubscribe from all</b> adds a suppression entry, and it is <b>org-scoped</b>: hard bounces and complaints go global, unsubscribes stay per-org, because leaving one publication should not drop you from another (§4.13, hybrid). Either way any drip run on that list ends: <b>a sequence re-checks this status before every step</b>, and a status that is no longer <span class="mono">confirmed</span> exits the sequence rather than sending the rest. The console cannot say <i>where</i> in a sequence someone is: no enrolment record is persisted, so there is nothing to read.</div></div>
+              <div class="note warn" style="margin:0 18px 16px"><span class="ic">⚠</span><div><b>Nothing on this screen can un-suppress an address.</b> Suppression outranks every opt-in an admin can set; lifting it is a separate act behind <span class="mono">suppression:manage</span>. Said here in place, so a resulting silent send is not read as a broken feature.</div></div>
             </div>
           </div>
-          <div class="card"><div class="cardhead"><h3>Recent activity</h3></div><div class="actlist">
+          <div class="card">
+            <div class="cardhead"><h3>Recent activity</h3><span class="pill p-warn">Not yet built</span></div>
+            <div class="note warn" style="margin:14px 18px 4px"><span class="ic">⚠</span><div>Per-subscriber activity timelines are not built, and it is not merely a missing screen: the data model has <b>deliberately no subscriber-keyed event index</b> — that would be a second place the subscriber id lives, and one more thing erasure has to reach. Events are keyed by campaign.</div></div>
+            <div class="actlist" style="opacity:.62">
             <div class="actitem"><div class="ci">◔</div><div class="meta"><b>Opened — The Morning Ledger, Jul 20</b><div>2 hours ago</div></div></div>
-            <div class="actitem"><div class="ci">➤</div><div class="meta"><b>Clicked — “the chart everyone’s sharing”</b><div>2 hours ago · lite session established</div></div></div>
+            <div class="actitem"><div class="ci">➤</div><div class="meta"><b>Clicked — “the chart everyone’s sharing”</b><div>2 hours ago · editorial link carried a magic-link token</div></div></div>
             <div class="actitem"><div class="ci">◔</div><div class="meta"><b>Opened — Market Signal</b><div>Yesterday</div></div></div>
           </div></div>
         </section>
 
         <!-- SUPPRESSION -->
         <section class="screen" data-screen="suppression">
-          <div class="pagehead"><div><h1>Suppression</h1><p>Addresses that are never sent to. Hard bounces and complaints are added automatically.</p></div><button class="btn btn-primary">＋ Add address</button></div>
+          <div class="pagehead"><div><h1>Suppression</h1><p>Addresses that are never sent to. Hard bounces and complaints are added automatically.</p></div><div class="row"><button class="btn">⤓ Import from SES account list</button><button class="btn btn-primary">＋ Add address</button></div></div>
+          <div class="card cardpad" style="display:flex;flex-direction:column;gap:12px">
+            <div class="row" style="justify-content:space-between"><div class="eyebrow">Import the provider’s own suppression list</div><span class="pill p-neutral">Developer Admin only</span></div>
+            <p class="muted" style="margin:0;font-size:13px"><span class="mono">POST /orgs/{org}/import/suppression</span> reads the <b>SES account</b> suppression list — the one SES maintains itself from hard bounces and complaints. This is the half of a migration nothing else can reconstruct: subscriber records can be re-exported from the source at any time, but <i>“this address hard-bounced two years ago”</i> exists only here. Skip it and the first campaign after the migration mails every one of those addresses, straight into the rates the deliverability halt exists to catch, on day one. <b>Run it before the subscriber import.</b></p>
+            <div class="grid2" style="gap:12px">
+              <dl class="kv" style="gap:10px 16px">
+                <dt>Scope written</dt><dd><span class="pill p-neutral">Global</span> <span class="muted">bounces <i>and</i> complaints — they threaten the reputation every org shares</span></dd>
+                <dt>Unknown reasons</dt><dd><b>reported by address, never guessed</b> <span class="muted">— coercing an unread value into <span class="mono">bounce</span> would invent a permanent global suppression</span></dd>
+                <dt>Timestamps</dt><dd><b>SES’s own kept as <span class="mono">addedAt</span></b> <span class="muted">— it is the evidence; stamping it with the import date destroys exactly that</span></dd>
+                <dt>Direction</dt><dd>read-only <span class="muted">— nothing is written back to your account list</span></dd>
+                <dt>Capability</dt><dd><span class="pill p-accent mono">suppression:manage</span> <span class="muted">deliberately not the <span class="mono">subscribers:manage</span> its sibling import routes use</span></dd>
+              </dl>
+              <div style="display:flex;flex-direction:column;gap:10px">
+                <div class="note info"><span class="ic">▹</span><div>These entries are global, bulk, and have no bulk way back — so a <b>dry run</b> reports exactly what a real run would write, and only a Developer Admin can commit it.</div></div>
+                <div class="row"><button class="btn">Dry run</button><button class="btn btn-primary">Import →</button></div>
+                <div class="muted" style="font-size:12.5px">Last run · 5 days ago · <b class="num">1,204</b> written, <b class="num">3</b> reasons unmapped and reported, 0 written back to SES.</div>
+              </div>
+            </div>
+          </div>
           <div class="card cardpad" style="display:flex;flex-direction:column;gap:12px">
             <div class="eyebrow">Suppression scope</div>
             <p class="muted" style="margin:0;font-size:13px">How the do-not-send list is shared across your organizations. Set once per deployment; override per org if needed.</p>
@@ -1153,66 +1254,73 @@
           </div>
           <div class="toolbar">
             <div class="searchbox" style="max-width:260px">🔍 <input placeholder="Email"></div>
-            <button class="filterchip on">All</button><button class="filterchip">Bounce</button><button class="filterchip">Complaint</button><button class="filterchip">Unsubscribe</button><button class="filterchip">Manual</button>
+            <button class="filterchip on">All</button><button class="filterchip">Bounce</button><button class="filterchip">Complaint</button><button class="filterchip">Unsubscribe</button><button class="filterchip">Manual</button><button class="filterchip">Inactive</button>
             <div style="flex:1"></div><span class="muted" style="font-size:12.5px">3,912 addresses</span>
           </div>
           <div class="card"><table>
             <thead><tr><th>Address</th><th>Reason</th><th>Scope</th><th>Added</th></tr></thead>
             <tbody>
-              <tr><td class="mono">bounce@olddomain.com</td><td><span class="pill p-crit"><span class="dot"></span>Hard bounce</span></td><td><span class="pill p-neutral">Global</span></td><td>2h ago</td></tr>
+              <tr><td class="mono">bounce@olddomain.example</td><td><span class="pill p-crit"><span class="dot"></span>Hard bounce</span></td><td><span class="pill p-neutral">Global</span></td><td>2h ago</td></tr>
               <tr><td class="mono">angry@example.com</td><td><span class="pill p-crit"><span class="dot"></span>Complaint</span></td><td><span class="pill p-neutral">Global</span></td><td>Yesterday</td></tr>
-              <tr><td class="mono">dan.kim@gmail.com</td><td><span class="pill p-warn"><span class="dot"></span>Unsubscribe</span></td><td><span class="pill p-accent">Northwind Times</span></td><td>12d ago</td></tr>
-              <tr><td class="mono">test@spamtrap.net</td><td><span class="pill p-neutral">Manual</span></td><td><span class="pill p-neutral">Global</span></td><td>1 mo ago</td></tr>
+              <tr><td class="mono">dan.kim@example.com</td><td><span class="pill p-warn"><span class="dot"></span>Unsubscribe</span></td><td><span class="pill p-accent">Northwind Times</span></td><td>12d ago</td></tr>
+              <tr><td class="mono">gone@olddomain.example</td><td><span class="pill p-crit"><span class="dot"></span>Hard bounce</span> <span class="pill p-neutral">imported from SES</span></td><td><span class="pill p-neutral">Global</span></td><td>2023-04-11</td></tr>
+              <tr><td class="mono">quiet@example.com</td><td><span class="pill p-neutral">Inactive</span> <span class="muted" style="font-size:11.5px">sunset sweep</span></td><td><span class="pill p-accent">Northwind Times</span></td><td>3 wk ago</td></tr>
+              <tr><td class="mono">test@spamtrap.example</td><td><span class="pill p-neutral">Manual</span></td><td><span class="pill p-neutral">Global</span></td><td>1 mo ago</td></tr>
             </tbody>
-          </table></div>
+          </table>
+          <div class="note info" style="margin:0 14px 14px"><span class="ic">▹</span><div>The 2023 date on the imported row is the point: it is SES’s own timestamp, kept as the evidence for why that address is suppressed.</div></div>
+          </div>
         </section>
 
         <!-- ORGANIZATIONS -->
         <section class="screen" data-screen="organizations">
-          <div class="pagehead"><div><h1>Organizations</h1><p>Each organization is an isolated silo. Manage the subscriber-pool ↔ org ↔ domain links and per-org setup here.</p></div><button class="btn btn-primary" onclick="openModal('addorg')">＋ Add organization</button></div>
+          <div class="pagehead"><div><h1>Organizations</h1><p>Each organization is an isolated silo. Silos are <b>created</b> here — <span class="mono">POST /orgs</span> provisions one and links a pool if you name it. There is <b>no org-update route</b>, so the pool link, the domain and the identity config are set at provisioning time and read-only afterwards; the setup checklist below is derived, not editable.</p></div><button class="btn btn-primary" onclick="openModal('addorg')">＋ Add organization</button></div>
           <div class="card"><table>
             <thead><tr><th>Organization</th><th>Domain</th><th>Subscriber pool ID</th><th>Time zone</th><th>Sending IP</th><th>Suppression</th><th>Setup</th></tr></thead>
             <tbody>
               <tr><td class="t-strong">Northwind Times</td><td class="mono muted">northwindtimes.example</td><td class="mono muted">us-east-1_Smt7Rp4Wq</td><td class="muted">America/Denver</td><td><span class="pill p-neutral">Shared</span></td><td><span class="pill p-neutral">Hybrid</span></td><td><span class="pill p-good"><span class="dot"></span>Verified</span></td></tr>
               <tr><td class="t-strong">Lakeside Ledger</td><td class="mono muted">lakesideledger.example</td><td class="mono muted">us-east-1_Lakeside3Kp9x</td><td class="muted">America/Denver</td><td><span class="pill p-paid"><span class="dot"></span>Dedicated</span></td><td><span class="pill p-neutral">Hybrid</span></td><td><span class="pill p-good"><span class="dot"></span>Verified</span></td></tr>
-              <tr><td class="t-strong">Copperline Courier</td><td class="mono muted">copperlinecourier.example</td><td class="mono muted">us-east-1_Asp2Qw8v</td><td class="muted">America/Denver</td><td><span class="pill p-neutral">Shared</span></td><td><span class="pill p-neutral">Per-org</span></td><td><span class="pill p-warn"><span class="dot"></span>DMARC pending</span></td></tr>
+              <tr><td class="t-strong">Copperline Courier</td><td class="mono muted">copperlinecourier.example</td><td class="muted">— <span style="font-size:11.5px">magic links off</span></td><td class="muted">America/Denver</td><td><span class="pill p-neutral">Shared</span></td><td><span class="pill p-neutral">Per-org</span></td><td><span class="pill p-warn"><span class="dot"></span>DMARC pending</span></td></tr>
+              <tr><td class="t-strong">Northwind Staging <span class="pill p-warn" style="margin-left:4px">DEV</span></td><td class="mono muted">devnorthwindtimes.example</td><td class="muted">—</td><td class="muted">America/Denver</td><td><span class="pill p-neutral">Shared</span></td><td><span class="pill p-neutral">Per-org</span></td><td><span class="pill p-good"><span class="dot"></span>Verified</span></td></tr>
             </tbody>
           </table></div>
           <div class="grid2">
             <div class="card cardpad">
               <div class="eyebrow" style="margin-bottom:12px">Setup checklist — Copperline Courier</div>
+              <p class="muted" style="margin:0 0 12px;font-size:12.5px">Computed live from the org’s config; the required steps flip <span class="mono">setupComplete</span>.</p>
               <div style="display:flex;flex-direction:column;gap:9px;font-size:13.5px">
-                <div class="row"><span class="pill p-good" style="padding:1px 6px"><span class="dot"></span></span> Domain verified in SES</div>
-                <div class="row"><span class="pill p-good" style="padding:1px 6px"><span class="dot"></span></span> DKIM signing enabled</div>
-                <div class="row"><span class="pill p-good" style="padding:1px 6px"><span class="dot"></span></span> SPF aligned</div>
-                <div class="row"><span class="pill p-warn" style="padding:1px 6px"><span class="dot"></span></span> DMARC — move p=none → p=reject</div>
-                <div class="row"><span class="pill p-good" style="padding:1px 6px"><span class="dot"></span></span> Subscriber pool linked</div>
-                <div class="row"><span class="pill p-good" style="padding:1px 6px"><span class="dot"></span></span> Magic-link JWKS published</div>
+                <div class="row"><span class="pill p-good" style="padding:1px 6px"><span class="dot"></span></span> <b>Sending domain</b> — verified <span class="pill p-neutral">required</span></div>
+                <div class="row"><span class="pill p-good" style="padding:1px 6px"><span class="dot"></span></span> <b>First newsletter</b> — at least one list <span class="pill p-neutral">required</span></div>
+                <div class="row"><span class="pill p-warn" style="padding:1px 6px"><span class="dot"></span></span> <b>Compliance footer &amp; address</b> — 1 list still missing a physical address <span class="pill p-neutral">required</span></div>
+                <div class="row"><span class="pill p-warn" style="padding:1px 6px"><span class="dot"></span></span> <b>Subscriber-site branding</b> — colours / logo unset <span class="pill p-neutral">recommended</span> <span class="flink" style="font-weight:600;cursor:pointer;font-size:12.5px" onclick="nav('branding')">Set it →</span></div>
+                <hr class="divider" style="margin:4px 0">
+                <div class="muted" style="font-size:12.5px">DNS detail: DKIM verified · SPF aligned · DMARC <span class="mono">p=none</span> → move to <span class="mono">p=reject</span>. SES domain verification and <b>account sandbox exit</b> are AWS-side steps the checklist points at but cannot complete for you.</div>
               </div>
             </div>
             <div class="card cardpad">
-              <div class="eyebrow" style="margin-bottom:10px">First-time install</div>
-              <p class="muted" style="margin:0 0 12px;font-size:13px">A fresh addressium deploy runs the setup wizard once: verify a domain in SES (DKIM / SPF / DMARC), then create the first organization and link a Cognito subscriber pool. Every org after that repeats this checklist.</p>
-              <div class="note info"><span class="ic">▹</span><div>Your account’s domains are already verified — this is what a new developer installing the repo walks through per org.</div></div>
+              <div class="eyebrow" style="margin-bottom:10px">Dev orgs</div>
+              <p class="muted" style="margin:0 0 12px;font-size:13px">A dev org is a <b>full silo</b> — its own SES identity, config set and reputation — running on the exact same workflows and Lambdas; nothing extra is deployed. The flag surfaces a DEV badge so a test publication is never mistaken for a live one.</p>
+              <div class="note warn"><span class="ic">⚠</span><div>As a second belt, a dev org enforces a send-time allowlist (<span class="mono">devAllowlist</span>: exact addresses or <span class="mono">@domain</span> suffixes) on every recipient of every campaign, drip and transactional send. It is <b>fail-closed</b>: a dev org with no allowlist sends to no one. This is the answer to “how do I test safely” — there is no sandbox mode, and a sandbox toggle was considered and rejected in favour of exactly this.</div></div>
             </div>
           </div>
         </section>
 
         <!-- API & WEBHOOKS -->
         <section class="screen" data-screen="apikeys">
-          <div class="pagehead"><div><h1>API &amp; webhooks</h1><p>Programmatic access for entitlement sync, subscriber events and integrations — scoped per organization.</p></div><button class="btn btn-primary">＋ Create key</button></div>
-          <div class="card"><div class="cardhead"><h3>API keys</h3></div><table>
-            <thead><tr><th>Name</th><th>Key</th><th>Scope</th><th>Last used</th></tr></thead>
+          <div class="pagehead"><div><h1>API &amp; webhooks <span class="pill p-warn" style="vertical-align:middle">Not yet built</span></h1><p>What exists today are two <b>inbound</b> webhooks, HMAC-signed and configured at deploy time. There is no API-key issuance and no outbound delivery.</p></div><button class="btn btn-primary">＋ Create key</button></div>
+          <div class="note warn"><span class="ic">⚠</span><div>There is no <span class="mono">ApiKey</span> entity, no key-issuance route and no console screen — the keys below are a design proposal. An <b>outbound</b> webhook plus a public operator API is listed as future work, not as a shortfall: there is also no <span class="mono">SendMessages</span> analogue, so transactional mail exists but has no public API.</div></div>
+          <div class="card"><div class="cardhead"><h3>Inbound webhooks</h3><span class="pill p-good">Built</span></div><table>
+            <thead><tr><th>Route</th><th>Purpose</th><th>Verification</th><th>Last received</th></tr></thead>
             <tbody>
-              <tr><td class="t-strong">Billing entitlement sync</td><td class="mono muted">sk_live_9f2c…a1</td><td><span class="pill p-accent">entitlement:write</span></td><td>4 min ago</td></tr>
-              <tr><td class="t-strong">CMS integration</td><td class="mono muted">sk_live_2b7d…c4</td><td><span class="pill p-accent">subscribers:read</span></td><td>1h ago</td></tr>
+              <tr><td class="mono t-strong">POST /webhooks/entitlement</td><td>Billing system sets free / paid</td><td><span class="pill p-accent">HMAC <span class="mono">x-addressium-signature</span></span></td><td>4 min ago</td></tr>
+              <tr><td class="mono t-strong">POST /webhooks/identity</td><td>Upsert / delete matched on <span class="mono">externalId</span>; delete routes through GDPR erase</td><td><span class="pill p-accent">HMAC <span class="mono">x-addressium-signature</span></span></td><td>1h ago</td></tr>
             </tbody>
           </table></div>
-          <div class="card"><div class="cardhead"><h3>Outbound webhooks</h3><button class="btn btn-sm">＋ Add endpoint</button></div><table>
-            <thead><tr><th>Endpoint</th><th>Events</th><th>Status</th></tr></thead>
+          <div class="card" style="opacity:.72"><div class="cardhead"><h3>API keys</h3><span class="pill p-warn">Not yet built</span></div><table>
+            <thead><tr><th>Name</th><th>Key</th><th>Scope</th><th>Last used</th></tr></thead>
             <tbody>
-              <tr><td class="mono muted">northwindtimes.example/hooks/addressium</td><td>subscribed · unsubscribed · complained</td><td><span class="pill p-good"><span class="dot"></span>Healthy</span></td></tr>
-              <tr><td class="mono muted">ops.northwindtimes.example/deliverability</td><td>bounce · complaint</td><td><span class="pill p-good"><span class="dot"></span>Healthy</span></td></tr>
+              <tr><td class="t-strong">Billing entitlement sync</td><td class="mono muted">sk_live_9f2c…a1</td><td><span class="pill p-neutral mono">entitlement:write</span></td><td class="muted">—</td></tr>
+              <tr><td class="t-strong">CMS integration</td><td class="mono muted">sk_live_2b7d…c4</td><td><span class="pill p-neutral mono">subscribers:manage</span></td><td class="muted">—</td></tr>
             </tbody>
           </table></div>
         </section>
@@ -1221,30 +1329,36 @@
         <section class="screen" data-screen="usage">
           <div class="pagehead"><div><h1>Usage &amp; cost</h1><p>addressium is free software — this is your <b>AWS</b> spend, attributed per organization for chargeback across publications.</p></div><div class="tabs"><button class="on">This month</button><button>Last 3 mo</button></div></div>
           <div class="kpis">
-            <div class="kpi card"><span class="lab">Emails sent</span><span class="val num">412,000</span><span class="delta up">▲ 6.2%</span></div>
-            <div class="kpi card"><span class="lab">Est. SES cost</span><span class="val num">$41.20</span><span class="delta">$0.10 / 1k</span></div>
-            <div class="kpi card"><span class="lab">Subscribers</span><span class="val num">254,530</span><span class="delta up">▲ 2.9%</span></div>
-            <div class="kpi card"><span class="lab">Est. AWS total</span><span class="val num">$96.40</span><span class="delta">SES + IP + infra</span></div>
+            <div class="kpi card"><span class="lab">Emails sent</span><span class="val num">412,340</span><span class="delta up">▲ 6.2%</span></div>
+            <div class="kpi card"><span class="lab">Est. SES cost</span><span class="val num">$41.23</span><span class="delta">$0.10 / 1k</span></div>
+            <div class="kpi card"><span class="lab">Subscribers</span><span class="val num">254,650</span><span class="delta up">▲ 2.9%</span></div>
+            <div class="kpi card"><span class="lab">Est. AWS total</span><span class="val num">$75.10</span><span class="delta">$4.80 idle + $1 / org</span></div>
           </div>
           <div class="card"><div class="cardhead"><h3>By organization</h3><button class="btn btn-sm">Export CSV</button></div><table>
-            <thead><tr><th>Organization</th><th>Emails (mo)</th><th>SES cost</th><th>Dedicated IP</th><th>Storage</th><th>Est. total</th></tr></thead>
+            <thead><tr><th>Organization</th><th>Emails (mo)</th><th>SES cost</th><th>Dedicated IP</th><th>Storage (S3)</th><th>Est. total</th></tr></thead>
             <tbody>
               <tr><td class="t-strong">Northwind Times</td><td class="num">268,400</td><td class="num">$26.84</td><td class="muted">—</td><td class="num">1.2 GB</td><td class="num t-strong">$27.90</td></tr>
-              <tr><td class="t-strong">Lakeside Ledger</td><td class="num">112,900</td><td class="num">$11.29</td><td><span class="pill p-paid"><span class="dot"></span>$24.95/mo</span></td><td class="num">0.6 GB</td><td class="num t-strong">$37.10</td></tr>
-              <tr><td class="t-strong">Copperline Courier</td><td class="num">30,700</td><td class="num">$3.07</td><td class="muted">—</td><td class="num">0.3 GB</td><td class="num t-strong">$3.40</td></tr>
+              <tr><td class="t-strong">Lakeside Ledger</td><td class="num">112,900</td><td class="num">$11.29</td><td><span class="pill p-paid"><span class="dot"></span>$24.95/mo</span></td><td class="num">0.6 GB</td><td class="num t-strong">$37.30</td></tr>
+              <tr><td class="t-strong">Copperline Courier</td><td class="num">30,700</td><td class="num">$3.07</td><td class="muted">—</td><td class="num">0.3 GB</td><td class="num t-strong">$4.10</td></tr>
+              <tr><td class="t-strong">Northwind Staging <span class="pill p-warn" style="margin-left:4px">DEV</span></td><td class="num">340</td><td class="num">$0.03</td><td class="muted">—</td><td class="num">0.0 GB</td><td class="num t-strong">$1.00</td></tr>
+              <tr><td class="muted">Deployment baseline <span style="font-size:11.5px">CloudWatch alarms · data key · 2 secrets</span></td><td class="muted">—</td><td class="muted">—</td><td class="muted">—</td><td class="muted">—</td><td class="num t-strong">$4.80</td></tr>
             </tbody>
-            <tfoot><tr><td class="t-strong">Total</td><td class="num t-strong">412,000</td><td class="num t-strong">$41.20</td><td class="num">$24.95</td><td class="num">2.1 GB</td><td class="num t-strong">$96.40</td></tr></tfoot>
-          </table></div>
+            <tfoot><tr><td class="t-strong">Total</td><td class="num t-strong">412,340</td><td class="num t-strong">$41.23</td><td class="num">$24.95</td><td class="num">2.1 GB</td><td class="num t-strong">$75.10</td></tr></tfoot>
+          </table>
+          <div class="note warn" style="margin:0 14px 14px"><span class="ic">⚠</span><div>The model meters <b>email, S3 storage and dedicated IPs</b> — plus the fixed idle floor above. DynamoDB, Lambda and SQS add roughly a dollar at test volume and are <b>unmodelled</b>, so they are not lines here. The AWS-side figures arrive from a metering job in the operator’s own account that can read Cost Explorer; with nothing wired, they read zero. And the model prices a per-recipient transactional event+counter write that <b>is not implemented yet</b> — treat any total as a forecast, not a bill.</div></div>
+          </div>
           <div class="grid2">
             <div class="card cardpad"><div class="eyebrow" style="margin-bottom:12px">Emails sent · 30 days</div>
               <svg width="100%" height="90" viewBox="0 0 400 90" preserveAspectRatio="none"><defs><linearGradient id="ug" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="var(--accent)" stop-opacity=".26"/><stop offset="1" stop-color="var(--accent)" stop-opacity="0"/></linearGradient></defs><path d="M0,70 L40,64 L80,66 L120,52 L160,56 L200,44 L240,48 L280,36 L320,40 L360,28 L400,30 L400,90 L0,90 Z" fill="url(#ug)"/><path d="M0,70 L40,64 L80,66 L120,52 L160,56 L200,44 L240,48 L280,36 L320,40 L360,28 L400,30" fill="none" stroke="var(--accent)" stroke-width="2"/></svg>
             </div>
-            <div class="card cardpad"><div class="eyebrow" style="margin-bottom:12px">Cost breakdown</div>
+            <div class="card cardpad"><div class="eyebrow" style="margin-bottom:12px">Cost breakdown · metered components</div>
               <div class="health">
-                <div class="hrow"><span style="width:96px;font-size:12.5px;font-weight:600">SES sending</span><span class="hbar"><i style="width:43%;background:var(--accent)"></i></span><span class="hv num">$41.20</span></div>
-                <div class="hrow"><span style="width:96px;font-size:12.5px;font-weight:600">Dedicated IP</span><span class="hbar"><i style="width:26%;background:var(--paid)"></i></span><span class="hv num">$24.95</span></div>
-                <div class="hrow"><span style="width:96px;font-size:12.5px;font-weight:600">DynamoDB</span><span class="hbar"><i style="width:12%;background:var(--good)"></i></span><span class="hv num">$11.80</span></div>
-                <div class="hrow"><span style="width:96px;font-size:12.5px;font-weight:600">Lambda + S3</span><span class="hbar"><i style="width:19%;background:var(--warn)"></i></span><span class="hv num">$18.45</span></div>
+                <div class="hrow"><span style="width:104px;font-size:12.5px;font-weight:600">SES sending</span><span class="hbar"><i style="width:55%;background:var(--accent)"></i></span><span class="hv num">$41.23</span></div>
+                <div class="hrow"><span style="width:104px;font-size:12.5px;font-weight:600">Dedicated IP</span><span class="hbar"><i style="width:33%;background:var(--paid)"></i></span><span class="hv num">$24.95</span></div>
+                <div class="hrow"><span style="width:104px;font-size:12.5px;font-weight:600">Idle floor</span><span class="hbar"><i style="width:12%;background:var(--good)"></i></span><span class="hv num">$8.80</span></div>
+                <div class="hrow"><span style="width:104px;font-size:12.5px;font-weight:600">S3 storage</span><span class="hbar"><i style="width:1%;background:var(--warn)"></i></span><span class="hv num">$0.12</span></div>
+                <hr class="divider">
+                <div class="muted" style="font-size:12.5px">Near-$0 at idle by design — no always-on compute and no always-on database. The floor is the retained alarm set plus the stack’s data key and two secrets, and <b>$1</b> per org signing key. The dollar figure here is computed from <span class="mono">packages/domain/src/cost.ts</span>, the tested model the estimator uses — <b>not</b> from a number typed into a doc: the alarm count and baseline quoted in README, ARCHITECTURE and the compendium currently <b>disagree with each other</b>, so the code is the only source worth quoting and no count is quoted here.</div>
               </div>
             </div>
           </div>
@@ -1252,7 +1366,7 @@
 
         <!-- VISUAL BUILDER -->
         <section class="screen" data-screen="builder">
-          <div class="pagehead"><div><h1>Visual builder</h1><p>Drag-and-drop email builder (GrapesJS → MJML). Outputs the same responsive MJML as hand-authored templates; the compliance footer is added on send.</p></div><div class="row"><button class="btn" onclick="nav('templates')">← Templates</button><button class="btn" onclick="openPreview()">◲ Preview</button><button class="btn btn-primary">Save template</button></div></div>
+          <div class="pagehead"><div><h1>Visual builder</h1><p>Drag-and-drop email builder (GrapesJS → MJML). Outputs the same responsive MJML as hand-authored templates. The compliance footer is a reserved merge value your template has to place — it is not added for you.</p></div><div class="row"><button class="btn" onclick="nav('templates')">← Templates</button><button class="btn" onclick="openPreview()">◲ Preview</button><button class="btn btn-primary">Save template</button></div></div>
           <div class="builder">
             <div class="palette">
               <div class="plab">Blocks · drag in</div>
@@ -1262,7 +1376,7 @@
               <div class="blk">◼&nbsp; Button</div>
               <div class="blk">▥&nbsp; Columns</div>
               <div class="blk">—&nbsp; Divider</div>
-              <div class="blk">▱&nbsp; Ad slot</div>
+              <div class="blk">▱&nbsp; Ad block</div>
               <div class="blk">✦&nbsp; Article (feed)</div>
               <div class="blk">␣&nbsp; Spacer</div>
             </div>
@@ -1272,8 +1386,8 @@
                 <div class="cblk sel" onclick="selBlock(this)"><span class="tagname">heading</span><h4 style="font-size:17px;margin:0">Good morning, {{first_name}}</h4></div>
                 <div class="cblk" onclick="selBlock(this)"><span class="tagname">text</span>The one chart that explains the market — and three things to watch before the open.</div>
                 <div class="cblk" onclick="selBlock(this)"><span class="tagname">button</span><span style="display:inline-block;background:var(--accent);color:#fff;padding:9px 16px;border-radius:7px;font-weight:600;font-size:13px">Read today’s lead</span></div>
-                <div class="cblk" onclick="selBlock(this)" style="text-align:center;color:var(--ink-3)"><span class="tagname">ad_top · LiveIntent</span><span class="mono" style="font-size:11px">{{ad_top}} — inserted on send, not tracked</span></div>
-                <div class="cblk" onclick="selBlock(this)" style="font-size:11px;color:var(--ink-3)"><span class="tagname">footer · auto</span>Northwind Times · 123 Main Street, Anytown, USA · Unsubscribe</div>
+                <div class="cblk" onclick="selBlock(this)" style="text-align:center;color:var(--ink-3)"><span class="tagname">ad block · LiveIntent</span><span class="mono" style="font-size:11px">Ad block — HTML inserted verbatim, never tokenized or tracked</span></div>
+                <div class="cblk" onclick="selBlock(this)" style="font-size:11px;color:var(--ink-3)"><span class="tagname">footer · {{compliance_footer}}</span>Northwind Times · 123 Main Street, Anytown, USA · Unsubscribe</div>
               </div>
             </div>
             <div class="inspector">
@@ -1290,39 +1404,86 @@
 
         <!-- ROLES & ACCESS -->
         <section class="screen" data-screen="roles">
-          <div class="pagehead"><div><h1>Roles &amp; access</h1><p>What each admin role can do. Assign roles per member and scope them to specific organizations.</p></div><button class="btn btn-primary">＋ New role</button></div>
+          <div class="pagehead"><div><h1>Roles &amp; access</h1><p>What each admin role can do. Four roles, fixed — assign one per member and scope it to specific organizations. Enforcement is server-side via Cedar; the console hides controls only as a convenience, never as the security boundary.</p></div></div>
           <div class="card" style="overflow-x:auto"><table>
             <thead><tr><th>Capability</th><th style="text-align:center">Developer&nbsp;Admin</th><th style="text-align:center">Editor</th><th style="text-align:center">Analyst&nbsp;(Sales)</th><th style="text-align:center">Support</th></tr></thead>
             <tbody>
               <tr><td class="t-strong">View reports &amp; analytics</td><td class="rc y">✓</td><td class="rc y">✓</td><td class="rc y">✓ <span class="muted" style="font-weight:400">read-only</span></td><td class="rc y">✓</td></tr>
-              <tr><td class="t-strong">Schedule / resend / modify send times</td><td class="rc y">✓</td><td class="rc y">✓</td><td class="rc n">—</td><td class="rc n">—</td></tr>
+              <tr><td class="t-strong">Schedule sends · pause / resume / archive</td><td class="rc y">✓</td><td class="rc y">✓</td><td class="rc n">—</td><td class="rc n">—</td></tr>
               <tr><td class="t-strong">Create / edit / send campaigns</td><td class="rc y">✓</td><td class="rc y">✓</td><td class="rc n">—</td><td class="rc n">—</td></tr>
               <tr><td class="t-strong">Manage templates &amp; segments</td><td class="rc y">✓</td><td class="rc y">✓</td><td class="rc n">—</td><td class="rc n">—</td></tr>
               <tr><td class="t-strong">Manage individual subscribers</td><td class="rc y">✓</td><td class="rc y">✓</td><td class="rc n">—</td><td class="rc y">✓</td></tr>
               <tr><td class="t-strong">Manually unsubscribe someone</td><td class="rc y">✓</td><td class="rc y">✓</td><td class="rc n">—</td><td class="rc y">✓</td></tr>
-              <tr><td class="t-strong">Delete contacts</td><td class="rc y">✓</td><td class="rc n">—</td><td class="rc n">—</td><td class="rc n">—</td></tr>
+              <tr><td class="t-strong">Subscriber-site branding &amp; presentation</td><td class="rc y">✓</td><td class="rc y">✓</td><td class="rc n">—</td><td class="rc n">—</td></tr>
+              <tr><td class="t-strong">Import subscribers (CSV / JSONL)</td><td class="rc y">✓</td><td class="rc y">✓</td><td class="rc n">—</td><td class="rc y">✓</td></tr>
+              <tr><td class="t-strong">Delete contacts · erase a person · <b>bulk export</b></td><td class="rc y">✓</td><td class="rc n">—</td><td class="rc n">—</td><td class="rc n">—</td></tr>
               <tr><td class="t-strong">Close / reopen newsletters</td><td class="rc y">✓</td><td class="rc n">—</td><td class="rc n">—</td><td class="rc n">—</td></tr>
-              <tr><td class="t-strong">Manage suppression &amp; alerts</td><td class="rc y">✓</td><td class="rc n">—</td><td class="rc n">—</td><td class="rc n">—</td></tr>
+              <tr><td class="t-strong">Manage suppression &amp; alerts · <b>import the SES account list</b></td><td class="rc y">✓</td><td class="rc n">—</td><td class="rc n">—</td><td class="rc n">—</td></tr>
+              <tr><td class="t-strong">Read the audit log</td><td class="rc y">✓</td><td class="rc n">—</td><td class="rc n">—</td><td class="rc n">—</td></tr>
               <tr><td class="t-strong">Identity, pools, organizations</td><td class="rc y">✓</td><td class="rc n">—</td><td class="rc n">—</td><td class="rc n">—</td></tr>
-              <tr><td class="t-strong">API keys, webhooks &amp; feeds</td><td class="rc y">✓</td><td class="rc n">—</td><td class="rc n">—</td><td class="rc n">—</td></tr>
               <tr><td class="t-strong">Manage team &amp; roles</td><td class="rc y">✓</td><td class="rc n">—</td><td class="rc n">—</td><td class="rc n">—</td></tr>
             </tbody>
           </table></div>
-          <div class="note info"><span class="ic">▹</span><div>Roles are also <b>org-scoped</b>: an Editor for Lakeside Ledger can’t send for Northwind Times, and a Sales/Analyst gets read-only reporting only for the orgs you grant. Destructive actions (delete contacts, close newsletters) are Developer-Admin-only by design.</div></div>
+          <div class="note info"><span class="ic">▹</span><div>Roles are also <b>org-scoped</b>: an Editor for Lakeside Ledger can’t send for Northwind Times, and a Sales/Analyst gets read-only reporting only for the orgs you grant. Destructive actions (delete contacts, close newsletters) are Developer-Admin-only by design — and so is <b>bulk export</b>, because taking an entire subscriber base out of the system is a privileged act, not a read.</div></div>
+          <div class="note warn"><span class="ic">⚠</span><div>Two boundaries are deliberately narrower than they look. Importing the <b>SES account suppression list</b> needs <span class="mono">suppression:manage</span> rather than the <span class="mono">subscribers:manage</span> its sibling import routes use — those entries are global, bulk and have no bulk way back. And the <b>audit log</b> is gated on <span class="mono">team:manage</span>, so an analyst with reporting access cannot reach it.</div></div>
+        </section>
+
+        <!-- BRANDING & PRESENTATION -->
+        <section class="screen" data-screen="branding">
+          <div class="pagehead"><div><h1>Branding <span class="pill p-good" style="vertical-align:middle;margin-left:4px">Built</span></h1><p>How the <b>subscriber site</b> looks — the opt-in directory, the confirm page, the preference centre and the unsubscribe page. Per org, no rebuild: <span class="mono">POST /orgs/branding</span> behind <span class="mono">branding:manage</span>, which the <b>Editor</b> role holds. Reading it is public — the subscriber site fetches its own theme.</p></div><div class="row"><button class="btn" onclick="setWorld('subscriber')">View subscriber site →</button><button class="btn btn-primary">Save branding</button></div></div>
+          <div class="grid2">
+            <div class="card cardpad" style="display:flex;flex-direction:column;gap:13px">
+              <div class="eyebrow">Theme · Northwind Times</div>
+              <div class="field"><label class="mono">logoUrl <span class="muted">(optional)</span></label><input class="mono" value="https://northwindtimes.example/logo.svg"></div>
+              <div class="row" style="gap:12px">
+                <div class="field" style="flex:1"><label class="mono">primaryColor</label><input class="mono" value="#2f56d4"></div>
+                <div class="field" style="flex:1"><label class="mono">secondaryColor</label><input class="mono" value="#8a5a1c"></div>
+              </div>
+              <div class="field"><label class="mono">background</label><select><option>solid — one colour</option><option selected>gradient — from · to · angle</option></select></div>
+              <div class="row" style="gap:12px">
+                <div class="field" style="flex:1"><label class="mono">from</label><input class="mono" value="#f7f5ef"></div>
+                <div class="field" style="flex:1"><label class="mono">to</label><input class="mono" value="#e9dcc7"></div>
+                <div class="field" style="max-width:96px"><label class="mono">angle</label><input class="mono" value="160"></div>
+              </div>
+              <div class="note info"><span class="ic">▹</span><div>Those are the whole shape: a logo url, two colours and a background that is either <span class="mono">solid</span> or <span class="mono">gradient</span>. Deliberately small — it themes the four public pages, it is not a site builder. Setting it also ticks the <b>recommended</b> branding step on an org’s setup checklist, which is exactly <span class="mono">org.branding !== undefined</span>.</div></div>
+            </div>
+            <div class="card">
+              <div class="cardhead"><h3>Per-list presentation</h3><span class="pill p-neutral mono">POST /lists/presentation</span></div>
+              <div class="cardpad" style="padding-top:4px">
+                <div class="field" style="max-width:280px"><label>Newsletter</label><select><option>The Morning Ledger</option><option>Market Signal</option><option>Field Notes</option><option>Weekend Long Read</option></select></div>
+              </div>
+              <div class="prefrow"><div class="info"><b class="mono">showFrequency</b><div>“Daily · weekday mornings” under the title</div></div><div class="toggle on" onclick="this.classList.toggle('on')"><i></i></div></div>
+              <div class="prefrow"><div class="info"><b class="mono">showSendTime</b><div>The hour it lands</div></div><div class="toggle" onclick="this.classList.toggle('on')"><i></i></div></div>
+              <div class="prefrow"><div class="info"><b class="mono">showDescription</b><div>The one-or-two-line blurb</div></div><div class="toggle on" onclick="this.classList.toggle('on')"><i></i></div></div>
+              <div class="prefrow"><div class="info"><b class="mono">showReaderCount</b><div>“97,408 readers”</div></div><div class="toggle on" onclick="this.classList.toggle('on')"><i></i></div></div>
+              <div class="prefrow"><div class="info"><b class="mono">showFreePaidCount</b><div>Free / paid split</div></div><div class="toggle" onclick="this.classList.toggle('on')"><i></i></div></div>
+              <div class="cardpad" style="padding-top:12px;display:flex;flex-direction:column;gap:12px">
+                <div class="row" style="gap:12px">
+                  <div class="field" style="flex:1"><label class="mono">frequencyLabel <span class="muted">(optional override)</span></label><input value="Daily · weekday mornings"></div>
+                  <div class="field" style="flex:1"><label class="mono">sendTimeLabel <span class="muted">(optional)</span></label><input value="6am ET"></div>
+                </div>
+                <div class="note info"><span class="ic">▹</span><div>A publisher who does not want to advertise a small list turns the count off; one whose cadence does not fit a word writes the label. The public list view (<span class="mono">GET /orgs/{org}/lists/{list}/public</span>) honours these toggles server-side, so an omitted count is <b>absent from the response</b> rather than hidden by CSS — the number never reaches the browser.</div></div>
+              </div>
+            </div>
+          </div>
+          <div class="note warn"><span class="ic">⚠</span><div>Branding changes are <b>not audited</b> — <span class="mono">brandingHandler</span> has no audit write, so this is one of the privileged-looking actions the WORM log does not record. Both routes are per-org and scoped: an Editor for one publication cannot restyle another.</div></div>
         </section>
 
         <!-- AUDIT LOG -->
         <section class="screen" data-screen="audit">
-          <div class="pagehead"><div><h1>Audit log</h1><p>Every admin action, immutable. Filter by member, organization or action type.</p></div><button class="btn">Export</button></div>
+          <div class="pagehead"><div><h1>Audit log</h1><p>Every <b>privileged</b> admin action, immutable — into an S3 bucket under Object Lock, read through <span class="mono">GET /orgs/{org}/audit</span> behind <span class="mono">team:manage</span>. Filter by member, organization or action type.</p></div><button class="btn">Export</button></div>
+          <div class="note warn"><span class="ic">⚠</span><div><b>“Privileged” is a named list, not everything.</b> What is recorded: team changes, erasure and DSAR, bulk export, suppression edits and imports, subscriber and subscription changes, segment-cohort edits, drip enrolment, import runs, alert thresholds and org provisioning. What is <b>not</b> recorded today: <b>sending or scheduling a campaign, pausing a schedule, closing a newsletter, and branding changes</b> — those handlers have no audit write. So this log is not a record of who mailed what. Appending is also best-effort by design: an audit write that fails must not roll back an action the operator already completed, so it is logged loudly instead.</div></div>
           <div class="card"><table>
             <thead><tr><th>When</th><th>Member</th><th>Action</th><th>Org</th></tr></thead>
             <tbody>
-              <tr><td class="muted">2m ago</td><td>Dana Alvarez</td><td>Sent campaign “The Morning Ledger — Jul 20”</td><td>Northwind Times</td></tr>
-              <tr><td class="muted">1h ago</td><td>Priya Walsh</td><td>Closed newsletter “Product Dispatch”</td><td>Northwind Times</td></tr>
-              <tr><td class="muted">3h ago</td><td>Dana Alvarez</td><td>Manually unsubscribed dan.kim@gmail.com</td><td>Northwind Times</td></tr>
-              <tr><td class="muted">Yesterday</td><td>Ruben Ba</td><td>Exported 96,204 subscribers (CSV)</td><td>Northwind Times</td></tr>
-              <tr><td class="muted">2d ago</td><td>Dana Alvarez</td><td>Provisioned organization “Copperline Courier”</td><td>—</td></tr>
-              <tr><td class="muted">3d ago</td><td>Priya Walsh</td><td>Rotated magic-link signing key</td><td>Lakeside Ledger</td></tr>
+              <tr><td class="muted">2m ago</td><td>Priya Walsh</td><td><span class="mono muted" style="font-size:11.5px">drip.enroll</span> Enrolled jordan.reyes@example.com in “Paid onboarding”</td><td>Northwind Times</td></tr>
+              <tr><td class="muted">1h ago</td><td>Dana Alvarez</td><td><span class="mono muted" style="font-size:11.5px">alerts.update</span> Alert thresholds — complaint warn 0.1% / halt 0.3%</td><td>Northwind Times</td></tr>
+              <tr><td class="muted">3h ago</td><td>Priya Walsh</td><td><span class="mono muted" style="font-size:11.5px">subscription.unsubscribed</span> Manually unsubscribed dan.kim@example.com from The Morning Ledger</td><td>Northwind Times</td></tr>
+              <tr><td class="muted">4h ago</td><td>Dana Alvarez</td><td><span class="mono muted" style="font-size:11.5px">privacy.erase</span> Erased leaving@example.com — events=214 subs=3</td><td>Northwind Times</td></tr>
+              <tr><td class="muted">Yesterday</td><td>Dana Alvarez</td><td><span class="mono muted" style="font-size:11.5px">subscribers.export</span> Exported 97,408 subscribers (CSV) — key, bytes recorded</td><td>Northwind Times</td></tr>
+              <tr><td class="muted">2d ago</td><td>Dana Alvarez</td><td><span class="mono muted" style="font-size:11.5px">orgs.create</span> Provisioned organization “Copperline Courier”</td><td><span class="pill p-neutral">GLOBAL</span></td></tr>
+              <tr><td class="muted">3d ago</td><td>Priya Walsh</td><td><span class="mono muted" style="font-size:11.5px">import.run</span> Import batch <span class="mono">signal-0716</span> — 418 rows, 12 reported</td><td>Northwind Times</td></tr>
+              <tr><td class="muted">5d ago</td><td>Dana Alvarez</td><td><span class="mono muted" style="font-size:11.5px">suppression.import</span> Imported SES account suppression list — 1,204 addresses, 3 reasons unmapped</td><td>Northwind Times</td></tr>
             </tbody>
           </table></div>
         </section>
@@ -1342,7 +1503,7 @@
       <button data-sub="unsubscribe" onclick="subnav('unsubscribe')">Unsubscribe</button>
     </div>
     <div style="flex:1"></div>
-    <button class="btn btn-sm" onclick="setWorld('subscriber');subnav('login')">Log in</button>
+    <span class="pill p-neutral">No login — nothing here asks for a password</span>
   </div>
 
   <!-- directory -->
@@ -1352,7 +1513,7 @@
       <h1 style="margin-top:8px">Independent journalism, in your inbox.</h1>
       <p class="lede">Pick the newsletters you want. Every subscription is double opt-in — we’ll email you to confirm, and you can manage or leave anytime.</p>
       <div class="nl-grid">
-        <div class="nl card"><div class="top"><div><h3>The Morning Ledger</h3><div class="freq">Daily · weekday mornings</div></div><span class="pill p-neutral">Free</span></div><p>The business day in a five-minute read. Markets, deals, and the one chart that matters.</p><div class="foot"><span class="cnt">96,204 readers</span><button class="btn btn-primary btn-sm" onclick="subnav('confirm')">Subscribe</button></div></div>
+        <div class="nl card"><div class="top"><div><h3>The Morning Ledger</h3><div class="freq">Daily · weekday mornings</div></div><span class="pill p-neutral">Free</span></div><p>The business day in a five-minute read. Markets, deals, and the one chart that matters.</p><div class="foot"><span class="cnt">97,408 readers</span><button class="btn btn-primary btn-sm" onclick="subnav('confirm')">Subscribe</button></div></div>
         <div class="nl card"><div class="top"><div><h3>Market Signal</h3><div class="freq">Weekly · Sunday</div></div><span class="pill p-paid"><span class="dot"></span>Paid</span></div><p>Deep premium analysis for investors. Included with a Northwind membership.</p><div class="foot"><span class="cnt">8,410 members</span><button class="btn btn-primary btn-sm" onclick="subnav('confirm')">Subscribe</button></div></div>
         <div class="nl card"><div class="top"><div><h3>Field Notes</h3><div class="freq">Weekly · Thursday</div></div><span class="pill p-neutral">Free</span></div><p>Long-form features and reporting from the field. One story, told well.</p><div class="foot"><span class="cnt">54,880 readers</span><button class="btn btn-primary btn-sm" onclick="subnav('confirm')">Subscribe</button></div></div>
         <div class="nl card"><div class="top"><div><h3>Weekend Long Read</h3><div class="freq">Weekly · Saturday</div></div><span class="pill p-neutral">Free</span></div><p>The best of the week plus one essay worth your Saturday coffee.</p><div class="foot"><span class="cnt">61,300 readers</span><button class="btn btn-primary btn-sm" onclick="subnav('confirm')">Subscribe</button></div></div>
@@ -1365,53 +1526,37 @@
     <div class="pub"><div class="card cardpad centercard" style="text-align:center;display:flex;flex-direction:column;gap:12px;align-items:center">
       <div class="bigcheck">✉</div>
       <h1 style="font-size:22px">Check your inbox</h1>
-      <p class="muted" style="margin:0">We sent a confirmation link to <b>jordan.reyes@gmail.com</b>. Click it to confirm your subscription to <b>The Morning Ledger</b>.</p>
+      <p class="muted" style="margin:0">We sent a confirmation link to <b>jordan.reyes@example.com</b>. Click it to confirm your subscription to <b>The Morning Ledger</b>.</p>
       <div class="note info" style="text-align:left"><span class="ic">▹</span><div>Double opt-in protects deliverability and proves consent. Didn’t get it? Check spam, or <a class="flink" href="#" onclick="return false">resend</a>.</div></div>
       <hr class="divider" style="width:100%">
-      <div style="font-size:13px" class="muted">Already confirmed? <a class="flink" href="#" onclick="subnav('login')">Log in to manage preferences →</a></div>
+      <div style="font-size:13px" class="muted">Already confirmed? <a class="flink" href="#" onclick="subnav('preferences')">Get a link to manage your newsletters →</a></div>
     </div></div>
   </section>
 
-  <!-- subscriber login (Cognito hosted UI — subscriber pool) -->
-  <section class="pubscreen" data-sub="login" style="display:none">
-    <div class="cog-wrap sub">
-      <div class="cog">
-        <span class="poolchip sub">Subscriber pool · shared with northwindtimes.example</span>
-        <div class="cog-card">
-          <div class="cog-logo"><span class="mark" style="width:28px;height:28px;border-radius:7px;background:linear-gradient(135deg,#c98a3a,#9a5a20);color:#fff;display:grid;place-items:center;font-weight:800">S</span><b>Northwind Times</b></div>
-          <h2>Sign in</h2>
-          <div class="sub">One account for your newsletters and the site</div>
-          <form onsubmit="subnav('preferences');return false">
-            <div class="field"><label>Email</label><input type="email" value="jordan.reyes@gmail.com"></div>
-            <div class="field"><label>Password</label><input type="password" value="••••••••••"></div>
-            <a class="flink" href="#" onclick="return false">Forgot your password?</a>
-            <button class="btn btn-primary" type="submit" style="justify-content:center;padding:11px">Sign in</button>
-            <div class="or">or</div>
-            <button class="btn" type="button" style="justify-content:center" onclick="subnav('preferences')">Email me a magic link</button>
-          </form>
-          <div class="foot" style="margin-top:14px">New here? <a class="flink" href="#" onclick="subnav('directory')">Browse newsletters</a></div>
-        </div>
-        <div class="cog foot" style="text-align:center">Hosted UI secured by <b>Amazon Cognito</b></div>
-      </div>
-    </div>
-  </section>
-
-  <!-- preference center -->
+  <!-- preference centre — token-requested, no password -->
   <section class="pubscreen" data-sub="preferences" style="display:none">
     <div class="pub" style="max-width:680px">
-      <span class="eyebrow">Signed in as jordan.reyes@gmail.com</span>
-      <h1 style="margin-top:8px">Your newsletters</h1>
-      <p class="lede">Toggle what lands in your inbox. Changes save instantly.</p>
-      <div class="card cardpad" style="margin-top:22px">
+      <span class="eyebrow">Manage your newsletters</span>
+      <h1 style="margin-top:8px">We’ll email you a link.</h1>
+      <p class="lede">There is no account and no password. Tell us the address and we’ll send a signed link to it — the link is what proves the address is yours.</p>
+      <div class="card cardpad" style="margin-top:22px;display:flex;flex-direction:column;gap:12px">
+        <div class="field"><label>Email address</label><input type="email" placeholder="you@example.com"></div>
+        <button class="btn btn-primary" style="align-self:flex-start" onclick="return false">Email me a manage link</button>
+        <div class="note info"><span class="ic">▹</span><div>Anyone can type any address into a form, so a page that trusted a submitted address would be a mass-unsubscribe tool. <span class="mono">POST /preferences/request</span> mails the link <i>to that address</i> and answers <b>202 with an identical body whether or not the address is on file</b> — you cannot learn who subscribes by guessing. The page behind the link reads the subscriber id from the token, never from the form.</div></div>
+      </div>
+
+      <div class="row" style="justify-content:space-between;margin:26px 0 10px"><div class="eyebrow">Behind that link</div><span class="pill p-warn">Not yet built</span></div>
+      <div class="note warn"><span class="ic">⚠</span><div>The preference-centre <b>API</b> is built — <span class="mono">GET</span>/<span class="mono">POST /preferences</span> read and update list memberships behind a signed, <span class="mono">manage</span>-scoped token, with an expired link getting its own page and a 410. The <b>page</b> in the subscriber site is not built yet; four routes ship today — directory, subscribe-to-all, confirm, one-click unsubscribe. Below is the design.</div></div>
+      <div class="card cardpad" style="margin-top:14px;opacity:.7">
         <div class="prefrow"><div class="info"><b>The Morning Ledger</b><div>Daily · weekday mornings</div></div><div class="toggle on" onclick="this.classList.toggle('on')"><i></i></div></div>
         <div class="prefrow"><div class="info"><b>Market Signal</b> <span class="pill p-paid" style="margin-left:6px"><span class="dot"></span>Paid</span><div>Weekly · Sunday</div></div><div class="toggle on" onclick="this.classList.toggle('on')"><i></i></div></div>
         <div class="prefrow"><div class="info"><b>Field Notes</b><div>Weekly · Thursday</div></div><div class="toggle" onclick="this.classList.toggle('on')"><i></i></div></div>
         <div class="prefrow"><div class="info"><b>Weekend Long Read</b><div>Weekly · Saturday</div></div><div class="toggle on" onclick="this.classList.toggle('on')"><i></i></div></div>
       </div>
       <div class="card cardpad" style="margin-top:16px;display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap">
-        <div><b style="font-size:14px">Account &amp; membership</b><div class="muted" style="font-size:12.5px;margin-top:2px">Membership: <span class="pill p-paid"><span class="dot"></span>Paid</span> · entitlement drives your paywall access on the site</div></div>
-        <button class="btn btn-sm">Manage account</button>
+        <div><b style="font-size:14px">Membership</b><div class="muted" style="font-size:12.5px;margin-top:2px">Entitlement <span class="pill p-paid"><span class="dot"></span>Paid</span> · drives paywall access on the publisher’s own site. Your account, if you have one, lives there — not here.</div></div>
       </div>
+      <div class="note info" style="margin-top:16px"><span class="ic">▹</span><div><b>Leaving always works</b> — from any status, on any list, including a closed one. Re-subscribing does not resurrect a bounced or complained subscription and cannot join a closed list; re-subscribing from unsubscribed goes straight to confirmed, because you are holding a link that was mailed to that address.</div></div>
       <div style="margin-top:16px;font-size:13px" class="muted">Want out entirely? <a class="flink" href="#" onclick="subnav('unsubscribe')">Unsubscribe from everything →</a></div>
     </div>
   </section>
@@ -1419,17 +1564,14 @@
   <!-- unsubscribe (POST form) -->
   <section class="pubscreen" data-sub="unsubscribe" style="display:none">
     <div class="pub"><div class="card cardpad centercard" style="display:flex;flex-direction:column;gap:14px">
-      <div><span class="eyebrow">Unsubscribe</span><h1 style="font-size:22px;margin-top:8px">Leave a newsletter</h1></div>
-      <p class="muted" style="margin:0;font-size:13.5px">You’re unsubscribing <b>jordan.reyes@gmail.com</b>. This is a one-click, no-login action (RFC 8058) — the button posts a signed form.</p>
+      <div><span class="eyebrow">Unsubscribe</span><h1 style="font-size:22px;margin-top:8px">Unsubscribe from The Morning Ledger?</h1></div>
+      <p class="muted" style="margin:0;font-size:13.5px">The link identifies you — no login, and nowhere to type an address. One button, then you’re done.</p>
       <!-- illustrative POST form: one-click unsubscribe endpoint -->
-      <form method="POST" action="/u/unsubscribe" onsubmit="showUnsubDone();return false" style="display:flex;flex-direction:column;gap:12px">
+      <form method="POST" action="/unsubscribe" onsubmit="showUnsubDone();return false" style="display:flex;flex-direction:column;gap:12px">
         <input type="hidden" name="token" value="eyJhbGciOiJFUzI1NiJ9.…signed">
-        <div class="field"><label>Which list?</label>
-          <select name="list"><option value="ledger">The Morning Ledger</option><option value="signal">Market Signal</option><option value="field">Field Notes</option><option value="__all">All newsletters</option></select></div>
-        <label class="checkline"><input type="checkbox" name="reason_optout"><span style="font-size:13px">Optionally tell us why (helps us improve) — too many emails</span></label>
-        <div class="row"><button class="btn btn-primary" type="submit" name="action" value="unsubscribe">Unsubscribe</button><button class="btn" type="button" onclick="subnav('preferences')">Manage instead</button></div>
+        <div class="row"><button class="btn btn-primary" type="submit" name="action" value="unsubscribe">Yes, unsubscribe me</button><button class="btn" type="button" onclick="subnav('preferences')">Manage my newsletters instead</button></div>
       </form>
-      <div class="note info"><span class="ic">▹</span><div>The <span class="mono">List-Unsubscribe-Post</span> header lets Gmail/Apple Mail trigger this same endpoint from the inbox in one tap.</div></div>
+      <div class="note info"><span class="ic">▹</span><div>The <span class="mono">List-Unsubscribe-Post</span> header lets Gmail and Apple Mail POST this same route from the inbox in one tap. The link in the email body is a <b>GET</b> and lands here as a confirm page rather than acting: mail scanners and link prefetchers follow GET links, and a GET that acted would unsubscribe anyone whose employer runs a URL scanner. There is deliberately <b>no “enter your email” box</b> — this route is unauthenticated, so such a form would be a mass-unsubscribe tool for anybody who can guess an address. A retired or expired link gets its own page and a 410, not “invalid link”.</div></div>
       <div id="unsub-done" style="display:none" class="note" ><span class="ic">✓</span></div>
     </div></div>
   </section>
@@ -1456,7 +1598,7 @@
         </div>
       </div>
     </div>
-    <div class="modal-f"><button class="btn" onclick="closeModal()">Close</button><button class="btn btn-primary" onclick="closeModal()">Send test to me</button></div>
+    <div class="modal-f" style="justify-content:space-between"><span class="muted" style="font-size:12px;align-self:center">Preview only — the same merge values the send path resolves, rendered here. There is <b>no test-send route</b>.</span><button class="btn btn-primary" onclick="closeModal()">Close</button></div>
   </div>
 </div>
 
@@ -1482,10 +1624,11 @@
   <div class="modal">
     <div class="modal-h"><h3>Switch organization</h3><button class="xbtn" onclick="closeModal()">×</button></div>
     <div class="modal-b" style="gap:8px">
-      <div class="muted" style="font-size:12.5px">Each organization is an isolated silo — its own domain, subscriber pool, signing key and data.</div>
+      <div class="muted" style="font-size:12.5px">Each organization is an isolated silo — its own domain, data and SES identity, plus a signing key when magic links are on. A Cognito subscriber pool is optional and only ever <i>linked</i>.</div>
       <div class="actitem" style="border:1px solid var(--accent);border-radius:10px;cursor:pointer" onclick="switchOrg('Northwind Times','northwindtimes.example')"><div class="ci">S</div><div class="meta"><b>Northwind Times</b><div>northwindtimes.example · 128,430 subscribers</div></div><span class="pill p-accent">current</span></div>
       <div class="actitem" style="border:1px solid var(--border);border-radius:10px;cursor:pointer" onclick="switchOrg('Lakeside Ledger','lakesideledger.example')"><div class="ci" style="background:#e9dcc7;color:#8a5a1c">V</div><div class="meta"><b>Lakeside Ledger</b><div>lakesideledger.example · 74,900 subscribers</div></div><span class="muted">↦</span></div>
       <div class="actitem" style="border:1px solid var(--border);border-radius:10px;cursor:pointer" onclick="switchOrg('Copperline Courier','copperlinecourier.example')"><div class="ci" style="background:var(--surface-3);color:var(--ink-2)">A</div><div class="meta"><b>Copperline Courier</b><div>copperlinecourier.example · 51,200 subscribers</div></div><span class="muted">↦</span></div>
+      <div class="actitem" style="border:1px solid var(--border);border-radius:10px;cursor:pointer" onclick="switchOrg('Northwind Staging','devnorthwindtimes.example','dev')"><div class="ci" style="background:var(--warn-soft);color:var(--warn)">D</div><div class="meta"><b>Northwind Staging</b><div>devnorthwindtimes.example · 120 test subscribers</div></div><span class="pill p-warn">DEV</span></div>
     </div>
     <div class="modal-f"><button class="btn btn-primary" style="width:100%;justify-content:center" onclick="openModal('addorg')">＋ Add organization</button></div>
   </div>
@@ -1495,7 +1638,7 @@
   <div class="modal">
     <div class="modal-h"><h3>Add organization</h3><button class="xbtn" onclick="closeModal()">×</button></div>
     <div class="modal-b">
-      <div class="note info"><span class="ic">▹</span><div>This provisions an isolated silo: a dedicated subscriber Cognito pool, KMS signing key, SES identity and JWKS — nothing is shared with your other publications.</div></div>
+      <div class="note info"><span class="ic">▹</span><div>This provisions an isolated silo: an SES domain identity and configuration set always, plus a per-org KMS ES256 signing key and JWKS when magic links are on. Nothing is shared with your other publications. A Cognito pool is <b>linked, never created</b>.</div></div>
       <div class="field"><label>Organization name</label><input type="text" placeholder="e.g. Steamboat Pilot"></div>
       <div class="field"><label>Primary sending domain</label><input class="mono" type="text" placeholder="northwindtimes.example"></div>
       <div class="grid2" style="gap:12px">
@@ -1504,14 +1647,18 @@
       </div>
       <div class="muted" style="font-size:11px;margin-top:-6px">Time zone drives recurring send schedules (DST-aware) and report bucketing — storage stays UTC.</div>
       <div class="grid2" style="gap:12px">
-        <div class="field"><label>Subscriber pool</label><select><option>Link existing pool (recommended)</option><option>Create a new pool</option></select></div>
-        <div class="field"><label>Existing user pool ID</label><input class="mono" type="text" placeholder="us-west-2_XXXXXXXXX"></div>
+        <div class="field"><label>Environment</label><select><option>prod</option><option>dev — fail-closed allowlist</option></select></div>
+        <div class="field"><label class="mono">devAllowlist</label><input class="mono" type="text" placeholder="qa@example.com, @northwindtimes.example"></div>
       </div>
-      <div class="field"><label>Site domain (shared login / paywall)</label><input class="mono" type="text" placeholder="northwindtimes.example"></div>
-      <div class="note info"><span class="ic">▹</span><div>Most publishers already have a Cognito pool behind their site — link it so magic-link <span class="mono">sub</span> matches your existing users. Pick “create” only if this site has no auth yet.</div></div>
+      <div class="note warn"><span class="ic">⚠</span><div>A <b>dev</b> org gates every recipient of every send against this list and is <b>fail-closed</b> — leave it empty and the org sends to no one. That is the safe-testing mechanism; there is no sandbox mode.</div></div>
+      <div class="field"><label>Link an existing subscriber pool <span class="muted">(optional)</span></label><input class="mono" type="text" placeholder="us-west-2_XXXXXXXXX"></div>
+      <div class="note info"><span class="ic">▹</span><div>There is <b>no create mode</b> — a user pool has too many consequential settings for this application to choose on your behalf, and the stack holds no <span class="mono">CreateUserPool</span> permission. Linking validates the pool with <span class="mono">DescribeUserPool</span> and nothing more. Leave it blank and the org never touches Cognito.</div></div>
       <hr class="divider">
-      <div class="row" style="justify-content:space-between"><div><b style="font-size:13.5px">Dedicated IP pool</b><div class="muted" style="font-size:12px">Isolate this org’s sending reputation (added cost). Off = shared account IPs.</div></div><div class="toggle" onclick="this.classList.toggle('on')"><i></i></div></div>
-      <div class="field"><label>Suppression scope</label><select><option>Hybrid — bounces/complaints global, unsubscribes per-org</option><option>Global shared list</option><option>Per-organization</option></select></div>
+      <div class="field"><label class="mono">dedicatedIpPoolName <span class="muted">(optional)</span></label><input class="mono" type="text" placeholder="leave blank for shared account IPs"><div class="muted" style="font-size:11.5px">Sending mode is <b>derived</b> from this name, not from a toggle — addressium does not create IP pools, so a checkbox would let you pay nothing, get shared IPs, and hold a record claiming otherwise.</div></div>
+      <div class="grid2" style="gap:12px">
+        <div class="field"><label>Suppression scope</label><select><option>Hybrid — bounces/complaints global, unsubscribes per-org</option><option>Global shared list</option><option>Per-organization</option></select></div>
+        <div class="field"><label>DMARC policy</label><select><option>p=none — monitor only</option><option>p=quarantine</option><option>p=reject</option></select></div>
+      </div>
     </div>
     <div class="modal-f"><button class="btn" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal()">Provision silo →</button></div>
   </div>
@@ -1542,7 +1689,7 @@
   function go(world,screen){setWorld(world);if(screen)nav(screen);}
 
   // admin nav
-  var crumbNames={dashboard:'Dashboard',analytics:'Analytics',newsletters:'Newsletters',subscribers:'Subscribers','subscriber-detail':'Subscriber',segments:'Segments',campaigns:'Campaigns',compose:'New campaign',templates:'Templates',automations:'Automations',feeds:'Feeds',tags:'Merge tags',adtags:'Ad tags',identity:'Identity & pools',data:'Data & exports',apikeys:'API & webhooks',suppression:'Suppression',organizations:'Organizations',roles:'Roles & access',usage:'Usage & cost',builder:'Visual builder',audit:'Audit log',settings:'Settings'};
+  var crumbNames={dashboard:'Dashboard',analytics:'Analytics',newsletters:'Newsletters',subscribers:'Subscribers','subscriber-detail':'Subscriber',segments:'Segments',campaigns:'Campaigns',compose:'New campaign',templates:'Templates',automations:'Automations',feeds:'Feeds',tags:'Merge tags',adtags:'Ad tags',identity:'Identity & pools',data:'Data & exports',apikeys:'API & webhooks',suppression:'Suppression',organizations:'Organizations',roles:'Roles & access',branding:'Branding',usage:'Usage & cost',builder:'Visual builder',audit:'Audit log',settings:'Settings'};
   function nav(screen){
     document.querySelectorAll('#frame-admin .screen').forEach(function(s){s.classList.toggle('on',s.dataset.screen===screen)});
     document.querySelectorAll('#frame-admin .navlink').forEach(function(n){n.classList.toggle('on',n.dataset.screen===screen)});
@@ -1591,7 +1738,7 @@
 
   // analytics report tabs
   function atab(name){
-    var btns=document.querySelectorAll('#atabs button');var map={map:0,funnel:1,links:2};
+    var btns=document.querySelectorAll('#atabs button');var map={links:0,map:1,funnel:2};
     btns.forEach(function(b){b.classList.remove('on')});if(btns[map[name]])btns[map[name]].classList.add('on');
     document.querySelectorAll('[data-apane]').forEach(function(p){p.classList.toggle('on',p.dataset.apane===name)});
   }
@@ -1604,17 +1751,19 @@
     else{pill.className='pill p-neutral vis';pill.textContent='Closed';btn.textContent='Reopen';}
   }
 
-  // manual unsubscribe (subscriber detail)
+  // manual unsubscribe (subscriber detail). A per-list unsubscribe flips the
+  // subscription only — no suppression entry. Suppression is written by
+  // "unsubscribe from all", and org-scoped (§4.13 hybrid).
   function rowUnsub(btn){
     var item=btn.closest('.actitem');var meta=item.querySelector('.meta div');
-    meta.innerHTML='<span style="color:var(--crit);font-weight:600">Unsubscribed · suppressed</span>';
+    meta.innerHTML='<span style="color:var(--crit);font-weight:600">Unsubscribed</span> <span class="muted">· subscription only, no suppression entry</span>';
     btn.outerHTML='<span class="pill p-crit"><span class="dot"></span>Removed</span>';
   }
   function manualUnsubAll(){
     document.querySelectorAll('#sub-lists .actitem').forEach(function(item){
       var b=item.querySelector('button');if(b)rowUnsub(b);
     });
-    var s=document.getElementById('supState');if(s)s.innerHTML='<span class="pill p-crit"><span class="dot"></span>Suppressed · all lists</span>';
+    var s=document.getElementById('supState');if(s)s.innerHTML='<span class="pill p-crit"><span class="dot"></span>Suppressed · Northwind Times</span> <span class="muted" style="font-size:11.5px">org-scoped · source <span class="mono">unsubscribe</span></span>';
   }
 
   // visual builder — select a block
@@ -1623,20 +1772,19 @@
     el.classList.add('sel');
   }
 
-  // sandbox / test mode
-  function toggleSandbox(){
-    var on=document.getElementById('sbxBanner').style.display==='none';
-    document.getElementById('sbxBanner').style.display=on?'block':'none';
-    document.getElementById('sbxBtn').innerHTML=on
-      ? '<span id="sbxDot" style="color:var(--warn)">●</span>&nbsp;Sandbox'
-      : '<span id="sbxDot" style="color:var(--good)">●</span>&nbsp;Live';
-  }
-
-  // organization switcher (multi-silo)
-  function switchOrg(name,domain){
+  // organization switcher (multi-silo). `environment` is a real per-org field
+  // (§4.11), so the chip and the topbar pill follow the org — a dev org must
+  // never render as PROD, which is the whole point of the DEV badge.
+  function switchOrg(name,domain,env){
+    var e=(env==='dev')?'dev':'prod';
     document.getElementById('orgName').textContent=name;
-    document.getElementById('orgDomain').textContent=domain+' · prod';
+    document.getElementById('orgDomain').textContent=domain+' · '+e;
     document.getElementById('crumbOrg').textContent=name;
+    var pill=document.getElementById('envPill');
+    if(pill){
+      pill.className='pill '+(e==='dev'?'p-warn':'p-good');
+      pill.innerHTML='<span class="dot"></span>'+e.toUpperCase();
+    }
     closeModal();nav('dashboard');
   }
 

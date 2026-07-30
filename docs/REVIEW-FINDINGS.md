@@ -237,7 +237,7 @@ consults (2026-07-29), so a complaint storm on a series can actually stop it.
 - ✅ **Nothing alarms on most of the system**: no API 5xx alarm, no alarm on the
   events Lambda, DDB throttles, Step Functions failures, or the analytics
   Lambdas — and the ops SNS topic **has no subscribers**.
-  **Mostly fixed**: 29 alarms in a default synth (both queue/DLQ pairs, every
+  **Mostly fixed**: 30 alarms in a default synth (both queue/DLQ pairs, every
   handler's errors+throttles, the table, the swallowed drip enrollments on the
   confirm path (#245), analytics + Firehose when enabled),
   a dashboard, and `deploy:check` warns when the topic has no target.

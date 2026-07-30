@@ -117,8 +117,9 @@ every org in a deployment is operated by the same owner.
   untouched (no token, no tracking)
 - **Migration importer**: generic CSV ingest, plus reading a real Pinpoint
   export — dotted-column CSV with `OptOut`/`EndpointStatus` honored and
-  `Attributes.*` mapped to audiences (§4.7, #216, #209). Gzipped JSON Lines
-  exports are not supported
+  `Attributes.*` mapped to audiences (§4.7, #216, #209), **and** the gzipped
+  JSON Lines an export JOB writes (#239) — flattened to the same dotted columns
+  so one mapper serves both shapes
 - **Admin console** (React SPA) protected by Cognito
 - **Infrastructure as code** via AWS CDK (TypeScript), behind a one-time
   bootstrap stack and a permissions boundary (§9)
@@ -992,8 +993,11 @@ Two distinct replacement systems, declared on the template:
   example and fallback. Token-claim tags ride in the magic link; per-recipient
   tags resolve during bulk send; per-campaign tags are identical for everyone.
 - **Ad blocks** — block-mode templates can carry `{kind:"ad"}` blocks whose HTML
-  (e.g. LiveIntent) is inserted **verbatim** by the operator's own say-so —
-  trusted, unsanitized — and is **never** tokenized or click-tracked (excluded
+  (e.g. LiveIntent) is inserted by the operator's own say-so and is **never**
+  tokenized or click-tracked. It IS hard-sanitized on the way in, like every
+  other body (`sanitizeEmailHtml`, services/api/src/index.ts — #94), so blocks
+  mode is no weaker than `raw_html`; the docs previously said "trusted,
+  unsanitized", which understated the posture. (Excluded
   from the click table). Named **ad-slot fills** (`{{ad_top}}`,
   `{{ad_inline_1..3}}`…) bound at the series/template level are modeled in the
   types (`Template.adSlots`, `CampaignSeries.adSlotFills`) but **nothing
@@ -1552,8 +1556,11 @@ deployment has *the same* one, and the first thing anyone does with a new org is
 send a test. Re-provisioning never overwrites an edited copy.
 
 It deliberately contains one of each thing that fails silently — a merge tag (so
-escaping is exercised), a tracked editorial link (so the click map is), the
-compliance footer and physical address, and a visible unsubscribe link. The
+escaping is exercised), a tracked editorial link (so the click map is), and a
+visible unsubscribe link. It does NOT carry `{{compliance_footer}}` or
+`{{physical_address}}` — `seed-template.ts` contains neither name, and
+`PRIMARY_TEST_MERGE_TAGS` is `first_name`/`list_name`/`unsubscribe_url` — so a
+template built by hand from the seed must place the footer itself. The
 editorial link points at `example.com` so a first smoke test does not send click
 traffic to a domain the operator does not control. `seedTemplateSmokeCheck()`
 asserts the properties a preview cannot show you: no unresolved merge tag, an
@@ -1954,7 +1961,7 @@ Lambda throttles.
   account already runs; creating our own topic competes with it. The operator
   supplies `opsAlertTopicArn`, or `opsAlertEmail` for a simple setup. With an ARN
   supplied, no topic is created and none is exported. With neither set the stack
-  still deploys, and `deploy:check` warns — 29 alarms publishing to a topic with
+  still deploys, and `deploy:check` warns — 30 alarms publishing to a topic with
   no subscribers is monitoring in appearance only (#222).
 - **CloudWatch dashboard** (compendium #29) — **built**: one ops dashboard per
   stack, exported as the `OpsDashboardUrl` output.

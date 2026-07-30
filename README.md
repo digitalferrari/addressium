@@ -272,9 +272,10 @@ One send generates **58,800 engagement events** (one delivery per recipient, plu
 opens, clicks and bounces at 40% / 5% / 2%). Everything downstream of SES is ~24%
 of the total.
 
-### Fixed — **$4.20/month**, whether or not you send
+### Fixed — **$5.80/month**, whether or not you send
 
-24 CloudWatch alarms ($2.40) · 1 KMS key per org ($1.00) · 2 secrets ($0.80)
+30 CloudWatch alarms ($3.00) · the stack data key ($1.00) · 1 KMS key per org
+($1.00) · 2 secrets ($0.80)
 
 ### Annual, 40,000 subscribers
 
@@ -386,8 +387,9 @@ call.
   verified sample is CSV with 73 dotted columns (`Address`, `EndpointStatus`,
   `OptOut`, `Attributes.*`, `User.UserAttributes.*`), and list membership rides
   in the `Attributes.*` columns as `true`/`false`/empty where empty means *never
-  asked*. Gzipped JSON Lines exports are still unsupported, and a saved mapping
-  is not yet re-offered on the next file with the same headers.
+  asked*. A Pinpoint export JOB's **gzipped JSON Lines** is also read (#239) —
+  flattened to the same dotted columns, so one mapper serves both — and a saved
+  mapping is not yet re-offered on the next file with the same headers.
 - The audit log is still dead code: the WORM bucket is provisioned and correctly
   moded, and nothing has ever written an object to it.
 

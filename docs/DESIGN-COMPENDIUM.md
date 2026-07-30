@@ -237,7 +237,7 @@ caching a short-lived data key or signing locally with a KMS-wrapped key.
 | 56 | **Cedar-backed RBAC** | Server-side authorization, 4 roles, org-scoped | Built |
 | 57 | **Transactional counters** | O(1) campaign reporting instead of reading every event. Event write + counter increment in one `TransactWriteItems`, made exactly-once by the deterministic `eventId`. | Built (#221) |
 | 58 | **Export / portability** — CSV + JSONL incl. consent provenance, round-trip importable | Users must be able to leave | Built (#224) |
-| 59 | **Import from a real Pinpoint export** | Dotted-column CSV parser; `OptOut`/`EndpointStatus` must never become mailable. (Gzipped JSON Lines not supported.) | Built (#216, #209) |
+| 59 | **Import from a real Pinpoint export** | Dotted-column CSV parser **and** the gzipped JSON Lines an export job writes, flattened to the same columns so one mapper serves both; `OptOut`/`EndpointStatus` must never become mailable. | Built (#216, #209, #239) |
 | 60 | **Import wizard** **[CHANGED r2]** | Before any row is written, the admin must declare: **(a) consent basis — explicit (double opt-in evidence) or implicit (existing relationship)**, **(b) tags identifying this import batch**, **(c) target audiences via multi-select**, with create-new inline. Consent basis is recorded on every imported subscription, so a later dispute can be answered per-row rather than per-file. Implicit consent should default the subscription to `pending`. | Built (#223) |
 | 61 | **Local dev mode** (`npm run dev`) | Same router on a port. Biggest maintainability lever — bugs reproducible without AWS. | Built (#232) |
 

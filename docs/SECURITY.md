@@ -526,7 +526,7 @@ delivery of the event stream is an integrity control.
   `EVENT#<at>#<eventId>`, so a redelivered event overwrites its own row rather
   than double-counting. Built.
 - **DLQ on the send path** (#92): `SendQueue` has a dead-letter queue with
-  `maxReceiveCount: 5`, and two of the 29 alarms watch it (DLQ-not-empty, queue
+  `maxReceiveCount: 5`, and two of the 30 alarms watch it (DLQ-not-empty, queue
   age). A message that repeatedly fails to send is inspectable and replayable
   instead of lost. Built.
 - **SQS between SNS and `EventsFn`** (#20, #44, #218). Built: SES → SNS → SQS →
