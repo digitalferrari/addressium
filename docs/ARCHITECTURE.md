@@ -845,6 +845,42 @@ Entries carry `source` (bounce / complaint / manual / unsubscribe / inactive)
 and `scope` (global / org). GDPR erasure (§4.19) writes a tombstone here holding
 the address, so a forgotten address is never re-added.
 
+**Importing the provider's own suppression list** (#240). `POST
+/orgs/{org}/import/suppression` reads the SES **account** suppression list — the
+one SES maintains itself from hard bounces and complaints — and writes it into the
+store. This is the half of a migration nothing else can reconstruct: subscriber
+records can be re-exported from the source at any time, but *"this address
+hard-bounced two years ago"* exists only here. Skip it and the first campaign
+after the migration mails every one of those addresses, straight into the bounce
+and complaint rates the deliverability halt (§4.18) exists to catch, on day one.
+**Run it before the subscriber import.**
+
+Four decisions worth stating:
+
+- **`BOUNCE` and `COMPLAINT` both map to `global` scope**, matching how a live
+  bounce or complaint is recorded (§4.5) — they threaten the reputation every org
+  in the deployment shares.
+- **An unrecognized reason is reported, never guessed.** SES can add reasons, and
+  coercing an unread value into `bounce` would invent a permanent global
+  suppression. Unmapped entries come back in the report by address.
+- **The provider's timestamp is kept** as `addedAt` when SES supplies one. It is
+  the evidence: *"SES recorded a hard bounce in 2023"* is the answer to why an
+  address is suppressed, and stamping it with the import date destroys exactly
+  that.
+- **Read-only against SES, and `suppression:manage`-gated.** Nothing writes to the
+  operator's account list — that would change how their account behaves for every
+  sender using it, including whatever they have not migrated yet. The route
+  requires `suppression:manage` (developer_admin only) rather than the
+  `subscribers:manage` its sibling import routes use, because these entries are
+  global, bulk, and have no bulk way back; a dry run reports what a real run would
+  write.
+
+Writes go through `SuppressionStore.addMany`, which batches at DynamoDB's 25-item
+limit, dedupes within a batch (a paginated provider list can repeat an address)
+and retries `UnprocessedItems` — a throttled partition returns HTTP 200 with the
+leftovers in the body, so treating that as success would silently drop the
+suppressions this whole path exists to apply.
+
 ### 4.14 Merge tags & ad tags
 
 Two distinct replacement systems, declared on the template:
@@ -2146,8 +2182,8 @@ describes the target; this is the part that is still unearned. It mirrors
   GENERIC template carrying merge *tags*, not one recipient's rendered values. So
   there is no subject data there to erase today. If per-recipient bodies are ever
   archived, that changes and this line stops being true.
-- **The counts that are safe to quote** — 29 alarms, 27 log groups, 64 API routes
-  (49 behind the JWT authorizer), 343 resources in a default synth — are
+- **The counts that are safe to quote** — 29 alarms, 27 log groups, 65 API routes
+  (50 behind the JWT authorizer), 345 resources in a default synth — are
   reproducible with `npm run build && cd infra/cdk && npx cdk synth`. They are
   template facts,
   which is a weaker claim than it sounds. Dev and prod now synthesize the same

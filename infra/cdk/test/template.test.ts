@@ -1500,3 +1500,37 @@ test("provisioning may ASSIGN a dedicated IP pool but not create one (#237)", ()
     assert.ok(!grants.includes(forbidden), `a role may create billable IP capacity: ${forbidden}`);
   }
 });
+
+test("the suppression importer can read the account list and nothing else (#240)", () => {
+  // The migration gap that actively causes harm: without the account suppression
+  // list, the first campaign after a migration mails years of accumulated hard
+  // bounces. So AdminApiFn needs to READ it — and must not be able to write it.
+  const t = template();
+  const sesActions = policyFor(t, "AdminApiFn")
+    .filter((s) => s.Effect !== "Deny")
+    .flatMap(actionsOf)
+    .filter((a) => a.startsWith("ses:"));
+
+  assert.ok(
+    sesActions.includes("ses:ListSuppressedDestinations"),
+    "the import route cannot read the account suppression list",
+  );
+  // Writing to the operator's ACCOUNT suppression list would change how their
+  // account behaves for every sender using it, including whatever they have not
+  // migrated yet. The import direction is the only safe one to automate.
+  for (const forbidden of ["ses:PutSuppressedDestination", "ses:DeleteSuppressedDestination"]) {
+    assert.ok(!sesActions.includes(forbidden), `AdminApiFn holds ${forbidden}`);
+  }
+
+  // No other function needs it — this is a migration action on one route, not a
+  // capability of the send path.
+  for (const prefix of ["SenderFn", "ConfirmFn", "EventsFn"]) {
+    const other = policyFor(t, prefix)
+      .filter((s) => s.Effect !== "Deny")
+      .flatMap(actionsOf);
+    assert.ok(
+      !other.includes("ses:ListSuppressedDestinations"),
+      `${prefix} does not need to read the suppression list`,
+    );
+  }
+});

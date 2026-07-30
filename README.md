@@ -31,7 +31,7 @@ the same owner.
 | **Drip sequences** | Multi-step journeys with waits measured in days |
 | **Re-engagement & sunset** | Win-back sequence, then a clean unsubscribe for the unreachable |
 | **Reporting** | Opens, clicks, bounces, complaints, unsubscribes, delivery rates, per-link click maps |
-| **Suppression** | Automatic on bounce/complaint. Bounces suppress globally, unsubscribes per-org. |
+| **Suppression** | Automatic on bounce/complaint. Bounces suppress globally, unsubscribes per-org. Your existing SES account suppression list imports in bulk, so a migration does not re-mail addresses you already knew were dead. |
 | **One-click unsubscribe** | RFC 8058 — required by Gmail and Yahoo for bulk senders |
 | **Deliverability auto-halt** | Stops a campaign mid-flight when bounce/complaint rates breach your thresholds |
 | **Multi-org silos** | Per-org KMS key, SES identity and config set. Dev orgs are fail-closed to an allowlist, so a test blast cannot reach a live list. |
@@ -58,7 +58,6 @@ rather than remembered:
 | **Transactional send API** | No `SendMessages` analogue. Transactional mail exists (§4.2, and `EmailClass` gates its eligibility) but has no public API |
 | **Templates** | No Handlebars, no version-history retention, no default substitutions. MJML compiles browser-side, so a drip step on an MJML template fails loudly rather than silently |
 | **Sending** | Per-recipient `SendEmail`; `SendBulkEmail` 50-destination batching is not implemented. No attachments |
-| **Suppression** | No import of an existing SES account-suppression list |
 | **Recommenders, SMS/push/voice/in-app** | Out of scope by design — see below |
 
 And the other direction, because a migration is a trade in both: double opt-in

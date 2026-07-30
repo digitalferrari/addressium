@@ -13,6 +13,10 @@
 export { DynamoStores } from "./dynamo.js";
 export { SesEmailSender, SES_TAG, encodeTag, decodeTag } from "./ses.js";
 export {
+  SesSuppressionListReader,
+  type SesSuppressionListReaderConfig,
+} from "./ses-suppression.js";
+export {
   unwrap,
   unwrapRecords,
   normalize,

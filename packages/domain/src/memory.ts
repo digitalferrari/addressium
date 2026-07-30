@@ -272,6 +272,13 @@ export class MemSuppression implements SuppressionStore {
     if (e.scope === "global") this.global.set(email, entry);
     else this.orgScoped.set(subKey(e.orgId, email), entry);
   }
+  async addMany(entries: SuppressionEntry[]) {
+    // Sequential rather than Promise.all: `add` is last-write-wins per key, and
+    // a duplicated address in the input must resolve the same way it does
+    // against DynamoDB — later entry wins — or the two stores disagree on a
+    // case the importer deliberately tolerates.
+    for (const e of entries) await this.add(e);
+  }
   async entriesFor(orgId: string, email: string) {
     const e = email.toLowerCase();
     const out: SuppressionEntry[] = [];

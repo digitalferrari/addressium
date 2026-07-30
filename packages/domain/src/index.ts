@@ -24,6 +24,7 @@ export * from "./export.js";
 export * from "./importer.js";
 export * from "./import-mapping.js";
 export * from "./import-run.js";
+export * from "./suppression-import.js";
 export * from "./reporting.js";
 export * from "./alerts.js";
 export * from "./throttle.js";

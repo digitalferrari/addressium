@@ -278,6 +278,21 @@ export interface SuppressionStore {
   /** Suppressed for this org given the deployment scope (§4.13). */
   isSuppressed(orgId: string, email: string): Promise<boolean>;
   add(e: SuppressionEntry): Promise<void>;
+  /**
+   * Add many entries at once (#240).
+   *
+   * Exists because the migration path is the one caller that arrives with a
+   * whole list rather than one address. A Pinpoint account's suppression list is
+   * years of accumulated hard bounces and complaints, and `add`-per-address
+   * turns that into one round trip each — slow enough that an operator abandons
+   * it half-done, which is the worst outcome available: subscribers imported,
+   * suppressions partially applied, first campaign sent.
+   *
+   * Implementations MUST be idempotent per (scope, email) — re-running an import
+   * overwrites rather than duplicating — and MUST NOT assume the input is free
+   * of duplicates.
+   */
+  addMany(entries: SuppressionEntry[]): Promise<void>;
   /** The matching suppression entries (org + global) for an email — to inspect source/scope (#58). */
   entriesFor(orgId: string, email: string): Promise<SuppressionEntry[]>;
   /** Remove a suppression entry (e.g. self-clear a prior unsubscribe on genuine re-opt-in). */
@@ -594,6 +609,37 @@ export interface DripEnrollment {
  */
 export interface DripStarter {
   start(enrollment: DripEnrollment): Promise<void>;
+}
+
+/**
+ * One entry from a sending provider's account-level suppression list (#240).
+ *
+ * `reason` is the provider's own classification, kept in the provider's spelling
+ * rather than pre-mapped: the mapping to a `SuppressionSource`/`SuppressionScope`
+ * is a domain decision with compliance weight, and it belongs in one reviewable
+ * place (`importSuppressionList`) rather than spread across adapters.
+ */
+export interface SuppressedDestination {
+  email: string;
+  /** SES publishes exactly these two. An unrecognized value is not guessed at. */
+  reason: string;
+  /** When the provider recorded it (ISO). Absent if the provider did not say. */
+  at?: string;
+}
+
+/**
+ * Reads a provider's account suppression list, page by page (SES v2 in prod —
+ * §4.7, §4.13, #240).
+ *
+ * An `AsyncIterable` rather than an array on purpose. The list is unbounded from
+ * our side — it is however many addresses the operator's account accumulated
+ * before they found us — so materializing it costs memory we cannot predict, in a
+ * Lambda, at exactly the moment the operator is least willing to see a failure.
+ * Pagination lives in the adapter; the domain consumes a stream and batches its
+ * writes.
+ */
+export interface SuppressionListReader {
+  list(): AsyncIterable<SuppressedDestination>;
 }
 
 export interface Clock {

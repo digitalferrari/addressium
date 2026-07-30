@@ -15,6 +15,7 @@ import {
   EventBridgeScheduler,
   GoogleRecaptchaVerifier,
   SesEmailSender,
+  SesSuppressionListReader,
   SfnDripStarter,
   SqsSendQueue,
   getSecret,
@@ -46,6 +47,7 @@ import {
   enrollManually,
   enrollOnConfirmation,
   evaluateSetup,
+  importSuppressionList,
   isHoneypotTripped,
   markScheduleActive,
   scheduleName,
@@ -94,6 +96,7 @@ import {
   verifyWebhookSignature,
   type DripStarter,
   type SendDescriptor,
+  type SuppressionListReader,
   type Stores,
 } from "@addressium/domain";
 import {
@@ -1462,6 +1465,54 @@ export async function importBatchesHandler(event: HttpEvent): Promise<HttpResult
   }
 }
 
+/**
+ * POST /orgs/{org}/import/suppression — import the SES account suppression list
+ * (§4.7, §4.13, #240).
+ *
+ * The half of a migration nothing else can reconstruct: a subscriber export can
+ * be taken again at any time, but "this address hard-bounced two years ago" lives
+ * only in the account suppression list. Skip it and the first campaign mails
+ * every one of those addresses, which is the reputation event the migration was
+ * supposed to avoid.
+ *
+ * `suppression:manage`, matching every other suppression route (`manualSuppress`,
+ * the list view, `liftSuppression`) — and deliberately NOT the `subscribers:manage`
+ * that the sibling import routes use. That capability is held by `support` and
+ * `editor` for "add / edit / manual unsubscribe", which is a per-subscriber
+ * mandate; this writes GLOBAL entries in bulk, affecting every org in the
+ * deployment, with no bulk way back. `suppression:manage` is developer_admin-only,
+ * which is the right blast radius for that.
+ *
+ * The reader is injectable for tests only. It reads the DEPLOYMENT's SES account
+ * rather than anything caller-supplied: an operator-named account would make this
+ * route an SSRF-shaped credential-confusion primitive — "import from the account
+ * I name" against our own credentials.
+ */
+export async function importSuppressionHandler(
+  event: HttpEvent,
+  injected?: { reader?: SuppressionListReader },
+): Promise<HttpResult> {
+  try {
+    const orgId = event.pathParameters?.org ?? "";
+    requireGrant(event, "suppression:manage", orgId);
+    const body = JSON.parse(event.body ?? "{}") as { dryRun?: boolean };
+    const dryRun = body.dryRun === true;
+    const report = await importSuppressionList(
+      stores(),
+      clock,
+      injected?.reader ?? new SesSuppressionListReader(),
+      { orgId, ...(dryRun ? { dryRun: true } : {}) },
+    );
+    // Audited even though it writes no subscriber data: these entries are GLOBAL
+    // and there is no bulk un-suppress, so "who ran this, against which org" is a
+    // question that will be asked. A dry run wrote nothing, so it is not an event.
+    if (!dryRun) await audit(event, orgId, "suppression.import", String(report.written));
+    return json(200, { ...report, dryRun });
+  } catch (e) {
+    return fail(e);
+  }
+}
+
 export async function importHandler(event: HttpEvent): Promise<HttpResult> {
   try {
     const orgId = event.pathParameters?.org ?? "";
@@ -1844,6 +1895,7 @@ const ADMIN_ROUTES: Record<string, RouteHandler> = {
   "POST /team": teamHandler,
   "GET /orgs/{org}/export": exportHandler,
   "POST /orgs/{org}/import/preview": importPreviewHandler,
+  "POST /orgs/{org}/import/suppression": importSuppressionHandler,
   "POST /orgs/{org}/import/mapped": importMappedHandler,
   "GET /orgs/{org}/import/batches": importBatchesHandler,
   "GET /orgs/{org}/import/mappings": importMappingsHandler,

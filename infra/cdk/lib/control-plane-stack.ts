@@ -1294,6 +1294,20 @@ export class ControlPlaneStack extends Stack {
     });
     table.grantReadWriteData(adminApiFn);
     sendQueue.grantSendMessages(adminApiFn);
+    // POST /orgs/{org}/import/suppression (#240). READ-ONLY on the account
+    // suppression list, and only that one action — the migration importer needs
+    // to know what SES already refuses to mail, and nothing more. Notably NOT
+    // ses:PutSuppressedDestination or DeleteSuppressedDestination: writing to the
+    // operator's account list would change how their account behaves for every
+    // sender using it, including whatever they have not migrated yet.
+    //
+    // Resource "*" because that is the only form SES accepts for this action —
+    // the account suppression list is an account-level singleton with no ARN to
+    // scope to. The narrowness here comes from the single action, not the
+    // resource.
+    adminApiFn.addToRolePolicy(
+      new PolicyStatement({ actions: ["ses:ListSuppressedDestinations"], resources: ["*"] }),
+    );
     // POST /drip-sequences/enroll. Paired with the env var above: a function that
     // can reach the starter but cannot call it fails at runtime, inside a route.
     dripStateMachine.grantStartExecution(adminApiFn);
@@ -1479,6 +1493,7 @@ export class ControlPlaneStack extends Stack {
     // Field mapper (#216): preview writes nothing; mapped runs the import.
     adminRoute("ImportPreviewFn", "importPreviewHandler", HttpMethod.POST, "/orgs/{org}/import/preview");
     adminRoute("ImportMappedFn", "importMappedHandler", HttpMethod.POST, "/orgs/{org}/import/mapped");
+    adminRoute("ImportSuppressionFn", "importSuppressionHandler", HttpMethod.POST, "/orgs/{org}/import/suppression");
     adminRoute("ImportMappingsGetFn", "importMappingsHandler", HttpMethod.GET, "/orgs/{org}/import/mappings");
     adminRoute("ImportMappingsPostFn", "importMappingsHandler", HttpMethod.POST, "/orgs/{org}/import/mappings");
     // Import history (#223) — which run wrote which memberships, so a bad file
