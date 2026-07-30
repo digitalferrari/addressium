@@ -723,3 +723,31 @@ A living checklist mapped to our controls (full ASVS tracked separately):
   **Grant `s3:BypassGovernanceRetention` as break-glass only**, to a named
   principal, and record who holds it.
 - Formal, full ASVS L2 line-by-line review before a 1.0 release.
+
+## Import upload hardening (#239, #242)
+
+The import path is the only place the product accepts an operator-supplied FILE,
+and it accepts it compressed. Two bounds exist because of that:
+
+- **Decompression is capped at 256MB** (`MAX_DECOMPRESSED_BYTES`,
+  `packages/domain/src/import-file.ts`). gzip is a decompression-bomb primitive —
+  a stream of one repeated byte compresses at better than 1000:1 — so the request
+  size caps upstream bound the wrong number: they measure the COMPRESSED bytes,
+  which is the value an attacker chooses. `/import/preview` had no cap at all,
+  making API Gateway's 10MB ceiling worth roughly 10GB of allocation. `gunzipSync`
+  now runs with `maxOutputLength`, so the limit is enforced during inflation
+  rather than after it, and the refusal is an explicit 4xx rather than an OOM.
+- **`batchId` is validated** (`batchIdSchema`, `packages/core/src/schemas.ts`)
+  because it becomes both an S3 object key (`imports/<org>/<batchId>`) and a
+  DynamoDB sort key. S3 keys are opaque bytes so `../` never escaped the org
+  prefix at the storage layer, but the segment lands in a URL path where a
+  normalising intermediary would turn a same-tenant nuisance into a cross-tenant
+  read — and the same value could otherwise clobber the status of any batch in
+  the caller's own org.
+
+Accepted, and noted so it is not mistaken for an oversight: the presigned upload
+PUT carries **no content-length condition**. A presigned PUT cannot express one
+the way a POST policy can, so an authenticated `subscribers:manage` holder can
+write an arbitrarily large object to the import bucket. It is bounded by the
+bucket's 7-day expiry and costs storage rather than access. Revisit with a POST
+policy if import uploads ever become self-service beyond trusted operators.

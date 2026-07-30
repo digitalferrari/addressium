@@ -205,3 +205,35 @@ test("an unreadable file reports errors rather than a silent zero", async () => 
   // returns, it must carry a reason.
   assert.ok(report.errors.length > 0, "an unreadable file produced no error at all");
 });
+
+test("a decompression bomb is refused before it can allocate", () => {
+  // gzip is a bomb primitive: a stream of one repeated byte compresses at better
+  // than 1000:1, so a 300KB body would otherwise become 300MB — and API
+  // Gateway's own 10MB ceiling permits roughly 10GB. The upstream size caps do
+  // not help, because they measure the COMPRESSED bytes, which is the number the
+  // attacker chooses. `/import/preview` had no cap at all.
+  const bomb = gzipSync(Buffer.alloc(300 * 1024 * 1024, 0x41));
+  assert.ok(bomb.length < 1024 * 1024, "the bomb is small enough to sail past any request cap");
+  assert.throws(
+    () => decodeImportFile(new Uint8Array(bomb)),
+    /decompresses to more than/,
+    "an unbounded gunzip OOMs the Lambda on demand",
+  );
+});
+
+test("a corrupt archive is a readable error, not an infrastructure failure", () => {
+  // Gzip magic bytes followed by rubbish. The caller needs to know their file is
+  // broken; this must not look like the size refusal above, or like a 500.
+  const corrupt = new Uint8Array([0x1f, 0x8b, 0x08, 0x00, 0xff, 0xfe, 0xfd, 0xfc]);
+  assert.throws(() => decodeImportFile(corrupt), /not a readable gzip archive/);
+});
+
+test("a legitimate compressed export is unaffected by the bound", () => {
+  // The bound has to be far above any real migration or it becomes the bug. A
+  // 50k-endpoint export is a few MB of JSON.
+  const real = gzipSync(
+    Buffer.from(Array.from({ length: 20_000 }, (_, i) => JSON.stringify(endpoint({ Id: `ep-${i}` }))).join("\n")),
+  );
+  const rows = parseEndpointJsonl(decodeImportFile(new Uint8Array(real))).rows;
+  assert.equal(rows.length, 20_000);
+});

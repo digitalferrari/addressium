@@ -1618,6 +1618,14 @@ export async function importAsyncHandler(
     if (!body.batchId || !body.plan?.columns) {
       return json(400, { error: "batchId and plan required" });
     }
+    // The batch id becomes an S3 object key AND a DynamoDB sort key, so it is
+    // validated rather than trusted — see `batchIdSchema` for what unvalidated
+    // costs. Parsed here rather than in the domain because this is the boundary
+    // the value crosses from a caller.
+    const batchIdCheck = schemas.batchIdSchema.safeParse(body.batchId);
+    if (!batchIdCheck.success) {
+      return json(400, { error: `batchId: ${batchIdCheck.error.issues[0]?.message ?? "invalid"}` });
+    }
     // The same refusal the inline route makes (#223). Checked BEFORE the job is
     // queued: a consent problem discovered inside an async run is one the
     // operator finds out about minutes later, from a batch record, having

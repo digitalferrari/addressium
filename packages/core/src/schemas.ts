@@ -53,6 +53,30 @@ export const idSchema = z
   );
 
 /**
+ * An import batch id (#242).
+ *
+ * Validated because it is a KEY in two systems: it becomes the S3 object key the
+ * async job reads (`imports/<org>/<batchId>`) and the sort key of the batch
+ * record. Unvalidated, a caller could put `../`, control characters or an
+ * unbounded string into both. S3 treats keys as opaque bytes so this never
+ * escaped the org prefix at the storage layer — but the segment lands in a URL
+ * PATH, where an intermediary normalising `..` would turn a same-tenant nuisance
+ * into a cross-tenant read, and the same value could clobber the status of any
+ * batch in the caller's own org.
+ *
+ * Slightly wider than `idSchema` because the ids this route issues carry an ISO
+ * timestamp: `imp_2026-07-30T12:00:00.000Z_ab12cd34`.
+ */
+export const batchIdSchema = z
+  .string()
+  .min(1)
+  .max(80)
+  .regex(
+    /^[A-Za-z0-9][A-Za-z0-9._:-]*$/,
+    "must be alphanumeric with `.`, `_`, `:` or `-`, and start with a letter or digit",
+  );
+
+/**
  * Subscriber attributes (#196).
  *
  * `z.record(z.string(), z.string())` bounded nothing, and `POST /signup` is

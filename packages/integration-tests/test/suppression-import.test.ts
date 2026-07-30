@@ -434,3 +434,70 @@ test("authorization is enforced, and it is scoped to the org in the path", async
   const stores = new DynamoStores(TABLE, client);
   assert.equal(await stores.suppression.isSuppressed(ORG, "never-read@example.com"), false);
 });
+
+// ---------------------------------------------------------------------------
+// 4. Security regressions on the import routes
+// ---------------------------------------------------------------------------
+
+test("the preview route refuses a decompression bomb", async () => {
+  // This route had NO size cap at all, so API Gateway's 10MB ceiling was the
+  // only bound on the compressed input — roughly 10GB decompressed.
+  const { gzipSync } = await import("node:zlib");
+  const bomb = gzipSync(Buffer.alloc(300 * 1024 * 1024, 0x41));
+  const res = await api.importPreviewHandler({
+    pathParameters: { org: ORG },
+    body: JSON.stringify({ fileBase64: Buffer.from(bomb).toString("base64") }),
+    requestContext: {
+      http: { method: "POST", sourceIp: "203.0.113.9" },
+      authorizer: { jwt: { claims: { "custom:role": "developer_admin", "custom:orgs": ORG, sub: "a" } } },
+    },
+  });
+  assert.ok(res.statusCode >= 400 && res.statusCode < 500, `got ${res.statusCode}`);
+  assert.match(res.body, /decompresses to more than/);
+});
+
+test("the async route refuses a batchId that is not one", async () => {
+  // The batch id becomes an S3 object key and a DynamoDB sort key.
+  const bad = ["../otherorg/imp_1", "a".repeat(200), "has space", "with/slash", ""];
+  for (const batchId of bad) {
+    const res = await api.importAsyncHandler(
+      {
+        pathParameters: { org: ORG },
+        body: JSON.stringify({ batchId, plan: { columns: {} } }),
+        requestContext: {
+          http: { method: "POST", sourceIp: "203.0.113.9" },
+          authorizer: {
+            jwt: { claims: { "custom:role": "developer_admin", "custom:orgs": ORG, sub: "a" } },
+          },
+        },
+      },
+      { invoke: async () => assert.fail(`the job was queued for batchId ${JSON.stringify(batchId)}`) },
+    );
+    assert.equal(res.statusCode, 400, `batchId ${JSON.stringify(batchId)} was accepted`);
+  }
+});
+
+test("a well-formed batchId — including the one the upload route issues — is accepted", async () => {
+  let queued: unknown;
+  const res = await api.importAsyncHandler(
+    {
+      pathParameters: { org: ORG },
+      body: JSON.stringify({
+        batchId: "imp_2026-07-30T12:00:00.000Z_ab12cd34",
+        plan: { columns: {} },
+      }),
+      requestContext: {
+        http: { method: "POST", sourceIp: "203.0.113.9" },
+        authorizer: {
+          jwt: { claims: { "custom:role": "developer_admin", "custom:orgs": ORG, sub: "a" } },
+        },
+      },
+    },
+    { invoke: async (p) => void (queued = p) },
+  );
+  assert.equal(res.statusCode, 202);
+  assert.equal(
+    (queued as { sourceKey: string }).sourceKey,
+    "imports/summit/imp_2026-07-30T12:00:00.000Z_ab12cd34",
+  );
+});

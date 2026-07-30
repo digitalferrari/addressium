@@ -27,6 +27,22 @@ import { gunzipSync } from "node:zlib";
 /** Gzip's magic bytes. A Pinpoint export job's objects are always gzipped. */
 const GZIP_MAGIC = [0x1f, 0x8b];
 
+/**
+ * How much decompressed text we will accept from one upload.
+ *
+ * gzip is a DECOMPRESSION BOMB primitive: measured on ordinary input, a stream
+ * of one repeated byte compresses at better than 1000:1, so a 200KB body becomes
+ * 200MB and API Gateway's own 10MB ceiling permits roughly 10GB. Without a bound
+ * here the first caller to notice can OOM the Lambda at will, and the size caps
+ * upstream do not help — they measure the COMPRESSED bytes, which is the number
+ * the attacker chooses.
+ *
+ * 256MB of text is far beyond any real subscriber export (the largest plausible
+ * migration is tens of MB of JSON) while staying inside a Lambda's memory, so a
+ * legitimate file is never refused and a bomb never gets to allocate.
+ */
+export const MAX_DECOMPRESSED_BYTES = 256 * 1024 * 1024;
+
 export type ImportFormat = "csv" | "jsonl";
 
 export interface ParsedImportFile {
@@ -43,13 +59,28 @@ export interface ParsedImportFile {
  * S3 object written by an export job carries neither reliably, and a `.gz`
  * suffix on a plaintext file (or its absence on a compressed one) is a support
  * ticket rather than an error anybody can act on.
+ *
+ * Decompression is BOUNDED (`MAX_DECOMPRESSED_BYTES`). Node stops and throws at
+ * the limit rather than allocating first and checking after, so the bomb never
+ * gets the memory. The error is deliberately explicit: an operator whose genuine
+ * export is somehow this large needs to know the limit exists, not to see an
+ * opaque OOM.
  */
 export function decodeImportFile(input: Uint8Array | string): string {
   if (typeof input === "string") return input;
   const gzipped = input.length >= 2 && input[0] === GZIP_MAGIC[0] && input[1] === GZIP_MAGIC[1];
-  return gzipped
-    ? gunzipSync(Buffer.from(input)).toString("utf8")
-    : Buffer.from(input).toString("utf8");
+  if (!gzipped) return Buffer.from(input).toString("utf8");
+  try {
+    return gunzipSync(Buffer.from(input), { maxOutputLength: MAX_DECOMPRESSED_BYTES }).toString("utf8");
+  } catch (e) {
+    // `ERR_BUFFER_TOO_LARGE` is what the cap raises; anything else is a corrupt
+    // archive. Both are the caller's problem and neither should look like an
+    // infrastructure failure.
+    const why = (e as NodeJS.ErrnoException).code === "ERR_BUFFER_TOO_LARGE"
+      ? `decompresses to more than ${MAX_DECOMPRESSED_BYTES / 1024 / 1024}MB`
+      : "is not a readable gzip archive";
+    throw new Error(`import file ${why}`);
+  }
 }
 
 /**
