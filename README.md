@@ -37,7 +37,7 @@ the same owner.
 | **Multi-org silos** | Per-org KMS key, SES identity and config set. Dev orgs are fail-closed to an allowlist, so a test blast cannot reach a live list. |
 | **Brandable subscriber site** | Per-org logo, theme, background; per-list presentation toggles, no rebuild |
 | **RBAC** | Developer Admin / Editor / Analyst / Support, org-scoped, enforced server-side via Cedar |
-| **Import & export** | CSV in, through an interactive field mapper. CSV/JSONL out including consent provenance, and the export re-imports through that same mapper — so leaving is a round trip, not just a download. |
+| **Import & export** | CSV *and* gzipped JSON Lines in — both shapes Pinpoint hands out — through one interactive field mapper. CSV/JSONL out including consent provenance, and the export re-imports through that same mapper — so leaving is a round trip, not just a download. |
 
 ### What Pinpoint did that addressium does not
 

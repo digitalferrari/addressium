@@ -20,6 +20,7 @@
  */
 import type { SubscriptionConsent } from "@addressium/core";
 import { parseCsv } from "./importer.js";
+import { parseImportFile } from "./import-file.js";
 
 /**
  * Why we believe this person agreed to be mailed (#60, #223). *explicit* is
@@ -128,9 +129,23 @@ export function headerFingerprint(headers: string[]): string {
   return [...headers].map(norm).sort().join("|");
 }
 
-export function previewCsv(csv: string, sampleSize = 20): FilePreview {
-  const rows = parseCsv(csv);
-  const headers = rows.length > 0 ? Object.keys(rows[0] as Record<string, string>) : [];
+/**
+ * Preview an uploaded file — CSV or gzipped JSON Lines (#239).
+ *
+ * The wizard previews with the same code that later imports, so the preview
+ * cannot lie about what will happen. That property is why the JSONL support
+ * belongs HERE rather than only in the import path: a preview that only
+ * understood CSV would show an operator an empty column list for a file that
+ * imports perfectly, or — worse — the reverse.
+ *
+ * Headers are the UNION across rows, not row 0's keys. A JSONL export omits an
+ * absent attribute per endpoint instead of emitting an empty cell, so the first
+ * endpoint's keys are a subset of the file's columns; taking them alone would
+ * hide real columns from the mapper and from the operator.
+ */
+export function previewCsv(csv: string | Uint8Array, sampleSize = 20): FilePreview {
+  const { rows } = parseImportFile(csv, parseCsv);
+  const headers = [...new Set(rows.flatMap((r) => Object.keys(r)))];
   return {
     headers,
     sample: rows.slice(0, sampleSize),

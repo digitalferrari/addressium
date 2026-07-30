@@ -35,6 +35,7 @@ import {
   type MappingPlan,
 } from "./import-mapping.js";
 import { parseCsv } from "./importer.js";
+import { parseImportFile } from "./import-file.js";
 import type { Clock, Stores } from "./ports.js";
 
 /** Compliance fields a newly created list cannot be given a sensible default for. */
@@ -49,7 +50,13 @@ export interface NewListDefaults {
 
 export interface MappedImportOptions {
   orgId: string;
-  csv: string;
+  /**
+   * The uploaded file. Bytes when it is a gzipped Pinpoint export-job object,
+   * text for the paste-a-spreadsheet path — `parseImportFile` sniffs which and
+   * decompresses if needed (#239). Named `csv` for continuity with every caller
+   * that predates JSON Lines support.
+   */
+  csv: string | Uint8Array;
   plan: MappingPlan;
   /**
    * Identifies this run, stamped on every subscription it writes (#223). An
@@ -205,13 +212,29 @@ export async function importWithMapping(
   opts: MappedImportOptions,
 ): Promise<MappedImportReport> {
   const report = emptyReport();
-  const rows = parseCsv(opts.csv);
+  // CSV or gzipped JSON Lines — the endpoint objects a Pinpoint EXPORT JOB
+  // writes are flattened to the same dotted-path columns the CSV export uses, so
+  // everything below (mapping, three-state audiences, the OptOut/EndpointStatus
+  // gate, consent basis, the batch record) is format-agnostic (#239).
+  const parsed = parseImportFile(opts.csv, parseCsv);
+  const rows = parsed.rows;
+  for (const e of parsed.errors) report.errors.push(e);
   if (rows.length === 0) {
-    report.errors.push("file contains no data rows");
+    // Never `200 {created: 0}` for an unreadable file — that silent zero reading
+    // as success is the #209 failure, and it was still live for this format.
+    report.errors.push(
+      parsed.errors.length > 0
+        ? `file contains no readable rows (${parsed.format})`
+        : "file contains no data rows",
+    );
     return report;
   }
 
-  const headers = Object.keys(rows[0] as Record<string, string>);
+  // Union of the keys, not just row 0's. A JSONL export omits absent attributes
+  // per endpoint rather than emitting an empty cell, so the first endpoint's keys
+  // are a subset of the file's columns — validating the plan against them alone
+  // would reject a mapping for a column that genuinely exists further down.
+  const headers = [...new Set(rows.flatMap((r) => Object.keys(r)))];
   const problems = validateMapping(opts.plan, headers);
   if (problems.length > 0) {
     for (const p of problems) report.errors.push(p.column ? `${p.column}: ${p.problem}` : p.problem);

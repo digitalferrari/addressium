@@ -1323,17 +1323,43 @@ export async function exportHandler(event: HttpEvent): Promise<HttpResult> {
  * mapping (#216). Writes NOTHING: the console renders this so the operator can
  * see what the file actually contains before committing to it.
  */
+/**
+ * The uploaded file, as bytes when it needs to be and text when it does not
+ * (#239).
+ *
+ * A Pinpoint export job writes GZIPPED JSON Lines, and gzip is not text — it
+ * cannot survive a JSON string body. So callers may send `fileBase64` instead of
+ * `csv`, and the domain sniffs gzip by magic bytes from there. `csv` stays for
+ * the paste-a-spreadsheet path, which is most of them.
+ */
+function uploadedFile(body: { csv?: string; fileBase64?: string }): Uint8Array | string | undefined {
+  if (typeof body.fileBase64 === "string" && body.fileBase64.length > 0) {
+    return new Uint8Array(Buffer.from(body.fileBase64, "base64"));
+  }
+  if (typeof body.csv === "string" && body.csv.trim() !== "") return body.csv;
+  return undefined;
+}
+
 export async function importPreviewHandler(event: HttpEvent): Promise<HttpResult> {
   try {
     const orgId = event.pathParameters?.org ?? "";
     requireGrant(event, "subscribers:manage", orgId);
-    const body = JSON.parse(event.body ?? "{}") as { csv?: string; consentBasis?: "explicit" | "implicit" };
-    if (typeof body.csv !== "string" || body.csv.trim() === "") {
-      return json(400, { error: "csv required" });
-    }
+    const body = JSON.parse(event.body ?? "{}") as {
+      csv?: string;
+      fileBase64?: string;
+      consentBasis?: "explicit" | "implicit";
+    };
+    const file = uploadedFile(body);
+    if (file === undefined) return json(400, { error: "csv or fileBase64 required" });
 
-    const preview = previewCsv(body.csv);
-    if (preview.headers.length === 0) return json(400, { error: "file has no header row" });
+    const preview = previewCsv(file);
+    // A file we cannot read is a 400 naming both shapes, not an empty preview
+    // the operator has to interpret — and never a 200 (#209, #239).
+    if (preview.headers.length === 0) {
+      return json(400, {
+        error: "could not read the file: expected a CSV with a header row, or JSON Lines of endpoint objects (gzip supported via fileBase64)",
+      });
+    }
 
     // Bind suggestions to what this org already has, so a column maps to an
     // existing list or attribute rather than proposing a duplicate.
@@ -1406,6 +1432,7 @@ export async function importMappedHandler(event: HttpEvent): Promise<HttpResult>
     requireGrant(event, "subscribers:manage", orgId);
     const body = JSON.parse(event.body ?? "{}") as {
       csv?: string;
+      fileBase64?: string;
       plan?: MappingPlan;
       status?: "confirmed" | "pending";
       batchId?: string;
@@ -1413,8 +1440,9 @@ export async function importMappedHandler(event: HttpEvent): Promise<HttpResult>
       newListDefaults?: NewListDefaults;
       dryRun?: boolean;
     };
-    if (typeof body.csv !== "string" || !body.plan?.columns) {
-      return json(400, { error: "csv and plan required" });
+    const file = uploadedFile(body);
+    if (file === undefined || !body.plan?.columns) {
+      return json(400, { error: "csv (or fileBase64) and plan required" });
     }
     // Asking for `confirmed` against anything but an explicit basis is refused
     // here rather than quietly downgraded (#223). `statusFor` would fail closed
@@ -1438,7 +1466,7 @@ export async function importMappedHandler(event: HttpEvent): Promise<HttpResult>
     const batchId = body.batchId ?? `imp_${clock.now().toISOString()}`;
     const report = await importWithMapping(stores(), clock, {
       orgId,
-      csv: body.csv,
+      csv: file,
       plan: body.plan,
       ...(body.status ? { status: body.status } : {}),
       batchId,

@@ -23,6 +23,7 @@ export * from "./privacy.js";
 export * from "./export.js";
 export * from "./importer.js";
 export * from "./import-mapping.js";
+export * from "./import-file.js";
 export * from "./import-run.js";
 export * from "./suppression-import.js";
 export * from "./reporting.js";

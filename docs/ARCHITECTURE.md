@@ -583,10 +583,35 @@ normalized email, and an import report (created/updated/skipped/errored). Every
 imported subscription defaults to **`pending`** (#192), so an import can never
 silently start mailing a list.
 
-**Reading a real Pinpoint export** (compendium #59, #216). A verified real-world
-export is **CSV with dotted column paths**, not the gzipped JSON Lines an export
-*job* produces — the CSV is what operators actually hold, and it is the shape the
-mapper targets. The sample carries 73 columns: `Id`, `ChannelType`, `Address`,
+**Reading a real Pinpoint export** (compendium #59, #216, #239). Pinpoint hands
+out two shapes and the importer now reads **both**. The console/manual route
+gives **CSV with dotted column paths**, which is what most operators hold. A
+Pinpoint **export job** writes **gzipped JSON Lines of endpoint objects** to S3,
+which is what anyone with a real-sized audience gets — and that file used to be
+read as one unusable row, returning `created: 0` (#239).
+
+There is deliberately **no second import pipeline**. Each endpoint object is
+FLATTENED to the same dotted-path row the CSV export produces —
+`{Address, User:{UserId}, Attributes:{SD_Ski:["true"]}}` becomes
+`{Address, "User.UserId", "Attributes.SD_Ski": "true"}` — so the mapper, the
+three-state audience logic, the `OptOut`/`EndpointStatus` gate, the consent-basis
+declaration and the batch record all apply unchanged. One shape in the middle is
+what stops the JSONL path drifting away from the CSV path's compliance rules,
+in exactly the file where those rules matter most.
+
+Two flattening details are load-bearing rather than cosmetic. A **single-element
+array unwraps** (`["false"]` → `"false"`), because Pinpoint models every attribute
+as a list and the three-state logic reads an unrecognised value as *empty* —
+which means NEVER ASKED, silently promoting a declined audience to an unasked
+one. And **headers are the union across rows**, because a JSONL export omits an
+absent attribute rather than emitting an empty cell, so row 0's keys are a subset
+of the file's columns.
+
+Gzip is detected by **magic bytes**, not by a filename or content-type we were
+never given. Binary cannot survive a JSON string body, so callers send
+`fileBase64` instead of `csv`; both import routes accept either, and a file that
+is neither shape is a **400 naming both** rather than an empty preview or a
+`200 {created: 0}`. The sample carries 73 columns: `Id`, `ChannelType`, `Address`,
 `EndpointStatus`, `OptOut`, `EffectiveDate`, `Location.*`, `Attributes.*` and
 `User.UserAttributes.*`. The original parser looked for a lowercase `email`
 header and read that file as one unusable row; the mapper below replaces it and
