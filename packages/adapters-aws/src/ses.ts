@@ -2,8 +2,30 @@
  * Amazon SES v2 implementation of the EmailSender port.
  *
  * Sends one message with the RFC 8058 one-click unsubscribe headers and the
- * org's configuration set (per-org metrics isolation, §4.11). Bulk batching via
- * SendBulkEmail is a later optimization; correctness/compliance first.
+ * org's configuration set (per-org metrics isolation, §4.11).
+ *
+ * ONE `SendEmail` per recipient, deliberately and permanently — not a deferred
+ * optimization (#244). `SendBulkEmail` would cut the API calls for a 100k
+ * campaign from 100k to 2k, and it can carry everything else we need
+ * per-destination: `ReplacementTemplateData` covers the magic-link tokens and the
+ * footer's unsubscribe URL, `ReplacementTags` keeps `SES_TAG.subscriber` so event
+ * attribution survives, and `TemplateContent` can be inline so nothing has to be
+ * registered with SES first.
+ *
+ * What it cannot carry is a per-destination HEADER. `Headers` exists only on the
+ * `Template` inside `DefaultContent`; the per-entry path is
+ * `BulkEmailEntry.ReplacementEmailContent.ReplacementTemplate.ReplacementTemplateData`
+ * and nothing else. So all 50 destinations in a batch share one
+ * `List-Unsubscribe`, and ours is per-subscriber by construction
+ * (`listUnsubscribeHeader`, domain/src/send.ts) — a batched send would put one
+ * subscriber's signed unsubscribe URL on 50 messages and unsubscribe the wrong
+ * person.
+ *
+ * Degrading the header to a shared `mailto:` would restore batching and lose
+ * one-click POST, which is exactly what Gmail and Yahoo require of bulk senders —
+ * trading a compliance property this product treats as table stakes for a cost
+ * saving, on marketing mail, which is the only category worth batching. So the
+ * per-recipient send stays. Revisit if SES adds per-entry headers.
  */
 import { SESv2Client, SendEmailCommand } from "@aws-sdk/client-sesv2";
 import type { EmailSender, SentMessage } from "@addressium/domain";

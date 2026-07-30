@@ -51,13 +51,13 @@ rather than remembered:
 |---|---|
 | **Endpoints** (subscribers) | Flat attributes only — no multi-valued attributes, metrics, or Location/Demographic model |
 | **Dynamic segments** | Attribute predicates only. The v1 engine **requires a base list** and throws on engagement predicates; the OpenSearch mirror is the escape hatch |
-| **Imported segments** | Not supported — import creates subscribers, not segments |
+| **Imported segments** | Not supported, by decision — Pinpoint's Behavior/Metrics/Demographic/Recency dimensions have no counterpart, so a partial translation would look migrated while targeting the wrong people. Rebuild by hand; the list memberships arrive with the subscribers (#243) |
 | **Campaign scheduling** | No per-recipient local-time send, quiet hours, frequency caps, or campaign end dates |
 | **Journeys** | Linear drip only — no conditional splits, multivariate branches, holdout activities, goal exits or re-entry rules |
 | **Event-triggered campaigns** | No custom-event ingestion, no event-triggered entry |
 | **Transactional send API** | No `SendMessages` analogue. Transactional mail exists (§4.2, and `EmailClass` gates its eligibility) but has no public API |
 | **Templates** | No Handlebars, no version-history retention, no default substitutions. MJML compiles browser-side, so a drip step on an MJML template fails loudly rather than silently |
-| **Sending** | Per-recipient `SendEmail`; `SendBulkEmail` 50-destination batching is not implemented. No attachments |
+| **Sending** | Per-recipient `SendEmail` by decision, not omission — `SendBulkEmail` cannot carry a per-destination `List-Unsubscribe`, and ours is per-subscriber (#244). No attachments |
 | **Recommenders, SMS/push/voice/in-app** | Out of scope by design — see below |
 
 And the other direction, because a migration is a trade in both: double opt-in

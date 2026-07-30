@@ -350,9 +350,14 @@ compensate for a missing trap.
   mailable if the rename itself turns out to be the mistake.
 - Recipients are batched onto **SQS**; sender Lambdas consume batches, render
   the MJML template with per-recipient merge variables, and call SES
-  `SendEmail` once per recipient. (`SendBulkEmail` batching of up to 50
-  destinations/call is a documented later optimization — per-recipient
-  magic-link tokens already make every message distinct.)
+  `SendEmail` once per recipient — permanently, not pending (#244).
+  `SendBulkEmail` can carry per-destination bodies and message tags, so the
+  per-recipient magic-link tokens are not the obstacle. Per-destination
+  **headers** are: `Headers` exists only on the batch's default `Template`, so
+  all 50 messages would share one `List-Unsubscribe`, and ours is per-subscriber.
+  Degrading it to a shared `mailto:` restores batching and loses the one-click
+  POST that Gmail and Yahoo require of bulk senders (§4.4) — a compliance
+  property traded for a cost saving, on the only mail worth batching.
 - **Fan-out slices are KEY RANGES over subscriber ids, never offsets** (#171).
   The recipient set changes while a large send runs — people confirm and
   unsubscribe — and DynamoDB returns rows ordered by subscriber id, so a new
@@ -614,9 +619,21 @@ mailable.** `import-mapping.ts` detects both columns from their value shape and
 marks the row non-mailable; `import-run.ts` then writes it as a subscriber with
 no active subscription, so the record is kept — dropping it would lose the very
 opt-out being declared — while nothing can mail it. A row-level opt-out outranks
-a per-list `true`. Segment translation and suppression-list ingest remain
-unbuilt: do not read "Pinpoint importer" as "your Pinpoint *suppression list*
-survives the migration", because that file is imported separately.
+a per-list `true`.
+
+**Suppression-list ingest is now a first-class step** (#240) — see §4.13. Run it
+BEFORE the subscriber import: it reads the SES account suppression list, which is
+the one part of a migration nothing else can reconstruct.
+
+**Segment translation is deliberately NOT built** (#243). This used to be
+described as "best-effort predicate translation", and the honest position is that
+best-effort is the wrong bar here. Pinpoint's `Behavior`, `Metrics`, `Demographic`
+and `Recency` dimensions have no counterpart in our predicate DSL, so a translator
+could only ever handle the `Attributes` minority — and a segment that *looks*
+migrated while targeting the wrong people is worse than no segment at all, because
+the operator has no reason to check it. **Rebuild segments by hand after import.**
+The list memberships they were built from arrive with the subscribers
+(`Attributes.*` → audiences, above), so the raw material is all there.
 
 **Import wizard** (compendium #60, #216 / #220 / #223). Before any row is
 written, the admin declares:
