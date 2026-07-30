@@ -47,6 +47,12 @@ const readBody = (req: IncomingMessage): Promise<string> =>
     req.on("end", () => resolve(s));
   });
 
+/** Host+port from the upstream base URL, so a request PATH can never change it. */
+function upstreamTarget(upstream: string): { hostname: string; port: string } {
+  const u = new URL(upstream);
+  return { hostname: u.hostname, port: u.port };
+}
+
 /**
  * dynalite plus the one answer it cannot give.
  *
@@ -80,8 +86,14 @@ function startDynamoShim(upstream: string): Promise<Server> {
       return;
     }
     const fwd = httpRequest(
-      `${upstream}${req.url ?? "/"}`,
       {
+        // Host and port come from `upstream`; the request's path is passed as a
+        // PATH and can never alter the authority. Concatenating them into a URL
+        // string let `@evil.example` reparse the host out from under us — a real
+        // SSRF shape even though this shim only ever hears from a local SDK
+        // client (CodeQL #33/#34).
+        ...upstreamTarget(upstream),
+        path: req.url ?? "/",
         method: req.method,
         headers: { ...req.headers, "content-length": String(Buffer.byteLength(body)) },
       },

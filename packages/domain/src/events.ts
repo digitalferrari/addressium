@@ -136,10 +136,60 @@ export async function recordDelivered(
  * repo has a ReDoS regression suite precisely because that has bitten before —
  * a scan is linear and cannot.
  */
+/**
+ * Split a URL template on its `{{tag}}` tokens, in linear time.
+ *
+ * This used to be `urlTemplate.split(/\{\{[^}]*\}\}/)` — and the comment below
+ * about avoiding backtracking was right about the MATCHING and wrong about the
+ * TOKENISING it depended on. `[^}]*` cannot cross a `}`, so on a run of `{`
+ * with no closing `}}` the engine consumes to the end, fails, and retries from
+ * the next index: O(n²), measured at 134ms for 12.5k characters and 8.7s for
+ * 100k — a clean 4× per doubling (CodeQL #29).
+ *
+ * Reachable because `urlTemplate` comes from the campaign's archived link map,
+ * which is built from an operator-authored template, and `matchesUrlTemplate` is
+ * called once per link per CLICK event. A template carrying one pathological URL
+ * would make every click on that campaign quadratic inside the events Lambda.
+ *
+ * The scan below is exactly equivalent to that regex — including the rule that a
+ * tag body may not contain `}`, so `{{a}b}}` is literal text, not a tag — and it
+ * is linear because it never rescans a prefix it has already rejected.
+ */
+function splitOnMergeTags(s: string): string[] {
+  const parts: string[] = [];
+  let start = 0;
+  let i = 0;
+  while (i + 1 < s.length) {
+    if (s[i] !== "{" || s[i + 1] !== "{") {
+      i++;
+      continue;
+    }
+    // The regex's `[^}]*` is greedy but cannot cross a `}`, so the only
+    // candidate close is the FIRST `}` after the opener. Nothing to backtrack.
+    let j = i + 2;
+    while (j < s.length && s[j] !== "}") j++;
+    if (j + 1 < s.length && s[j] === "}" && s[j + 1] === "}") {
+      parts.push(s.slice(start, i));
+      i = j + 2;
+      start = i;
+      continue;
+    }
+    // No tag closes here. Every position in [i, j-2] would scan to this same
+    // `j` and fail identically, and neither `j-1` nor `j` can BE an opener —
+    // both would need `s[j]` to be `{`, and it is `}` or the end of the string.
+    // So the next position worth trying is `j + 1`, and skipping the whole
+    // scanned run is what keeps this linear. Resuming at `i + 1` instead is
+    // precisely the O(n²) the regex had.
+    i = j + 1;
+  }
+  parts.push(s.slice(start));
+  return parts;
+}
+
 export function matchesUrlTemplate(urlTemplate: string, url: string): boolean {
   // Fast path, and the only path for the common case of a link with no tags.
   if (urlTemplate === url) return true;
-  const parts = urlTemplate.split(/\{\{[^}]*\}\}/);
+  const parts = splitOnMergeTags(urlTemplate);
   if (parts.length === 1) return false; // no merge tags: equality was the answer
 
   const first = parts[0]!;

@@ -12,6 +12,7 @@ import {
   buildHtmlLinkMap,
   renderHtmlForRecipient,
   parseFeed,
+  matchesUrlTemplate,
 } from "@addressium/domain";
 
 const N = 100_000;
@@ -37,4 +38,33 @@ test("parseFeed(atom) handles a CDATA-heavy / many-<link entry fast", () => {
   const items = parseFeed(`<feed>${entry}</feed>`, "atom");
   assert.equal(items.length, 1);
   assert.equal(items[0]?.link, "https://x.example/z");
+});
+
+test("matchesUrlTemplate handles a huge unterminated '{{' run fast (CodeQL #29)", () => {
+  // The function's own comment said a scan "is linear and cannot" backtrack —
+  // true of the MATCHING, and false of the tokenising it depended on. The split
+  // was `/\{\{[^}]*\}\}/`: `[^}]*` cannot cross a `}`, so on a run of `{` with no
+  // closing `}}` the engine consumed to the end, failed, and retried from the
+  // next index. Measured 134ms at 12.5k and 8.7s at 100k — 4x per doubling.
+  //
+  // Reachable because `urlTemplate` comes from the campaign's archived link map
+  // (operator-authored) and this runs once per link per CLICK event, so one
+  // pathological URL made every click on that campaign quadratic.
+  assert.equal(matchesUrlTemplate("{".repeat(N), "zzz"), false);
+  assert.equal(matchesUrlTemplate("{{" + "a".repeat(N), "zzz"), false);
+  assert.equal(matchesUrlTemplate("{".repeat(N) + "}", "zzz"), false);
+
+  // ...and the semantics the tokeniser exists for are unchanged.
+  assert.equal(
+    matchesUrlTemplate("https://x.example/a?u={{email}}", "https://x.example/a?u=reader%40x.example"),
+    true,
+  );
+  assert.equal(matchesUrlTemplate("https://x.example/a?u={{email}}", "https://other.example/"), false);
+  // A tag body may not contain `}` — `{{a}b}}` is literal text, not a tag, so
+  // this template has no tags at all and only exact equality can match it.
+  assert.equal(matchesUrlTemplate("{{a}b}}", "anything"), false);
+  assert.equal(matchesUrlTemplate("{{a}b}}", "{{a}b}}"), true);
+  // The ends must not overlap: `a{{x}}a` needs both an `a` prefix and suffix.
+  assert.equal(matchesUrlTemplate("a{{x}}a", "a"), false);
+  assert.equal(matchesUrlTemplate("a{{x}}a", "aQQa"), true);
 });

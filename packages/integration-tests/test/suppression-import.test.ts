@@ -41,6 +41,12 @@ let client: DynamoDBClient;
 let dynEndpoint: string;
 let api: typeof import("@addressium/svc-api");
 
+/** Host+port from the upstream base URL, so a request PATH can never change it. */
+function upstreamTarget(upstream: string): { hostname: string; port: string } {
+  const u = new URL(upstream);
+  return { hostname: u.hostname, port: u.port };
+}
+
 /** Captures the commands sent to a client and answers them from a script. */
 function fakeSes(pages: Array<Record<string, unknown>>) {
   const calls: Array<Record<string, unknown>> = [];
@@ -260,8 +266,14 @@ function startThrottlingShim(
       }
     }
     const fwd = httpRequest(
-      `${upstream}${req.url ?? "/"}`,
       {
+        // Host and port come from `upstream`; the request's path is passed as a
+        // PATH and can never alter the authority. Concatenating them into a URL
+        // string let `@evil.example` reparse the host out from under us — a real
+        // SSRF shape even though this shim only ever hears from a local SDK
+        // client (CodeQL #33/#34).
+        ...upstreamTarget(upstream),
+        path: req.url ?? "/",
         method: req.method,
         headers: { ...req.headers, "content-length": String(Buffer.byteLength(body)) },
       },
@@ -279,8 +291,14 @@ function startThrottlingShim(
 const forward = (upstream: string, req: IncomingMessage, body: string): Promise<void> =>
   new Promise((resolve, reject) => {
     const fwd = httpRequest(
-      `${upstream}${req.url ?? "/"}`,
       {
+        // Host and port come from `upstream`; the request's path is passed as a
+        // PATH and can never alter the authority. Concatenating them into a URL
+        // string let `@evil.example` reparse the host out from under us — a real
+        // SSRF shape even though this shim only ever hears from a local SDK
+        // client (CodeQL #33/#34).
+        ...upstreamTarget(upstream),
+        path: req.url ?? "/",
         method: req.method,
         headers: { ...req.headers, "content-length": String(Buffer.byteLength(body)) },
       },
