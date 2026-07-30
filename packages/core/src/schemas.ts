@@ -371,10 +371,20 @@ export const setSubscriptionStatusSchema = z.object({
 });
 export type SetSubscriptionStatusInput = z.infer<typeof setSubscriptionStatusSchema>;
 
-/** Manual suppression payload (admin). */
+/**
+ * Manual suppression payload (admin, #247).
+ *
+ * `source` is optional and narrowed to the three an operator can meaningfully
+ * pick: `manual` (no stated reason, stays org-scoped) or `bounce`/`complaint`
+ * (an operator recording what SES would otherwise have told us — see
+ * `scopeForSuppressionSource`, which is what actually decides the scope this
+ * lands at). `unsubscribe` and `inactive` are system-written sources with no
+ * "an admin typed this in" equivalent, so they are not offered here.
+ */
 export const manualSuppressSchema = z.object({
   orgId: idSchema,
   email: z.string().email(),
+  source: z.enum(["manual", "bounce", "complaint"]).optional(),
 });
 export type ManualSuppressInput = z.infer<typeof manualSuppressSchema>;
 

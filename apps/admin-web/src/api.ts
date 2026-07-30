@@ -298,6 +298,26 @@ export interface SuppressionEntry {
   addedAt: string;
 }
 
+/** SES's live account-list entry for one address, or the check could not be made (#247). */
+export interface LiveSuppression {
+  email: string;
+  reason: string;
+  at?: string;
+}
+
+/**
+ * Both sources of truth for one address (#247): our own store (what the send
+ * path actually gates on) and a live SES lookup. `live: null` means SES was
+ * asked and said clear; `live` absent/undefined means the check could not be
+ * made — a different answer, never collapsed into the other.
+ */
+export interface SuppressionCheckResult {
+  email: string;
+  local: SuppressionEntry[];
+  live?: LiveSuppression | null;
+  liveError?: string;
+}
+
 export interface ImportReport {
   imported: number;
   skipped: number;
@@ -561,6 +581,9 @@ export const api = {
       ...(acknowledgeManualConfirmation ? { acknowledgeManualConfirmation: true } : {}),
     }),
   suppressions: (org: string) => call<SuppressionEntry[]>("GET", `/orgs/${org}/suppressions`),
+  /** Both local and live (SES) status for one address (#247) — used by the subscriber-detail view. */
+  suppressionCheck: (org: string, email: string) =>
+    call<SuppressionCheckResult>("GET", `/orgs/${org}/suppression/check?email=${encodeURIComponent(email)}`),
   unsuppress: (orgId: string, email: string) => call<unknown>("POST", `/subscribers/unsuppress`, { orgId, email }),
   adminUnsubscribe: (orgId: string, subscriberId: string, email?: string, listId?: string) =>
     call<unknown>("POST", `/subscribers/unsubscribe`, { orgId, subscriberId, email, listId }),
@@ -585,5 +608,8 @@ export const api = {
   setBranding: (orgId: string, branding: Branding) => call<Branding>("POST", `/orgs/branding`, { orgId, branding }),
   setPresentation: (orgId: string, listId: string, presentation: ListPresentation) =>
     call<unknown>("POST", `/lists/presentation`, { orgId, listId, presentation }),
-  suppress: (orgId: string, email: string) => call<unknown>("POST", `/subscribers/suppress`, { orgId, email }),
+  /** `source` picks the reason and, transitively, the scope (§4.13): omitted stays manual/org-scoped
+   *  exactly as before #247; "bounce"/"complaint" lands global and mirrors to the live SES list. */
+  suppress: (orgId: string, email: string, source?: "bounce" | "complaint") =>
+    call<unknown>("POST", `/subscribers/suppress`, { orgId, email, ...(source ? { source } : {}) }),
 };

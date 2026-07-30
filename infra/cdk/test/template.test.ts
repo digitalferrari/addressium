@@ -1501,36 +1501,39 @@ test("provisioning may ASSIGN a dedicated IP pool but not create one (#237)", ()
   }
 });
 
-test("the suppression importer can read the account list and nothing else (#240)", () => {
-  // The migration gap that actively causes harm: without the account suppression
-  // list, the first campaign after a migration mails years of accumulated hard
-  // bounces. So AdminApiFn needs to READ it — and must not be able to write it.
+test("AdminApiFn holds exactly the three suppression-list actions it needs, and no delete (#240, #247)", () => {
+  // Bulk read (#240, the migration gap that actively causes harm: without it
+  // the first campaign after a migration mails years of accumulated hard
+  // bounces) plus the per-address console actions (#247: GET/PUT for one
+  // address at a time — the console equivalent of `aws sesv2
+  // get-suppressed-destination` / `put-suppressed-destination`). Never
+  // DeleteSuppressedDestination, and never a BULK write: pushing our whole list
+  // into the operator's account list would change how their account behaves
+  // for every sender using it, including whatever they have not migrated yet.
   const t = template();
   const sesActions = policyFor(t, "AdminApiFn")
     .filter((s) => s.Effect !== "Deny")
     .flatMap(actionsOf)
     .filter((a) => a.startsWith("ses:"));
 
-  assert.ok(
-    sesActions.includes("ses:ListSuppressedDestinations"),
-    "the import route cannot read the account suppression list",
-  );
-  // Writing to the operator's ACCOUNT suppression list would change how their
-  // account behaves for every sender using it, including whatever they have not
-  // migrated yet. The import direction is the only safe one to automate.
-  for (const forbidden of ["ses:PutSuppressedDestination", "ses:DeleteSuppressedDestination"]) {
-    assert.ok(!sesActions.includes(forbidden), `AdminApiFn holds ${forbidden}`);
+  for (const required of [
+    "ses:ListSuppressedDestinations",
+    "ses:GetSuppressedDestination",
+    "ses:PutSuppressedDestination",
+  ]) {
+    assert.ok(sesActions.includes(required), `AdminApiFn is missing ${required}`);
   }
+  assert.ok(!sesActions.includes("ses:DeleteSuppressedDestination"), "AdminApiFn can delete suppressions");
 
-  // No other function needs it — this is a migration action on one route, not a
-  // capability of the send path.
+  // No other function needs any of it — these are console actions on specific
+  // routes, not a capability of the send path.
   for (const prefix of ["SenderFn", "ConfirmFn", "EventsFn"]) {
     const other = policyFor(t, prefix)
       .filter((s) => s.Effect !== "Deny")
       .flatMap(actionsOf);
     assert.ok(
-      !other.includes("ses:ListSuppressedDestinations"),
-      `${prefix} does not need to read the suppression list`,
+      !other.some((a) => a.startsWith("ses:") && a.includes("Suppress")),
+      `${prefix} does not need suppression-list access`,
     );
   }
 });

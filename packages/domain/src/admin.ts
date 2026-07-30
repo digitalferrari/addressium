@@ -17,10 +17,13 @@ import type {
   ListVisibility,
   Organization,
   Segment,
+  SuppressionScope,
+  SuppressionSource,
   Template,
 } from "@addressium/core";
 import { schemas } from "@addressium/core";
 import type { Clock, Stores } from "./ports.js";
+import { scopeForSuppressionSource } from "./suppress.js";
 
 /**
  * The zero for every counter. Spread it rather than writing the literal out:
@@ -419,29 +422,44 @@ export async function publicListDirectory(
 }
 
 /**
- * Manually suppress an address (admin action): add an org-scoped suppression
- * entry and, if the subscriber exists, flip it to `suppressed`. Returns whether
- * a subscriber record was flipped.
+ * Manually suppress an address (admin action): add a suppression entry and, if
+ * the subscriber exists, flip it to `suppressed`. Returns whether a subscriber
+ * record was flipped, and the SCOPE the entry landed at — the caller (the API
+ * handler) uses that to decide whether this also needs mirroring to the live
+ * SES account list (#247), since only a global entry corresponds to one.
+ *
+ * `source` defaults to `"manual"` — an operator suppressing someone for no
+ * stated reason, which stays ORG-scoped exactly as before this parameter
+ * existed. Passing `"bounce"` or `"complaint"` is an operator recording, by
+ * hand, the same fact an SES notification would have reported automatically —
+ * "customer support was told this address hard-bounces" is the account/IP
+ * reputation risk `suppressAndFlip` exists to protect against, whether SES told
+ * us or a person did. So it takes the SAME scope: `scopeForSuppressionSource`
+ * is the one place that rule lives, shared with the automatic path, precisely
+ * so a human typing this in cannot end up with different protection than SES
+ * reporting it would have given.
  */
 export async function manualSuppress(
   stores: Stores,
   clock: Clock,
-  input: { orgId: string; email: string },
-): Promise<{ suppressed: true; subscriberFlipped: boolean }> {
+  input: { orgId: string; email: string; source?: Extract<SuppressionSource, "manual" | "bounce" | "complaint"> },
+): Promise<{ suppressed: true; subscriberFlipped: boolean; source: SuppressionSource; scope: SuppressionScope }> {
   const email = input.email.toLowerCase();
+  const source = input.source ?? "manual";
+  const scope = scopeForSuppressionSource(source);
   await stores.suppression.add({
     orgId: input.orgId,
     email,
-    source: "manual",
-    scope: "org",
+    source,
+    scope,
     addedAt: clock.now().toISOString(),
   });
   const subscriber = await stores.subscribers.findByEmail(input.orgId, email);
   if (subscriber && subscriber.status !== "suppressed") {
     await stores.subscribers.put({ ...subscriber, status: "suppressed" });
-    return { suppressed: true, subscriberFlipped: true };
+    return { suppressed: true, subscriberFlipped: true, source, scope };
   }
-  return { suppressed: true, subscriberFlipped: false };
+  return { suppressed: true, subscriberFlipped: false, source, scope };
 }
 
 /**

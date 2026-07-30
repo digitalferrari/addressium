@@ -6,8 +6,32 @@
  * subscriber to `suppressed`, and mark the relevant subscription. This is what
  * the events processor calls on SES bounce/complaint notifications.
  */
-import type { EngagementEvent, SubscriptionStatus, SuppressionSource } from "@addressium/core";
-import type { Clock, Stores } from "./ports.js";
+import type {
+  EngagementEvent,
+  SubscriptionStatus,
+  SuppressionEntry,
+  SuppressionScope,
+  SuppressionSource,
+} from "@addressium/core";
+import type { Clock, Stores, SuppressedDestination, SuppressionChecker } from "./ports.js";
+
+/**
+ * Which sources threaten reputation the whole deployment shares, and therefore
+ * scope GLOBAL rather than per-org (§4.13) — the one place this rule lives.
+ *
+ * `suppressAndFlip` below (the automatic SES-driven path) and `manualSuppress`
+ * (`admin.ts`, #247 — an operator recording the same fact by hand) both consult
+ * this rather than each hardcoding "global", so a human typing "this address
+ * bounces" gets the identical scope an SES notification saying the same thing
+ * would have produced. Getting this wrong in one direction lets a second org
+ * mail an address the account already knows is toxic; wrong the other way
+ * quietly narrows a real reputation signal to one org's problem.
+ */
+const GLOBAL_SUPPRESSION_SOURCES = new Set<SuppressionSource>(["bounce", "complaint"]);
+
+export function scopeForSuppressionSource(source: SuppressionSource): SuppressionScope {
+  return GLOBAL_SUPPRESSION_SOURCES.has(source) ? "global" : "org";
+}
 
 async function suppressAndFlip(
   stores: Stores,
@@ -28,7 +52,7 @@ async function suppressAndFlip(
     orgId: input.orgId,
     email: input.email.toLowerCase(),
     source,
-    scope: "global", // account-wide protection (§4.13)
+    scope: scopeForSuppressionSource(source), // always "global" for this caller — see the rule above
     addedAt: now,
   });
 
@@ -108,4 +132,55 @@ export function recordComplaint(
   input: { orgId: string; subscriberId: string; email: string; campaignId?: string; listId?: string },
 ): Promise<void> {
   return suppressAndFlip(stores, clock, input, "complaint", "complained");
+}
+
+/** What checking one address turned up, from both sources of truth (#247). */
+export interface SuppressionCheckResult {
+  email: string;
+  /** Our own store — org + global entries, exactly what `mayMail` consults. */
+  local: SuppressionEntry[];
+  /**
+   * The provider's account list, live. `undefined` means the check could not be
+   * made (no checker configured, or it threw) — NOT the same as "not
+   * suppressed", which is `null`. Collapsing those two would tell an operator
+   * an address is clear when the truth is that nobody asked.
+   */
+  live: SuppressedDestination | null | undefined;
+  /** Set only when `live` is `undefined` because the check itself failed. */
+  liveError?: string;
+}
+
+/**
+ * Look up one address against both suppression records (#247) — the console
+ * equivalent of `aws sesv2 get-suppressed-destination`, plus what our own send
+ * path actually gates on.
+ *
+ * The two can legitimately disagree: SES auto-suppresses on its own schedule
+ * from traffic outside this product (a different sender in the same account, an
+ * operator using the SES console directly), and our local copy only moves when
+ * OUR OWN pipeline sees a bounce/complaint or an operator acts. Showing one
+ * without the other is the wrong answer either way — an operator staring at
+ * "not suppressed locally" while SES is silently refusing every send is exactly
+ * the confusion this exists to remove.
+ *
+ * The live half is best-effort: `checker` is optional (some callers only want
+ * the local answer) and a throw degrades to `liveError` rather than failing the
+ * whole lookup — a subscriber-detail page must still render on a throttled or
+ * unreachable SES call.
+ */
+export async function checkSuppression(
+  stores: Stores,
+  checker: SuppressionChecker | undefined,
+  orgId: string,
+  email: string,
+): Promise<SuppressionCheckResult> {
+  const normalized = email.toLowerCase();
+  const local = await stores.suppression.entriesFor(orgId, normalized);
+  if (!checker) return { email: normalized, local, live: undefined };
+  try {
+    const live = await checker.get(normalized);
+    return { email: normalized, local, live: live ?? null };
+  } catch (e) {
+    return { email: normalized, local, live: undefined, liveError: (e as Error).message };
+  }
 }

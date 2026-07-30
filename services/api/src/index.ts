@@ -61,6 +61,7 @@ import {
   provisionSubscriberAccount,
   manualSuppress,
   liftSuppression,
+  checkSuppression,
   capabilitiesOf,
   exportCsvChunks,
   exportJsonlChunks,
@@ -101,6 +102,7 @@ import {
   verifyWebhookSignature,
   type DripStarter,
   type SendDescriptor,
+  type SuppressionChecker,
   type SuppressionListReader,
   type Stores,
 } from "@addressium/domain";
@@ -184,6 +186,14 @@ const scheduler = () =>
 let _importFiles: S3ImportFileStore | undefined;
 /** Lazy like every other dependency here — see the drip starter's note below. */
 const importFiles = () => (_importFiles ??= new S3ImportFileStore(env("IMPORT_BUCKET")));
+
+/**
+ * The live per-address SES suppression check/write (#247). Lazy, and needs no
+ * env var: unlike the bulk import reader it takes no reasons/page-size config,
+ * and the SDK client resolves credentials and region on its own.
+ */
+let _suppressionChecker: SesSuppressionListReader | undefined;
+const suppressionChecker = () => (_suppressionChecker ??= new SesSuppressionListReader());
 
 let _dripStarter: SfnDripStarter | undefined;
 const dripStarter = () =>
@@ -974,14 +984,81 @@ export async function dripEnrollHandler(
   }
 }
 
-/** POST /subscribers/suppress — manual suppression (admin). */
-export async function subscriberSuppressHandler(event: HttpEvent): Promise<HttpResult> {
+/**
+ * POST /subscribers/suppress — manual suppression, one address (#102, #247).
+ *
+ * `subscribers:manage` — matching "Manually unsubscribe someone" / "Manage
+ * individual subscribers" in the role matrix (Developer Admin, Editor,
+ * Support), not the `suppression:manage` this route used before #247. That was
+ * the more restrictive tier this repo defaults to for suppression writes, but a
+ * front-line operator handling ONE subscriber's reported bounce or complaint
+ * needs to be able to act on it without a dev-admin escalation, and the blast
+ * radius is the same either way: `recordBounce`/`recordComplaint` already write
+ * identically-scoped GLOBAL entries with NO role gate at all, triggered purely
+ * by an SES notification. A human recording the same fact behind an
+ * authenticated, audited console action is not riskier than that.
+ *
+ * `manualSuppress` derives the entry's SCOPE from `source` — bounce/complaint
+ * land GLOBAL, matching the automatic path; a bare "manual" suppression stays
+ * ORG-scoped, as this route always behaved before `source` existed. Only a
+ * global entry has a live SES counterpart, so the mirror write below fires
+ * exactly when SES's own `SuppressionListReason` would have accepted it.
+ */
+export async function subscriberSuppressHandler(
+  event: HttpEvent,
+  injected?: { checker?: SuppressionChecker },
+): Promise<HttpResult> {
   try {
     const input = schemas.manualSuppressSchema.parse(JSON.parse(event.body ?? "{}"));
-    requireGrant(event, "suppression:manage", input.orgId);
+    requireGrant(event, "subscribers:manage", input.orgId);
     const detail = await manualSuppress(stores(), clock, input);
-    await audit(event, input.orgId, "suppression.suppress", input.email);
+    if (detail.scope === "global") {
+      // Mirrors the write to the REAL SES account list, so `aws sesv2
+      // get-suppressed-destination` reflects it immediately rather than only
+      // our own copy. Best-effort: the local entry is what our own send path
+      // actually gates on (`mayMail`), so a throttled or unreachable SES call
+      // must not undo — or even fail — a suppression that already succeeded
+      // where it matters. Swallowed and logged, same posture as every other
+      // best-effort mirror call in this file.
+      try {
+        await (injected?.checker ?? suppressionChecker()).put(
+          input.email,
+          detail.source.toUpperCase() as "BOUNCE" | "COMPLAINT",
+        );
+      } catch (e) {
+        console.error("subscriber-suppress: SES mirror write failed", {
+          orgId: input.orgId,
+          error: (e as Error).message,
+        });
+      }
+    }
+    await audit(event, input.orgId, "suppression.suppress", `${input.email} (${detail.source})`);
     return json(200, detail);
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+/**
+ * GET /orgs/{org}/suppression/check?email=… — one address, both sources of
+ * truth (#247). The console equivalent of `aws sesv2 get-suppressed-destination`,
+ * plus what our own send path actually consults.
+ *
+ * `subscribers:manage`: this is what a subscriber-detail view calls on load, so
+ * it needs the same access as viewing the subscriber itself — Developer Admin,
+ * Editor, Support. It is read-only, so there is no blast-radius argument for
+ * gating it any tighter than that.
+ */
+export async function suppressionCheckHandler(
+  event: HttpEvent,
+  injected?: { checker?: SuppressionChecker },
+): Promise<HttpResult> {
+  try {
+    const orgId = event.pathParameters?.org ?? "";
+    requireGrant(event, "subscribers:manage", orgId);
+    const email = event.queryStringParameters?.email;
+    if (!email) return json(400, { error: "email required" });
+    return json(200, await checkSuppression(stores(), injected?.checker ?? suppressionChecker(), orgId, email));
   } catch (e) {
     return fail(e);
   }
@@ -1099,12 +1176,23 @@ export async function suppressionsListHandler(event: HttpEvent): Promise<HttpRes
   }
 }
 
-/** POST /subscribers/unsuppress — lift an org suppression + reactivate (#102). */
+/**
+ * POST /subscribers/unsuppress — lift an org suppression + reactivate (#102,
+ * #247).
+ *
+ * `subscribers:manage`, symmetric with the widened suppress route above: an
+ * operator who can suppress someone should be able to undo their own mistake
+ * without dev-admin escalation. Safe at this access level for the same reason
+ * it was safe before #247 widened the write side — `liftSuppression` only ever
+ * removes an ORG-scoped entry (see its own comment: global bounce/complaint
+ * entries are deliberately not touched here), so Editor/Support can never use
+ * this to erase the account-wide signal a real bounce or complaint left behind.
+ */
 export async function subscriberUnsuppressHandler(event: HttpEvent): Promise<HttpResult> {
   try {
     const { orgId, email } = JSON.parse(event.body ?? "{}") as { orgId?: string; email?: string };
     if (!orgId || !email) return json(400, { error: "orgId and email required" });
-    requireGrant(event, "suppression:manage", orgId);
+    requireGrant(event, "subscribers:manage", orgId);
     const detail = await liftSuppression(stores(), { orgId, email });
     await audit(event, orgId, "suppression.unsuppress", email);
     return json(200, detail);
@@ -1553,13 +1641,14 @@ export async function importBatchesHandler(event: HttpEvent): Promise<HttpResult
  * every one of those addresses, which is the reputation event the migration was
  * supposed to avoid.
  *
- * `suppression:manage`, matching every other suppression route (`manualSuppress`,
- * the list view, `liftSuppression`) — and deliberately NOT the `subscribers:manage`
- * that the sibling import routes use. That capability is held by `support` and
- * `editor` for "add / edit / manual unsubscribe", which is a per-subscriber
- * mandate; this writes GLOBAL entries in bulk, affecting every org in the
- * deployment, with no bulk way back. `suppression:manage` is developer_admin-only,
- * which is the right blast radius for that.
+ * `suppression:manage` — the org-wide LIST view (`suppressionsListHandler`) and
+ * this BULK import both stay dev-admin-only. `manualSuppress`/`liftSuppression`
+ * moved to `subscribers:manage` in #247, because those are single-address,
+ * front-line actions (Editor/Support handling one subscriber's report); this
+ * route is neither — it writes GLOBAL entries in bulk, sourced from an entire
+ * account's history, affecting every org in the deployment, with no bulk way
+ * back. `suppression:manage` is developer_admin-only, which is the right blast
+ * radius for that.
  *
  * The reader is injectable for tests only. It reads the DEPLOYMENT's SES account
  * rather than anything caller-supplied: an operator-named account would make this
@@ -2073,6 +2162,7 @@ const ADMIN_ROUTES: Record<string, RouteHandler> = {
   "POST /subscribers/attributes": subscriberAttributesHandler,
   "POST /subscribers/subscription": subscriptionStatusHandler,
   "GET /orgs/{org}/suppressions": suppressionsListHandler,
+  "GET /orgs/{org}/suppression/check": suppressionCheckHandler,
   "POST /subscribers/suppress": subscriberSuppressHandler,
   "POST /subscribers/unsubscribe": subscriberUnsubscribeHandler,
   "POST /subscribers/unsuppress": subscriberUnsuppressHandler,
