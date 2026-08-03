@@ -12,6 +12,6 @@
     "build": "tsc --build"
   },
   "dependencies": {
-    "@cedar-policy/cedar-wasm": "^4.11.2"
+    "@cedar-policy/cedar-wasm": "^4.12.0"
   }
 }
