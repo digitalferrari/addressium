@@ -27,6 +27,7 @@ export * from "./import-file.js";
 export * from "./import-run.js";
 export * from "./import-job.js";
 export * from "./suppression-import.js";
+export * from "./segment-import.js";
 export * from "./reporting.js";
 export * from "./alerts.js";
 export * from "./throttle.js";

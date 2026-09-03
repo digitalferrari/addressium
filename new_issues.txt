@@ -10,10 +10,9 @@ use case.
 > **Re-verified 2026-07-29** (docs-vs-code audit): every Critical and High finding from the
 > original pass is now fixed — statuses inline with issue refs. The event plane works end to end
 > on paper AND in the template; the importer's compliance hazards are closed. What remains:
-> gzipped-JSONL import, suppression-list import, segment import, async import jobs, SendBulkEmail
-> batching, and segment engagement predicates on the GSI engine. The same pass found — and fixed —
-> a fourth event-plane defect nobody had seen: the counter half of every event append targeted a
-> non-existent key and cancelled the whole transaction on real DynamoDB (see Finding 1).
+> SendBulkEmail batching, and segment engagement predicates on the GSI engine. The same pass found —
+> and fixed — a fourth event-plane defect nobody had seen: the counter half of every event append
+> targeted a non-existent key and cancelled the whole transaction on real DynamoDB (see Finding 1).
 
 
 ## 1. Critical findings
@@ -71,11 +70,9 @@ This is the adoption hook (README.md:44, ARCHITECTURE §4.7). Original findings,
   and recorded per subscription (#223).
 - ~~`confirmed`-by-default.~~ **Fixed (#192).** Imports default to `pending`; `confirmed` is
   refused without an explicit per-column consent basis — the refusal is the point.
-- **Suppression-list import — STILL ABSENT.** Nothing consumes SES `ListSuppressedDestinations`
-  output; bulk-load is one-by-one API calls.
-- **Segment import — STILL ABSENT.** No code references `SegmentDimensions`.
-- **Not async — STILL TRUE.** No S3-upload → Lambda/Step Functions job; imports run inline (the
-  wizard does batch rows under an `ImportBatch` record for traceability).
+- ~~Suppression-list import — STILL ABSENT.~~ **Fixed (#240).** SES suppression list is imported via `SesSuppressionListReader` and `/import/suppression` route.
+- ~~Segment import — STILL ABSENT.~~ **Fixed (2026-09-03).** Added `SegmentDimensions` translation and imported via `/import/segment` route.
+- ~~Not async — STILL TRUE.~~ **Fixed (#242).** Large imports run as async jobs via S3-triggered lambda and `/import/async` route.
 
 
 ### [FIXED] 3. Bounce handling doesn't distinguish hard from soft

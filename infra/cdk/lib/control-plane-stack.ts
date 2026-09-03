@@ -1571,6 +1571,7 @@ export class ControlPlaneStack extends Stack {
     adminRoute("ImportPreviewFn", "importPreviewHandler", HttpMethod.POST, "/orgs/{org}/import/preview");
     adminRoute("ImportMappedFn", "importMappedHandler", HttpMethod.POST, "/orgs/{org}/import/mapped");
     adminRoute("ImportSuppressionFn", "importSuppressionHandler", HttpMethod.POST, "/orgs/{org}/import/suppression");
+    adminRoute("ImportSegmentFn", "importSegmentHandler", HttpMethod.POST, "/orgs/{org}/import/segment");
     // Async import (#242): presign an upload, then run it as a job.
     adminRoute("ImportUploadUrlFn", "importUploadUrlHandler", HttpMethod.POST, "/orgs/{org}/import/upload-url");
     adminRoute("ImportAsyncFn", "importAsyncHandler", HttpMethod.POST, "/orgs/{org}/import/async");

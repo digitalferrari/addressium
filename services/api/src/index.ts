@@ -52,6 +52,8 @@ import {
   evaluateSetup,
   importObjectKey,
   importSuppressionList,
+  importPinpointSegment,
+  type PinpointSegmentResponse,
   isHoneypotTripped,
   markScheduleActive,
   startImportJob,
@@ -1790,6 +1792,28 @@ export async function importSuppressionHandler(
   }
 }
 
+/**
+ * POST /orgs/{org}/import/segment — import a dynamic segment definition from AWS Pinpoint.
+ */
+export async function importSegmentHandler(event: HttpEvent): Promise<HttpResult> {
+  try {
+    const orgId = event.pathParameters?.org ?? "";
+    requireGrant(event, "segments:manage", orgId);
+    const { segmentId, pinpointSegment } = JSON.parse(event.body ?? "{}") as {
+      segmentId?: string;
+      pinpointSegment?: PinpointSegmentResponse;
+    };
+    if (!segmentId || !pinpointSegment) {
+      return json(400, { error: "segmentId and pinpointSegment are required" });
+    }
+    const segment = await importPinpointSegment(stores(), orgId, segmentId, pinpointSegment);
+    await audit(event, orgId, "segment.import", segment.name);
+    return json(200, segment);
+  } catch (e) {
+    return fail(e);
+  }
+}
+
 export async function importHandler(event: HttpEvent): Promise<HttpResult> {
   try {
     const orgId = event.pathParameters?.org ?? "";
@@ -2174,6 +2198,7 @@ const ADMIN_ROUTES: Record<string, RouteHandler> = {
   "GET /orgs/{org}/export": exportHandler,
   "POST /orgs/{org}/import/preview": importPreviewHandler,
   "POST /orgs/{org}/import/suppression": importSuppressionHandler,
+  "POST /orgs/{org}/import/segment": importSegmentHandler,
   "POST /orgs/{org}/import/upload-url": importUploadUrlHandler,
   "POST /orgs/{org}/import/async": importAsyncHandler,
   "POST /orgs/{org}/import/mapped": importMappedHandler,
