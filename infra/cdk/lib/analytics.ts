@@ -231,6 +231,7 @@ export function wireAnalytics(scope: Construct, props: AnalyticsWiringProps): vo
         serdeInfo: { serializationLibrary: "org.openx.data.jsonserde.JsonSerDe" },
         // org_id / event_date are partition keys, so they are NOT repeated here.
         columns: [
+          { name: "event_id", type: "string" },
           { name: "campaign_id", type: "string" },
           { name: "subscriber_id", type: "string" },
           { name: "event_type", type: "string" },

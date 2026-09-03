@@ -1866,6 +1866,22 @@ export class ControlPlaneStack extends Stack {
       treatMissingData: TreatMissingData.NOT_BREACHING,
       alarmDescription: "addressium: a campaign template is failing to render (#241)",
     }));
+    alarm("ApiGatewayServerErrorAlarm", new Alarm(this, "ApiGatewayServerErrorAlarm", {
+      metric: api.metricServerError({ period: Duration.minutes(5) }),
+      threshold: 0,
+      comparisonOperator: ComparisonOperator.GREATER_THAN_THRESHOLD,
+      evaluationPeriods: 1,
+      treatMissingData: TreatMissingData.NOT_BREACHING,
+      alarmDescription: "addressium: API Gateway 5xx server errors",
+    }));
+    alarm("DripStateMachineFailedAlarm", new Alarm(this, "DripStateMachineFailedAlarm", {
+      metric: dripStateMachine.metricFailed({ period: Duration.minutes(5) }),
+      threshold: 0,
+      comparisonOperator: ComparisonOperator.GREATER_THAN_THRESHOLD,
+      evaluationPeriods: 1,
+      treatMissingData: TreatMissingData.NOT_BREACHING,
+      alarmDescription: "addressium: Drip state machine execution failed",
+    }));
     // Raw message delivery: the queue body is the SES notification itself
     // rather than an SNS envelope wrapping it. `unwrapRecords` peels the
     // envelope defensively anyway, so flipping this cannot silently break

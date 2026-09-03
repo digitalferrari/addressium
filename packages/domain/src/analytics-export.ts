@@ -26,6 +26,7 @@ export type LakeEventType = EventType | "erased";
 
 /** A flattened, columnar-friendly analytics row for one engagement event. */
 export interface EventAnalyticsRow {
+  event_id: string;
   org_id: string;
   campaign_id: string;
   subscriber_id: string;
@@ -45,6 +46,7 @@ export function eventPartitionDate(iso: string): string {
 /** Flatten an engagement event into its analytics row. */
 export function toEventAnalyticsRow(e: EngagementEvent): EventAnalyticsRow {
   return {
+    event_id: e.eventId ?? "",
     org_id: e.orgId,
     campaign_id: e.campaignId,
     subscriber_id: e.subscriberId,
@@ -82,7 +84,16 @@ export function eventFromImage(image: Record<string, DdbAttr> | undefined): Enga
   const at = d.at?.S;
   if (!orgId || !campaignId || !subscriberId || !type || !at) return null;
   const linkId = d.linkId?.S;
-  return { orgId, campaignId, subscriberId, type, at, ...(linkId ? { linkId } : {}) };
+  const eventId = d.eventId?.S ?? sk.split("#")[2];
+  return {
+    orgId,
+    campaignId,
+    subscriberId,
+    type,
+    at,
+    ...(linkId ? { linkId } : {}),
+    ...(eventId ? { eventId } : {}),
+  };
 }
 
 /**
@@ -113,6 +124,7 @@ export function entitiesExportPrefix(now: Date): string {
  */
 export function toErasureAnalyticsRow(e: ErasureRecord): EventAnalyticsRow {
   return {
+    event_id: `erased-${e.subscriberId}`,
     org_id: e.orgId,
     campaign_id: "",
     subscriber_id: e.subscriberId,

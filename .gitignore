@@ -11,3 +11,4 @@ coverage/
 *.log
 
 .dev-outbox/
+graphify*

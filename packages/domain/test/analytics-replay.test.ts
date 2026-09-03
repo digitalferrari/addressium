@@ -33,6 +33,7 @@ const errLine = (raw: string, over: Record<string, unknown> = {}) =>
   });
 
 const row = (over: Partial<EventAnalyticsRow> = {}): EventAnalyticsRow => ({
+  event_id: "uuid",
   org_id: "summit",
   campaign_id: "c1",
   subscriber_id: "s1",

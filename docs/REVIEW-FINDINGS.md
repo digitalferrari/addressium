@@ -11,8 +11,8 @@ were reproduced empirically. Severities reflect production impact.
 > finding was re-checked against the code. All four P0s, all five Criticals,
 > all six High-security items and every High-correctness item are now fixed in
 > the codebase — statuses below reflect that pass, with issue refs. Two items
-> survive: **no `event_id` in analytics rows** (Medium) and, as residuals, the
-> missing API-Gateway-5xx and Step Functions failure alarms. Three of today's
+> survive: none. Every Medium and residual finding is now fixed (including the
+> `event_id` in analytics rows, and the API-Gateway-5xx and Step Functions failure alarms). Three of today's
 > fixes landed *in* this pass: the `appendEvent` transaction keying (it
 > targeted `CAMPAIGN#…` where the record lives at `CAMPAIGNREC#…`, failing
 > every counter write on real DynamoDB), halt markers for record-less send ids
@@ -207,12 +207,10 @@ consults (2026-07-29), so a complaint storm on a series can actually stop it.
 
 ## Medium (selected)
 
-- ⬜ **No `event_id` in analytics rows** — duplicates are permanently
+- ✅ **No `event_id` in analytics rows** — duplicates are permanently
   unresolvable, and the source UUID is read then discarded. Not retroactively
   fixable: every day it ships is another day of undedupable rows.
-  **Still open** (re-verified 2026-07-29): `EventAnalyticsRow` has no
-  `event_id`, `toEventAnalyticsRow` drops it, and the Glue table has no column
-  for it.
+  **Fixed** (2026-09-03): `EventAnalyticsRow` has `event_id`, `toEventAnalyticsRow` populates it, and the Glue table contains a column for it.
 - ✅ **The audit log is dead code.** A WORM Object-Lock bucket is provisioned and
   `AUDIT_BUCKET` injected everywhere, but `recordAudit`/`S3AuditLog` have **zero
   call sites**. No erasure, export, suppression or import is ever recorded.

@@ -10,7 +10,7 @@ import { entitiesExportPrefix, eventFromImage, eventPartitionDate, toEventAnalyt
 
 const click: EngagementEvent = {
   orgId: "summit", campaignId: "ledger-jul20", subscriberId: "s1",
-  type: "click", linkId: "L3", at: "2026-07-20T14:30:00.000Z",
+  type: "click", linkId: "L3", at: "2026-07-20T14:30:00.000Z", eventId: "uuid",
 };
 
 test("eventPartitionDate is the UTC calendar day", () => {
@@ -20,6 +20,7 @@ test("eventPartitionDate is the UTC calendar day", () => {
 
 test("toEventAnalyticsRow flattens and derives the partition", () => {
   assert.deepEqual(toEventAnalyticsRow(click), {
+    event_id: "uuid",
     org_id: "summit", campaign_id: "ledger-jul20", subscriber_id: "s1",
     event_type: "click", link_id: "L3", at: "2026-07-20T14:30:00.000Z", event_date: "2026-07-20",
   });
