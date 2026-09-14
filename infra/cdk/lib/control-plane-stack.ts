@@ -487,6 +487,26 @@ export class ControlPlaneStack extends Stack {
         conditions: { StringEquals: { "AWS:SourceAccount": Stack.of(this).account } },
       }),
     );
+    // Publishing to an ENCRYPTED topic takes two grants, not one. The statement
+    // above lets SES call sns:Publish; without this one SES is then denied at
+    // the encryption step and every publish fails:
+    //   "Access denied to KMS key for SNS topic <...>. Verify the KMS key policy
+    //    grants Amazon SES the kms:GenerateDataKey and kms:Decrypt permissions."
+    //
+    // That surfaced as a 500 from POST /orgs — the event destination is created
+    // during org provisioning, so the FIRST organization anyone adds fails, and
+    // the message names SNS rather than the org being created. The queue side of
+    // this was already reasoned about (see `queueEncryption` above, which picks
+    // SQS_MANAGED precisely to avoid a second key policy); the SES -> SNS
+    // direction was the half that got missed.
+    dataKey.addToResourcePolicy(
+      new PolicyStatement({
+        principals: [new ServicePrincipal("ses.amazonaws.com")],
+        actions: ["kms:GenerateDataKey*", "kms:Decrypt"],
+        resources: ["*"], // a key policy's resource is always the key it is attached to
+        conditions: { StringEquals: { "AWS:SourceAccount": Stack.of(this).account } },
+      }),
+    );
     // Where infra-level CloudWatch alarms go: DLQ depth, queue age, Lambda
     // errors/throttles, DynamoDB throttles (#92, #222).
     //
