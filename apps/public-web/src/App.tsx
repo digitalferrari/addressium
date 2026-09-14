@@ -90,7 +90,10 @@ export function SignupForm({ defaultList }: { defaultList?: string }) {
 }
 
 function EmbedSnippet() {
-  const src = `${window.location.origin}/embed.js`;
+  // BASE_URL, not a bare "/", because this app is served from a subpath so that
+  // subscriber-web can own the root (see vite.config.ts). Hardcoding "/embed.js"
+  // here would hand operators a snippet that 404s on their own site.
+  const src = new URL(`${import.meta.env.BASE_URL}embed.js`, window.location.origin).href;
   const snippet =
     `<div data-addressium data-org="${ORG}" data-list="YOUR_LIST_ID"></div>\n` +
     `<script async src="${src}"></script>`;

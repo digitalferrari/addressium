@@ -100,8 +100,9 @@ Three layers hold:
 1. **The deploy identity** can only assume CDK's roles.
 2. **CDK's roles** only act on stacks carrying the bootstrap qualifier.
 3. **The permissions boundary** caps what any role the deployment creates can
-   ever do, and explicitly denies IAM user/key creation, Organizations, and
-   billing.
+   ever do. It denies IAM user/key creation, Organizations and billing — but a
+   deny-list is only half of what it is, and reading it as the whole is the
+   mistake that broke the first real deploy. See below.
 
 ### The honest caveat
 
@@ -116,6 +117,50 @@ documented CDK default and is defensible here because it is assumed **only by
 CloudFormation**, never by a human or an agent, and what it can do is bounded by
 what the template declares plus the boundary above. If you want it tighter, pass
 your own policy ARN — the script takes it as a one-line change.
+
+### A boundary is an intersection, not a deny-list
+
+This is the single thing most likely to be got wrong when editing
+`infra/bootstrap/addressium-bootstrap.yaml`, and it cost the first real deploy
+several failures before the shape of the mistake was clear.
+
+`cfn-exec-role` holds `AdministratorAccess` **capped by this boundary**. A
+permissions boundary is an *intersection*: the effective permission is what the
+identity policy allows **and** what the boundary allows. So "administrator"
+means nothing outside the boundary — if an action is absent from the boundary,
+the execution role cannot perform it, no matter what `AdministratorAccess` says.
+
+The boundary had been written as an application-**runtime** allow-list — the
+things a Lambda needs at request time. That is the wrong frame. It also has to
+allow everything **deployment** needs, which is a different and larger set:
+
+- **`sts:AssumeRole`** — without it the deploy identity cannot assume the CDK
+  roles at all, which is the first thing `cdk deploy` does.
+- **`ssm:GetParameters`** — plural. `ssm:GetParameter` and `ssm:GetParameters`
+  are **different IAM actions**, and CloudFormation resolves the
+  `BootstrapVersion` parameter (typed `AWS::SSM::Parameter::Value<String>`)
+  through the **batch** API. Granting only the singular form fails in a way that
+  reads as a bootstrap-version problem.
+- **`events:*`** — the stack creates EventBridge rules.
+- **IAM role lifecycle** — the stack synthesizes 31 roles, one execution role per
+  Lambda. That is the least-privilege payoff, not bloat, and it means the
+  deployment genuinely must create IAM roles.
+
+That last one is granted as a **conditioned `iam:CreateRole`**: permitted only
+when the new role carries this same boundary. The deployer therefore cannot mint
+itself a role stronger than itself, which is the property that makes granting
+role creation acceptable at all. `infra/cdk/bin/addressium.ts` sets the
+`@aws-cdk/core:permissionsBoundary` context app-wide so every synthesized role
+satisfies the condition, and `deploy:check` refuses to deploy if any role
+synthesizes without it. **Do not remove either half.** Dropping the app-level
+context makes every role fail the condition; dropping the condition to "simplify"
+the boundary turns role creation back into unconstrained privilege escalation.
+
+One superseded control worth not reinstating: an earlier boundary carried a
+`Deny` on `iam:PutRolePermissionsBoundary`, intended to stop a role escaping its
+cap. It never did that — a boundary rides along with `CreateRole` as a parameter,
+so it was never set by that call. What the Deny actually blocked was
+CloudFormation's *update* path, **including rollbacks**.
 
 ## Testing safety: SES sandbox is a feature
 
@@ -132,7 +177,11 @@ For bounce and complaint handling, use SES's simulator addresses
 (`bounce@simulator.amazonses.com`, `complaint@simulator.amazonses.com`). They
 work in sandbox, cost nothing, and don't touch your sending reputation.
 
-Do **not** request production access for a test account.
+Do **not** request production access for a test account. This is enforced, not
+just advised: `npm run test:e2e` calls `GetAccount` and **aborts** on any account
+that holds production access. There is no override, so granting it to an account
+retires that account from the smoke suite permanently — keep the sandboxed smoke
+account and the account you actually send from separate.
 
 ## Inbound mail
 

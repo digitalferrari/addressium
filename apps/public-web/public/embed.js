@@ -5,7 +5,7 @@
  *   <div data-addressium data-org="ORG"
  *        data-api="https://<api-base>"           (optional; defaults to same origin)
  *        data-recaptcha-sitekey="6Lc..."></div>  (optional; enables reCAPTCHA v3)
- *   <script async src="https://<public-site>/embed.js"></script>
+ *   <script async src="https://<public-site>/signup/embed.js"></script>
  *
  * Renders a self-contained form: an email field, a multi-select checkbox list of
  * the org's newsletters, a hidden honeypot, and a submit button. Posts to

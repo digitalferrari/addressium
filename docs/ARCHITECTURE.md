@@ -5,9 +5,12 @@
 > domain, and run email lists, signup forms, broadcasts, and drip automations —
 > all serverless, at near-zero idle cost.
 
-- **Status:** Built, never deployed. Most of §4 and all of §6 ships in the repo
-  and is tested; **no AWS account has ever run it**. See §13 for the honest list
-  of what is not yet proven.
+- **Status:** Built; deployed once, to a dev account (#212). Most of §4 and all
+  of §6 ships in the repo and is tested, and the stack now stands up in a real
+  account with its handlers loading and an organization provisioned — but
+  **nothing has sent a campaign**, and the counts and wiring claims below are
+  still read from a synthesized template rather than from a running system. See
+  §13 for the honest list of what is not yet proven.
 - **Audience:** Contributors and operators evaluating or building addressium
 - **Scope of this document:** the canonical system design, aligned to
   [`DESIGN-COMPENDIUM.md`](./DESIGN-COMPENDIUM.md) (revision 2), which is the
@@ -1915,7 +1918,11 @@ link can ever grant, not from assuming it stays private:
   nothing else**, so admin credentials never have to be handed to a pipeline, a
   teammate, or an agent. Then, as the deployer:
   `npm install && npm run build && npm run deploy`, where `deploy:check` runs
-  first as a `predeploy` hook and **cannot be skipped**. The exact sequence lives
+  first as an **`&&` chain inside the `deploy` script**. It was a `predeploy`
+  lifecycle hook until the first real deploy, which is a mechanism npm skips
+  entirely — and reports nothing about skipping — under `ignore-scripts=true`, a
+  common hardening setting. The guard had consequently never run once. A `&&`
+  chain cannot be disabled by configuration; do not move it back. The sequence lives
   in the README's Install section and in [`DEPLOYMENT.md`](./DEPLOYMENT.md) —
   follow those, not a remembered `cdk deploy`.
 - **`deploy:check` is a data-destruction guard, not a health check.** It creates
@@ -2316,16 +2323,35 @@ A design document that reads "done" is worse than useless. Everything above
 describes the target; this is the part that is still unearned. It mirrors
 [`DESIGN-COMPENDIUM.md`](./DESIGN-COMPENDIUM.md) §9.
 
-- **Nothing has ever been deployed.** No AWS account has run this. Every count,
-  every alarm, every wiring claim in this document is read from a **synthesized
-  CloudFormation template**, not from a running system.
-- **The event plane was dead at three independent layers** until recently. The
-  fix is verified against the synthesized template — **never against real SES
-  traffic**. Until a real bounce arrives from a real mailbox provider, treat
-  §4.5 as designed rather than demonstrated.
-- **`deploy-check.sh` is fixture-validated**, never run against real
-  CloudFormation. It is the one thing standing between a key-schema change and
-  an empty table (§9), and it has never faced a live change set.
+- **Deployed once, to a dev account** (#212); never to production, and never for
+  longer than a session. Every count, every alarm and every wiring claim in this
+  document is still read from a **synthesized CloudFormation template** rather
+  than from a running system — the deployment confirmed that the template
+  *applies*, which is a narrower fact than the template being *right*. It
+  surfaced ten defects invisible to both `npm test` and `cdk synth`; two of them
+  produced a stack at `CREATE_COMPLETE` in which none of the 29 handlers could
+  load, so even "it deployed" does not imply "it runs".
+- **The event plane was dead at three independent layers** until recently, and a
+  fourth surfaced on the first real deploy: the KMS key policy granted SES
+  nothing, so publishing to the **encrypted** `SesEventsTopic` failed at the
+  encryption step even though `sns:Publish` was correctly granted (#208). Two
+  grants are needed, not one. The fix is verified against a live account for org
+  provisioning but **not against real SES traffic** — until a real bounce arrives
+  from a real mailbox provider, treat §4.5 as designed rather than demonstrated.
+- **Custom domains do not exist.** There is not one Route 53 or ACM resource in
+  the stack; every URL it emits is a `*.cloudfront.net` or
+  `*.execute-api.<region>.amazonaws.com` name, and those are what land in the
+  Cognito callback, the CORS allow-list and outgoing mail links.
+  `ControlPlaneStackProps.adminAppUrl` / `.publicAppUrl` are wired into both, but
+  `BootstrapConfig` declares neither and nothing passes them — dead code, not an
+  unset option. Anywhere this document implies an operator-chosen hostname, read
+  a CloudFront name instead.
+- **`deploy-check.sh` has faced exactly one live change set**, and it was a
+  *create* — where there is no existing data-holding resource to be replaced, so
+  the branch it exists for did not execute. That branch is still fixture-only. It
+  is the one thing standing between a key-schema change and an empty table (§9).
+  Worse, until that same deploy it had never run **at all**: it hung off an npm
+  `predeploy` hook, which `ignore-scripts=true` silently suppresses.
 - **The version marker is readable, but nothing writes it on deploy.** `GET
   /version` returns the running version and a `deployed` of `null` on every real
   install, forever, so it cannot yet confirm that a deploy landed. There is no

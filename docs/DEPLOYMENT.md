@@ -4,12 +4,15 @@ This guide takes you from an empty AWS account to a running deployment with one
 or more publisher organizations. addressium runs entirely in **your** account;
 there is no addressium-hosted control plane.
 
-> ### ⚠️ Status: this runbook has never been run
-> **Nothing here has ever been deployed to a real AWS account.** Every step below
-> is written against the source and the synthesized CloudFormation template, not
-> against a deployment that happened. Commands may be wrong in ways only a real
-> account will reveal. Read [Status](../README.md#status) before you point this
-> at a domain you care about.
+> ### ⚠️ Status: run once, to a dev account
+> §1–§6 have now been walked end to end against a real AWS account (#212), and
+> the corrections that run produced are folded in below — the boundary
+> permissions, the Hosted-UI domain, the SPA publish step. §7 onward is still
+> written against the source and the synthesized template rather than against
+> something that happened, and **no campaign has been sent**. That run surfaced
+> ten bugs no test could see; expect the sections it did not reach to hold more.
+> Read [Status](../README.md#status) before you point this at a domain you care
+> about.
 
 > **`[Decided r2 — not yet built]`** marks a decision recorded in the
 > [design compendium](DESIGN-COMPENDIUM.md) that the CDK does **not** implement
@@ -31,7 +34,10 @@ there is no addressium-hosted control plane.
   everything after §1 runs as that identity.
 - **A sending domain** you control DNS for (needed to verify SES and pass
   DKIM/SPF/DMARC). SES starts in *sandbox* mode — request production access when
-  you are ready to send to unverified recipients.
+  you are ready to send to unverified recipients, but note that doing so
+  permanently disqualifies that account from `npm run test:e2e`, which aborts on
+  any account holding production access (§11). Keep the smoke account and the
+  sending account separate.
 
 ### The one-time account bootstrap
 
@@ -89,6 +95,15 @@ when LocalStack is unreachable. Bring up `docker-compose.localstack.yml` first
 and the total becomes 253, all passing — the placeholder is not registered, so
 the two totals never match.
 
+> **The CDK tests are slow on purpose, and the obvious fix does not work.**
+> Roughly 8.5 seconds per test across 77 of them. The cause is `nodeModules:
+> ["@cedar-policy/cedar-wasm"]` on the bundled functions (§4 — it is what keeps
+> the handlers loadable at all): CDK runs an `npm install` per function at
+> **construct** time, so it happens while the test builds the stack, before any
+> assertion. `aws:cdk:bundling-stacks: []` does **not** skip it — that context
+> key gates asset bundling, and this install is not asset bundling. Budget the
+> wall-clock rather than trying to tune it away.
+
 ## 3. Configure the control plane
 
 The control plane is deployed **once per stage** and seeds the admin Cognito
@@ -106,7 +121,28 @@ Edit `addressium.config.json`:
 | `stage` | Stage suffix; the stack is named `addressium-<stage>` (e.g. `dev`, `prod`). |
 | `region` | AWS region to deploy into. |
 | `adminEmails` | One or more emails seeded as the first Developer Admin(s). Each receives a Cognito invite. |
-| `adminHostedUiDomainPrefix` | Prefix for the admin Cognito Hosted-UI domain. Must be globally unique in the region. |
+| `adminHostedUiDomainPrefix` | Prefix for the admin Cognito Hosted-UI domain. The stack appends `-<stage>`, so the domain is `<prefix>-<stage>`, and it is that full string that must be globally unique in the region — see §4. |
+| `adminFromEmail` | **Optional.** FROM address for admin invites and password resets, which switches the admin pool from Cognito's built-in sender to **SES**. Its domain must already be a verified SES identity in this region or the deploy fails at stack-update time. See below. |
+
+### `adminFromEmail`, and why it is optional
+
+Leave it empty on a first deploy, verify a domain, then set it and deploy again.
+It has to be optional because of bootstrapping order: the admin pool must stand
+up on a fresh account where nothing is verified yet, so requiring an identity
+would make the very first deploy impossible.
+
+Empty keeps Cognito's default sender, which is a poor fit for the one email that
+gates console access: **50 emails per day account-wide**, sent from a shared
+`amazonses.com` address whose reputation belongs to nobody, and **no bounce, no
+metric and no log of any kind**. The failure mode is the expensive one — the
+first invite this stack ever sent never arrived, and nothing anywhere could say
+whether it was delivered, filtered or dropped. An invite that was never sent
+looks exactly the same as one that vanished. If you are about to hand invites to
+a team, set this first.
+
+Deliberately **not** paired with `sesVerifiedDomain`: Cognito derives the
+identity from the address itself, so naming a domain that is verified in another
+region — or not at all — only adds a way to fail an update for no benefit.
 
 ### Optional CDK context flags
 
@@ -151,7 +187,7 @@ alarms into a void *looks* monitored, which is worse than one with none.
 Deploy from the **repo root**, not from `infra/cdk`:
 
 ```bash
-npm run deploy         # deploy:check runs first and cannot be skipped
+npm run deploy         # deploy:check runs first — an && chain, not a hook
 ```
 
 `deploy` invokes `deploy:check` directly (`deploy:check && cdk deploy`), so
@@ -165,7 +201,7 @@ set without executing it**, inspects it, and exits non-zero — aborting the dep
      cause: Properties.KeySchema (RequiresRecreation=Always)
 ```
 
-**Why it cannot be skipped:** `RemovalPolicy.RETAIN` governs stack *deletion*, not
+**Why it runs unconditionally:** `RemovalPolicy.RETAIN` governs stack *deletion*, not
 resource *replacement*. Change a partition key and CloudFormation creates a new,
 empty table and orphans the old one — nothing is "deleted", RETAIN is satisfied,
 and every subscriber vanishes from the application's view. Only a pre-flight
@@ -176,19 +212,95 @@ directly and runs no checks at all; don't.
 > anyone with `ignore-scripts=true` in their npm config — a common hardening
 > setting, and the default under some CI runners and package managers. npm
 > reports nothing when it skips a lifecycle hook, so the deploy looked clean
-> while the guard was silently absent. A `&&` chain in the script body cannot be
-> disabled by configuration. Don't move it back into a hook.
+> while the guard was silently absent. On the account that deployed this first,
+> `ignore-scripts` was set, which means the data-protection guard **had never
+> once executed** despite the docs claiming it could not be skipped. A `&&` chain
+> in the script body cannot be disabled by configuration. Don't move it back into
+> a hook, and don't trust a guard whose only enforcement is a lifecycle event.
 
 It also refuses to deploy if any IAM role synthesizes **without the permissions
 boundary** (§11). That is not a style check: the bootstrap boundary grants
 `iam:CreateRole` only when the new role carries the boundary, so an unbounded
 role means CloudFormation is denied partway through and leaves a stack to roll
-back.
+back. `bin/addressium.ts` sets the `@aws-cdk/core:permissionsBoundary` context
+app-wide so all 31 synthesized roles satisfy that condition — one execution role
+per Lambda, which is the least-privilege payoff rather than bloat. Do not remove
+that app-level context to "clean up"; the condition on `iam:CreateRole` is what
+stops a deployer minting itself something stronger than itself, and without the
+context every role fails it.
 
-> `deploy:check` is validated against change-set fixtures, **never against real
-> CloudFormation**. It is the only preflight that exists — there is no `doctor`
-> command. It also warns when no WAF association or alert target is configured
-> (§3), before it inspects anything else.
+> `deploy:check` has now run against real CloudFormation, but only on a **create**
+> — where no data-holding resource exists yet to be replaced. The replacement
+> path it exists for is still validated against fixtures alone. It is the only
+> preflight that exists — there is no `doctor` command. It also warns when no WAF
+> association or alert target is configured (§3), before it inspects anything
+> else.
+
+### When a create fails
+
+A `CREATE_FAILED` leaves the stack in **`ROLLBACK_COMPLETE`**, which
+CloudFormation cannot update. You must **delete the stack** before retrying —
+`npm run deploy` against it fails with a state error, not a useful one.
+
+Deleting is not the end of it. Every `RemovalPolicy.RETAIN` resource reports
+`DELETE_SKIPPED` and is **orphaned**, still present and still billing. On the
+first real attempt that meant a surviving admin Cognito pool, a KMS key, S3
+buckets and secrets. Two of those bite on the retry rather than later: the
+Hosted-UI domain is globally unique, so an orphaned pool holding
+`<prefix>-<stage>` makes the next create fail on a name collision, and orphaned
+secrets sit in a 7-to-30-day deletion window under the same name.
+
+**Sweep between attempts.** Find the survivors by name — they all carry the
+`addressium-<stage>` prefix — and delete them deliberately, scheduling secrets
+with `--force-delete-without-recovery` if you intend to reuse the name
+immediately. The stack events list them: filter for `DELETE_SKIPPED`.
+
+### After the deploy succeeds, invoke something
+
+`CREATE_COMPLETE` is **not** evidence that any code runs. The first real deploy
+reached `CREATE_COMPLETE` with all 29 handlers unable to load — a bundling
+failure is invisible to CloudFormation, which only ever saw a zip file of the
+correct shape. `curl $HttpApiUrl/version` is the cheapest check that the runtime
+is real; a module-load failure shows up in the function's log group as an
+`ERROR Runtime.ImportModuleError` on the very first invocation.
+
+> **Three bundling settings that look like cruft and are not. Do not "clean up"
+> any of them** — each one was the fix for a defect that produced a green deploy
+> and a dead stack.
+>
+> 1. **`nodeModules: ["@cedar-policy/cedar-wasm"]`.** The package is a wasm-pack
+>    `nodejs` build: it locates its `.wasm` sidecar through `__dirname`, which
+>    esbuild cannot inline, so bundling it produces JavaScript that cannot find
+>    its own binary. Shipping it as a real `node_modules` entry is the fix. A
+>    `banner` shim defining `__dirname` is **not** — that makes the path resolve
+>    and then fail `ENOENT`, which is a longer road to the same dead handler.
+> 2. **The `createRequire(import.meta.url)` `banner`.** Once cedar loaded, the
+>    AWS SDK's `@smithy/util-buffer-from` hit esbuild's ESM `require` stub and
+>    threw `Dynamic require of "buffer" is not supported`. This bug was
+>    **invisible until the first was fixed**, because nothing got far enough to
+>    reach it. Removing either fix re-exposes the other.
+> 3. **`@cedar-policy/cedar-wasm` in all 12 `services/*/package.json`, including
+>    the 4 that do not use RBAC.** This looks like an obvious tidy-up and is not.
+>    `nodeModules` resolves a version by walking **up** from the handler *entry*
+>    file (a `findUp` for `package.json`), so the file it reads is
+>    `services/<name>/package.json` — **not** `infra/cdk`'s and **not** the root's.
+>    A service that omits the dependency gives CDK nothing to resolve and breaks
+>    `cdk synth`. Removing it from the four non-RBAC services has already cost 18
+>    test failures once.
+>
+> The same construct-time `npm install` these cause is why the CDK tests are slow
+> (§2). That cost is bought deliberately.
+
+> **`AdminApiFn` uses `scopePermissionToRoute: false`, and that is also
+> deliberate.** With per-route scoping, the shared admin function emitted one
+> `AWS::Lambda::Permission` per route — 49 of them — which overflowed Lambda's
+> hard **20,480-byte resource-policy limit** part-way through the create,
+> failing the stack after most of it had been built. Turning it off emits one
+> API-scoped permission instead (72 permissions across the stack became 24). It
+> costs nothing in security here: all 54 admin routes share **one** function
+> behind **one** JWT authorizer, so per-route source ARNs never separated
+> anything. Authorization is the authorizer plus the handler's own Cedar RBAC,
+> and it always was.
 
 ### Stack outputs you will need
 
@@ -200,7 +312,7 @@ with both analytics flags on, plus `BackupVaultName` in prod:
 | --- | --- |
 | `HttpApiUrl` | `VITE_API_BASE` for all three SPAs (§5). A URL, not an ARN. |
 | `AdminPoolId` / `AdminClientId` | `VITE_COGNITO_*` for the admin console. |
-| `AdminSiteBucket` / `PublicSiteBucket` | Sync the built SPA into these. |
+| `AdminSiteBucket` / `PublicSiteBucket` | Sync the built SPAs into these, by hand — there is no npm script. `PublicSiteBucket` holds **two** apps at different prefixes; see §5 before syncing it. |
 | `AdminSiteUrl` / `PublicSiteUrl` | CloudFront **domain names** — not ARNs. |
 | `ApiStageArn` | Attach your REGIONAL WebACL here (§8). |
 | `AdminDistributionId` / `PublicDistributionId` | Attach your CLOUDFRONT-scope WebACL to these (§8). |
@@ -212,8 +324,33 @@ with both analytics flags on, plus `BackupVaultName` in prod:
 | `UsageIngestFunctionName` | Daily usage-metering Lambda (§9). |
 | `DripStateMachineArn` | The drip Step Functions state machine. |
 
-The Hosted-UI **domain** is not an output — it is the
-`adminHostedUiDomainPrefix` you set in §3.
+The Hosted-UI **domain** is not an output, and it is **not** the
+`adminHostedUiDomainPrefix` you set in §3. The stack appends the stage
+(`control-plane-stack.ts`, `domainPrefix: \`${prefix}-${stage}\``), so the URL
+you actually sign in at is:
+
+```
+https://<adminHostedUiDomainPrefix>-<stage>.auth.<region>.amazoncognito.com
+```
+
+With the example config's `addressium-admin` on `dev`, that is
+`addressium-admin-dev.auth.us-east-1.amazoncognito.com`. Going to the un-suffixed
+name gets you a Cognito error page that does not say why, which is a poor first
+impression of your own deployment. The suffix is also why the *full* string, not
+the prefix, is what has to be globally unique in the region.
+
+> **Custom domains are not implemented, and this is the section where that
+> becomes visible.** The stack contains zero Route 53 and zero ACM resources. The
+> only names it emits are `*.cloudfront.net` and
+> `*.execute-api.<region>.amazonaws.com`, and those are the names baked into the
+> Cognito callback URL, the API's CORS allow-list, and every link in outgoing
+> mail. `ControlPlaneStackProps` declares `adminAppUrl` and `publicAppUrl`, and
+> they are genuinely wired into both of those — but `BootstrapConfig` has no
+> matching fields and nothing passes them, so they are **dead code** rather than
+> a setting you have missed. Putting this behind your own domain means a hosted
+> zone, a certificate in `us-east-1` for the CloudFront distributions, and
+> rebuilding the SPAs against the new origin. Plan for `*.cloudfront.net` in the
+> meantime, including in anything you print on a subscriber-facing page.
 
 ## 5. Build & publish the web apps
 
@@ -235,24 +372,93 @@ build time:
 > `POST /preferences/request`, `GET`/`POST /preferences`); its page in the
 > subscriber SPA is **not yet built** (ARCHITECTURE.md §4.10).
 
+**There is no npm script that publishes an SPA.** Building and syncing are two
+separate manual steps, and the second one is plain `aws s3 sync` against the
+bucket names from §4 — nothing in `npm run deploy` touches the site buckets, so a
+deploy that succeeds still leaves the console unreachable until you do this:
+
 ```bash
 VITE_API_BASE="https://<api-id>.execute-api.<region>.amazonaws.com" \
+VITE_COGNITO_POOL_ID="<AdminPoolId>" \
+VITE_COGNITO_CLIENT_ID="<AdminClientId>" \
+VITE_COGNITO_DOMAIN="<adminHostedUiDomainPrefix>-<stage>.auth.<region>.amazoncognito.com" \
   npm --workspace @addressium/admin-web run build
-# then sync apps/admin-web/dist to the admin S3 bucket / CloudFront from the outputs
+
+aws s3 sync apps/admin-web/dist "s3://<AdminSiteBucket>" --delete
+aws cloudfront create-invalidation --distribution-id <AdminDistributionId> --paths '/*'
 ```
+
+The env vars are read at **build** time, so changing one means rebuilding and
+re-syncing — there is no runtime config file to edit in the bucket. The
+invalidation matters because `index.html` is the file you will keep replacing.
+
+> **Two SPAs share one bucket, and the split between them is deliberate.**
+> `apps/subscriber-web` and `apps/public-web` both go into the single
+> `PublicSiteBucket` (`control-plane-stack.ts`, the `PublicSite` construct),
+> behind one distribution. They are kept apart by a Vite `base`:
+>
+> - **`subscriber-web` owns the root `/`** and sets no `base`. It has to: the
+>   `/confirm` and `/unsubscribe` links in outgoing mail resolve there, and an
+>   unsubscribe link that 404s is a CAN-SPAM problem, not a routing
+>   inconvenience.
+> - **`public-web` sets `base: "/signup/"`** and lives under that prefix,
+>   `embed.js` included — so the embeddable widget is at
+>   `https://<public-site>/signup/embed.js`, which is the URL operators paste.
+>
+> **Do not delete that `base`.** It reads as an arbitrary setting and is not:
+> without it both apps build to `/`, and whichever `aws s3 sync` runs last
+> silently replaces the other's `index.html`. There is no error from `sync` and
+> no deploy failure, because nothing in the stack knows two apps were meant to
+> land here. The moment it regresses, either the embed or every unsubscribe link
+> in every email already sent stops working.
+>
+> The embed URL moved to `/signup/embed.js` from the root, which would break
+> already-pasted embeds — it is safe only because there are currently zero of
+> them. Once real operators have pasted a snippet, that path is frozen.
+>
+> **What the split does not fix: deep links under `/signup/`.** The distribution
+> rewrites 404 → `/index.html` with a 200 for SPA routing
+> (`infra/cdk/lib/static-site.ts`), and that rewrite is **root-only**. So a
+> client-side route like `/signup/lists` that is not a real object falls back to
+> the **root** `index.html` — subscriber-web's shell, not public-web's. Real
+> files under the prefix (`/signup/`, `/signup/embed.js`, the hashed assets) are
+> served correctly, which is why the embed and the signup entry point work. A
+> second error-response mapping scoped to the prefix is what would close this;
+> nothing implements one today.
+>
+> **The residual trap is `--delete`.** One bucket still holds both apps, so a
+> `aws s3 sync --delete` scoped to the bucket **root** removes the other app's
+> files even though their prefixes never collide. Scope each sync to its own
+> prefix, or drop `--delete`:
+>
+> ```bash
+> aws s3 sync apps/subscriber-web/dist "s3://<PublicSiteBucket>"         --delete \
+>   --exclude 'signup/*'
+> aws s3 sync apps/public-web/dist     "s3://<PublicSiteBucket>/signup"  --delete
+> ```
+>
+> Only subscriber-web has actually been published; the second line is written
+> from the config rather than from a run.
 
 The public site also ships `apps/public-web/public/embed.js` — a self-contained
 widget operators paste into any page:
 
 ```html
 <div data-addressium data-org="YOUR_ORG_ID" data-list="YOUR_LIST_ID"></div>
-<script async src="https://your-public-site/embed.js"></script>
+<script async src="https://your-public-site/signup/embed.js"></script>
 ```
+
+The `/signup/` prefix is `public-web`'s Vite `base` (above), not decoration —
+the widget is served from the same prefix as the rest of that app.
 
 ## 6. Sign in and provision your first organization
 
 1. Open the admin console and sign in with a seeded `adminEmails` address (set a
-   password from the Cognito invite; enable TOTP MFA).
+   password from the Cognito invite; enable TOTP MFA). The sign-in URL is the
+   Hosted-UI domain with the stage suffix — see §4, because the un-suffixed name
+   is the single most likely thing to stop you here. If the invite never arrives
+   and you left `adminFromEmail` empty, there is no bounce, log or metric to
+   consult; that is the default sender's defining property (§3).
 2. **Create the organization** from the console's **Add organization** screen
    (#226), which calls the authenticated `POST /orgs`. This runs
    `services/provisioning`, which creates the org's **SES identity and
@@ -260,6 +466,22 @@ widget operators paste into any page:
    on — at runtime (nothing per-org lives in CloudFormation).
 3. Add the org's sending domain and publish the **DKIM/SPF/DMARC** DNS records the
    provisioning step returns. Wait for SES verification to go green.
+
+> **Get the sending domain right the first time — it cannot be edited.** There is
+> **no update-org route** in the API and no edit screen in the console, and
+> `services/provisioning` returns early on `alreadyExisted`, so re-submitting the
+> same org with a corrected domain does nothing and reports success. A typo means
+> creating a **new organization under a different name**, because the org id is
+> slugified from the name and is therefore not free to change either. Read the
+> domain back before you submit.
+>
+> This is deliberate, not a gap waiting on an edit button. The org id is stamped
+> into the SES identity, the configuration set, the MAIL FROM subdomain, the DKIM
+> records you publish in DNS, and every confirm and unsubscribe link already
+> delivered to an inbox. Making it mutable would mean re-verifying SES, reissuing
+> DKIM, and silently invalidating links that are, in the case of unsubscribe, a
+> legal obligation to honour. An org is an identity, and identities are cheap to
+> create and expensive to rewrite — so it is configured once, correctly.
 4. Create lists, and you're ready to collect signups (double opt-in) and send.
 5. Optionally save reusable message templates under **Templates** — paste **raw
    HTML** (hard-sanitized on save), write **MJML** source, or use the **visual
@@ -271,7 +493,14 @@ widget operators paste into any page:
    appears under **Schedules**, where you can start, pause or archive it — sends
    are never deleted.
 
-> **The subscriber Cognito pool.** `POST /orgs` requires a `subscriberPool` of
+> **The subscriber Cognito pool — needed only with magic links on.** This is the
+> step most likely to stop a first deploy for no reason, so the condition first:
+> with the magic-link checkbox **off**, no pool is required and none is asked
+> for. addressium never contacts Cognito and sends plain email. Earlier wording
+> here read as though a pool were always a prerequisite; it is not, and you do
+> not need to stand one up to add your first organization.
+>
+> With magic links **on**, `POST /orgs` takes a `subscriberPool` of
 > `{"poolId":"..."}` for a pool **you already own**, and stamps it on the org as
 > an optional `subscriberPoolId`. There is no create mode: a pool has too many
 > consequential settings for this application to choose on your behalf, and the
@@ -564,10 +793,22 @@ doing anything.
 
 ## 11. The first live deployment
 
-This is the 1.0 gate, and it has not been done. Nothing in this repository has
-ever run in an AWS account, which is why the README's Status section leads with
-it. Everything below is the operator's part; the code side — the smoke suite,
-the deploy guard, the scoped policy — is written and waiting.
+The stack has now been deployed once, to a disposable dev account (#212) — but
+the 1.0 gate is `npm run test:e2e` **passing**, and that suite has still never
+been run. So this section is half-earned: the deploy steps below have been walked
+and their corrections are folded into §1–§6, while everything from "The run"
+onward remains written rather than observed. Everything below is the operator's
+part; the code side — the smoke suite, the deploy guard, the scoped policy — is
+written and waiting.
+
+> **What that first run cost, so you can budget for the second.** Ten bugs, none
+> visible to `npm test` or `cdk synth`, because they fail only against real AWS
+> APIs. Two classes are worth expecting again: **IAM boundary gaps**, which
+> surface as a deploy denied partway through, and **bundling failures**, which
+> are worse — the stack reaches `CREATE_COMPLETE` while every handler is dead on
+> arrival. Both are fixed, but the lesson generalizes: after a successful deploy,
+> **invoke the functions**. `CREATE_COMPLETE` is not evidence that any code runs.
+> `GET /version` returning 200 is a cheap first check and catches exactly this.
 
 ### Use a dedicated, disposable account
 
@@ -588,6 +829,14 @@ A budget alarm you set after the surprise is a receipt, not a control.
    `npm run test:e2e` calls `GetAccount` and **aborts** if production access is
    enabled, because application-level care is no substitute for the provider
    refusing.
+
+   **This cuts both ways, and §1 does not warn you about it.** §1 tells you to
+   request production access when you are ready to send to unverified
+   recipients — do that, and the smoke suite will refuse to run on that account
+   from then on. There is no override flag. If you want both, they have to be
+   two accounts: the smoke suite belongs on a sandboxed throwaway, and the
+   account you actually send from is a different one that has left the sandbox
+   and will never run `test:e2e` again.
 2. **The dev-org allowlist.** Create the test org `environment: "dev"` with
    `devAllowlist` containing only your verified address. `recipientAllowedForDev`
    is fail-closed: a dev org with an empty allowlist sends to nobody.
@@ -631,7 +880,7 @@ every record with a "why" note for this reason.
 ### The run
 
 ```bash
-npm run deploy        # deploy:check runs first and cannot be skipped
+npm run deploy        # deploy:check runs first — an && chain, not a hook
 npm run test:e2e      # the ten steps
 npm run teardown:aws  # NOT `cdk destroy` — see below
 ```

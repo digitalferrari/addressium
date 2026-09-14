@@ -285,11 +285,21 @@ was never written down, which left the code looking like an oversight. See item
 
 ## 9. What is not yet proven
 
-- **Nothing has ever been deployed.** No AWS account has run this.
-- The event plane was dead at three layers until this week; verified in the
-  synthesized template, never against real SES traffic.
-- `deploy-check.sh` is fixture-validated, never run against real CloudFormation.
+- **Deployed once, to a dev account** (#212) — never to production, and no
+  campaign has been sent. It surfaced ten defects that neither `npm test` nor
+  `cdk synth` could see, two of which left every handler unloadable in a stack
+  reporting `CREATE_COMPLETE`.
+- The event plane was dead at three layers, and a fourth appeared live: the CMK
+  policy granted SES nothing, so publishing to the encrypted SES events topic
+  needed a second grant (`kms:GenerateDataKey*` + `kms:Decrypt`) alongside the
+  `sns:Publish` of #208. Still never exercised by real SES traffic.
+- `deploy-check.sh` has now seen one live change set, on a create — the
+  replacement branch it exists for remains fixture-only. Before that deploy it
+  had never run at all, having hung off an npm `predeploy` hook that
+  `ignore-scripts=true` silently suppresses.
 - The version marker is readable but nothing writes it on deploy yet.
+- **Custom domains are unimplemented** — zero Route 53 and zero ACM resources;
+  the deployment addresses itself by CloudFront and API Gateway hostnames.
 - GDPR erasure's lake story is tombstone + anti-join + lifecycle expiry (#199):
   the pseudonymous rows physically remain until the bucket lifecycle drops
   them — disclosed in SECURITY §4.7 as the honest limit.

@@ -422,6 +422,21 @@ because new links verify, while silently orphaning every token ever issued.
   needs a key policy admitting the SNS service principal — a second failure mode
   (silently undelivered notifications) in exchange for control over ciphertexts
   that live at most 14 days. The durable store is the table, and that has the CMK.
+
+  **The same hazard one hop earlier, which was missed:** publishing to an
+  **encrypted** topic takes **two** grants, not one. #208 granted SES
+  `sns:Publish` on `SesEventsTopic`, but nothing granted SES use of the CMK that
+  encrypts it, so every publish failed at the encryption step. The key policy's
+  only statement was the account root. SES needs
+  **`kms:GenerateDataKey*` and `kms:Decrypt`** on the CMK as well.
+
+  This is not an edge case, and its symptom is misleading in a costly way. The
+  configuration-set event destination is created during **org provisioning**, so
+  **the first organization anyone adds fails** — `POST /orgs` returns 500 — and
+  the error names *SNS and a KMS key* rather than the organization being created.
+  An operator reads it as an infrastructure problem unrelated to the form they
+  just submitted. If you add a principal that publishes to either topic, grant it
+  on the key at the same time.
 - **Claim minimization** in tokens; **token redaction** from the event pipeline
   and logs (no bearer tokens at rest).
 - **Consent provenance**, configurable retention, and **GDPR/CCPA** export +
@@ -569,6 +584,14 @@ Both SPA distributions carry a CloudFront `ResponseHeadersPolicy`
 | `x-content-type-options` | `nosniff` | A user-uploaded asset must not be sniffed into a script |
 | `referrer-policy` | `strict-origin-when-cross-origin` | An OAuth callback or magic-link URL must never leave in a `Referer` |
 | `permissions-policy` | camera/mic/geolocation/etc. all `()` | Neither app uses them |
+
+> **The CSP must be set through `securityHeadersBehavior.contentSecurityPolicy`,
+> never as a `customHeaders` entry.** CloudFront classifies
+> `content-security-policy` as a security header and **rejects** a custom-header
+> entry for it with a 400 at deploy time. The two are not interchangeable, and a
+> source comment here once claimed they were. This costs more than a typo would:
+> it synthesizes clean and passes every template assertion, so the failure lands
+> mid-deploy — on the first real deploy it rolled back 77 resources.
 
 **Why the CSP is shaped the way it is.** The console renders operator-authored
 HTML in the GrapesJS editor and in a `srcdoc` preview iframe, which inherits the

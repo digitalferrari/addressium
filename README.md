@@ -15,8 +15,10 @@ the same owner.
 > with sample data.
 
 > ### ⚠️ Status: pre-1.0, not production-ready
-> This has **never been deployed to a real AWS account**. See
-> [Status](#status) before putting a real list near it.
+> This has now been **deployed once, to a disposable dev account** (#212). It
+> stands up, all 29 handlers load, and an organization provisions. It has not
+> sent a campaign, `npm run test:e2e` has still never been run, and no install
+> has run for a day. See [Status](#status) before putting a real list near it.
 
 ---
 
@@ -114,9 +116,9 @@ the build if one reappears.
                         (SES event dest) └───────────────┘
 ```
 
-**21 Lambda functions, 252 CloudFormation resources** — the default `dev` synth;
-`prod` is 20 and 248, because non-prod adds a bucket auto-delete custom resource.
-One function serves 27 of the 33 authenticated routes; the unauthenticated
+**29 Lambda functions, 357 CloudFormation resources** — the default `dev` synth
+(`docs/DEPLOYMENT.md` §3), and the 29 is the figure the first real deployment
+invoked one by one. One function serves 54 admin routes; the unauthenticated
 functions stay separate because they hold genuinely different privileges —
 merging them would give one internet-facing function the union of "can create
 Cognito users", "can send mail", and "holds the webhook signing secret".
@@ -177,7 +179,7 @@ have to be handed to a pipeline, a teammate, or an agent.
 ```bash
 npm install
 npm run build
-npm run deploy          # deploy:check runs first and cannot be skipped
+npm run deploy          # deploy:check runs first — an && chain, not a hook
 ```
 
 Details: [`scripts/README.md`](scripts/README.md) ·
@@ -210,11 +212,13 @@ because nearly everything that has broken in this repo was *configuration* no
 test could see (a missing event destination, an unverified identity, an absent
 MX record).
 
-Why not now: the argument for building a migration framework early is that
-shapes accumulate in the wild. **Nothing has ever been deployed**, so there are
-zero installs and zero shapes — which makes right after the first real
-deployment (#212) the moment this is worth most, not before it. Building an
-upgrade path for installs that do not exist would be designing against guesses.
+Why not before now: the argument for building a migration framework early is
+that shapes accumulate in the wild, and building an upgrade path for installs
+that do not exist is designing against guesses. There were zero installs and
+zero shapes, which made right after the first real deployment (#212) the moment
+this is worth most. **That deployment has now happened**, so this is the point
+the argument was deferring to — the reason it is still unbuilt is sequencing,
+not the original objection.
 Explicitly rejected either way: Terraform (a second IaC tool and a state
 distribution problem, for no gain over CDK), SAM (overlaps CDK), and storing
 deploy credentials in Secrets Manager (circular — reading it needs credentials).
@@ -326,7 +330,8 @@ npm test          # 724 tests: in-memory + real DynamoDB API via dynalite
                   # 720 pass; 4 skip without LocalStack
 npm run test:web  # component tests for the three SPAs
 npm run dev       # the API on :4000 over dynalite — no AWS, no credentials
-npm run test:e2e  # the live smoke suite (needs a real account — never yet run)
+npm run test:e2e  # the live smoke suite (needs a real account — never yet run;
+                  #   it ABORTS if the account has SES production access)
 ```
 
 Integration tests run the full journey — signup → double opt-in → send →
@@ -358,10 +363,18 @@ call.
 
 **Honest state, because a README that reads "done" is worse than useless:**
 
-- **Nothing has ever been deployed.** No AWS account has run this, and that is
-  the single largest thing not known about this codebase. A large class of
-  defects here were invisible to `npm test` — the SES event plane was dead at
-  three independent layers and every unit test passed.
+- **It has been deployed once, to a dev account** (#212) — not to production,
+  and not for longer than the session that deployed it. That first deploy is
+  worth reading as evidence of exactly one thing: the stack stands up, its 29
+  handlers load, and `POST /orgs` provisions a real SES identity. It surfaced
+  **ten bugs that neither `npm test` nor `cdk synth` could see**, because they
+  fail only against real AWS APIs. Two of them produced a stack reporting
+  CREATE_COMPLETE with every handler dead on arrival — the ESM bundling pair in
+  commit `401b64f`. Assume the same class of defect still hides behind every
+  step this deployment did not reach.
+- **What that deployment did *not* do:** send a campaign, receive a real bounce,
+  serve a mailbox provider's one-click POST, or run `npm run test:e2e`. The SES
+  identity it created is still DKIM-pending.
 - What `npm test` *can* now see is much wider than it was: `npm run dev` runs the
   full public journey — signup → confirmation mail → confirm → send → one-click
   unsubscribe — against the **real** SES/SQS/Scheduler adapters, over local
@@ -371,15 +384,38 @@ call.
   the one-click POST, a real Cognito JWT, EventBridge firing on consecutive days,
   real bounces tripping the halt gate. `npm run test:e2e` is written for exactly
   those and **has never been run**.
-- `deploy:check` gates every deploy and now fails **closed** on a change-set
-  shape it cannot interpret — but it has still never seen a real
-  `describe-change-set` payload, so the first symptom of a shape mismatch will be
-  "every deploy is blocked", not a silent miss.
+- `deploy:check` gates every deploy, fails **closed** on a change-set shape it
+  cannot interpret, and has now run against real CloudFormation — on a create,
+  where a change set has no data-holding resource to replace. The replacement
+  path it exists for is still fixture-only. It had also **never once run** before
+  that deploy: it was wired as an npm `predeploy` hook, which does not fire under
+  `ignore-scripts=true`, and npm reports nothing when it skips one. It is an `&&`
+  chain in the `deploy` script now, which no config can disable.
 - The version marker is readable, but nothing writes it on deploy yet, so
   `GET /version` cannot tell you whether you are running the build you deployed.
 - There is **no upgrade path**. An install is pinned to whatever commit was
   cloned, and there is no channel to tell anyone a fix exists. Designed, not
-  built — see Upgrades above for why that waits for a first real install.
+  built — see Upgrades above; the first real install it was waiting on now
+  exists, so the deferral has run out of reason rather than been re-argued.
+- **Custom domains are not implemented.** There is not one Route 53 or ACM
+  resource anywhere in the stack. Every URL it emits is a `*.cloudfront.net` or
+  `*.execute-api.<region>.amazonaws.com` name, and those are what go into the
+  Cognito callback, the API CORS allow-list, and every link in outgoing mail.
+  `ControlPlaneStackProps` accepts `adminAppUrl` / `publicAppUrl`, but
+  `BootstrapConfig` has no such fields and nothing passes them — dead code, not
+  a switch to flip. Doing this properly means a hosted zone, a us-east-1
+  certificate for CloudFront, and a redeploy of both SPAs.
+- **`apps/subscriber-web` and `apps/public-web` share one bucket**, kept apart
+  only by a Vite `base`: subscriber-web owns `/` because outgoing mail links at
+  `/confirm` and `/unsubscribe` resolve there, and public-web lives under
+  `/signup/` with its `embed.js`. Delete that `base` and both build to `/`, where
+  whichever syncs last silently overwrites the other's `index.html`. Publishing
+  is manual `aws s3 sync` — there is no npm script for it. See
+  [`docs/DEPLOYMENT.md` §5](docs/DEPLOYMENT.md).
+- **A sending domain cannot be corrected after the fact.** There is no
+  update-org route in the API or the console, and provisioning returns early on
+  `alreadyExisted`, so a typo means creating a new org under a different name —
+  the org id is slugified from the name.
 - **Bulk export returns inline rather than streaming to S3.** Fine for an
   ordinary list; an org large enough to exceed a Lambda response is exactly the
   org most likely to be migrating.
@@ -394,11 +430,13 @@ call.
   moded, and nothing has ever written an object to it.
 
 **1.0 is gated on** `npm run test:e2e` passing against a real AWS account and one
-install running for 30 days. That gate is the whole of it — everything else on
-this list is either done or deliberately deferred, and the first live deployment
-is what turns the rest of this README from "asserted" into "observed".
+install running for 30 days. Neither has happened; deploying is a third,
+separate thing and it is the only one of the three that is done. What that first
+deployment bought is narrower than "proven" and wider than nothing: the claims in
+this README about **standing the stack up** moved from asserted to observed, and
+the claims about **sending mail** did not move at all.
 
-The runbook for that first deployment is in
+The runbook, now amended by what that deployment actually hit, is in
 [`docs/DEPLOYMENT.md` §11](docs/DEPLOYMENT.md).
 
 Do not migrate a real list onto this yet. A mail system that has never sent an
