@@ -25,6 +25,7 @@ import {
   Mfa,
   UserPool,
   UserPoolClient,
+  UserPoolEmail,
   CfnUserPoolUser,
   StringAttribute,
   OAuthScope,
@@ -141,6 +142,13 @@ export interface ControlPlaneStackProps extends StackProps {
   opsAlertTopicArn?: string;
   /** Create a topic and subscribe this address. Ignored when the ARN is set. */
   opsAlertEmail?: string;
+  /**
+   * FROM address for admin invites and password resets, sent through SES.
+   * Its domain must already be a VERIFIED SES identity. Absent means Cognito's
+   * own sender — see `adminFromEmail` in bin/addressium.ts for why that default
+   * is a poor one for the emails that gate console access.
+   */
+  adminFromEmail?: string;
   /**
    * A REGIONAL WebACL the operator owns, associated with the HTTP API stage
    * (#225). Absent means no association — the stack never creates one.
@@ -568,6 +576,31 @@ export class ControlPlaneStack extends Stack {
       // Operator identities + MFA enrollments. Losing these locks every admin out
       // of the console, so retain in every stage (#190).
       removalPolicy: RemovalPolicy.RETAIN,
+      // Send operator invites and password resets through SES when the operator
+      // names a FROM address, and fall back to Cognito's own sender when they do
+      // not — the pool has to stand up on a fresh account where no identity is
+      // verified yet, and that bootstrapping order is why this is optional
+      // rather than required.
+      //
+      // Worth configuring, though: the Cognito default caps at 50 emails/day
+      // ACCOUNT-WIDE, sends from a shared amazonses.com address whose reputation
+      // is not yours, and emits no bounce, metric or log of any kind. The first
+      // invite on this stack simply never arrived, and nothing anywhere could
+      // say whether it had been delivered, filtered or dropped. SES gives the
+      // per-identity reputation this project already tracks for subscriber mail.
+      //
+      // sesVerifiedDomain is deliberately NOT set: Cognito derives the identity
+      // from the address, and naming a domain that is verified in a different
+      // region or not at all fails the stack update rather than the send.
+      ...(props.adminFromEmail?.trim()
+        ? {
+            email: UserPoolEmail.withSES({
+              fromEmail: props.adminFromEmail.trim(),
+              fromName: "addressium",
+              sesRegion: Stack.of(this).region,
+            }),
+          }
+        : {}),
     });
     const adminHostedUi = adminPool.addDomain("AdminHostedUi", {
       cognitoDomain: { domainPrefix: `${props.adminHostedUiDomainPrefix}-${props.stage}` },

@@ -10,6 +10,9 @@
   "opsAlertTopicArn": "",
   "opsAlertEmail": "",
 
+  "$comment_admin_email": "FROM address for admin invites and password resets. Its domain must ALREADY be a verified SES identity in this region or the deploy fails — so leave it empty on a first deploy, verify a domain, then set it and deploy again. Empty means Cognito's own sender, which is capped at 50 emails/day account-wide, sends from a shared amazonses.com address, and reports nothing about delivery: a console invite that never arrives looks identical to one that was never sent.",
+  "adminFromEmail": "",
+
   "$comment_waf": "addressium does NOT create WAF WebACLs — a resource carries only one, so ours would displace yours and silently reattach on every deploy. Create your own (REGIONAL for the API, CLOUDFRONT-scope in us-east-1 for the SPAs), attach them to the ApiStageArn / AdminDistributionId / PublicDistributionId stack outputs, and record the ARNs here. `npm run deploy:check` warns when these are unset.",
   "apiWebAclArn": "",
   "cloudfrontWebAclArn": ""

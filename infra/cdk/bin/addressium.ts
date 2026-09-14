@@ -33,6 +33,19 @@ interface BootstrapConfig {
    * address. Ignored when `opsAlertTopicArn` is set.
    */
   opsAlertEmail?: string;
+  /**
+   * Address Cognito sends operator invites and password resets FROM, e.g.
+   * "addressium@mail.example.com". Its domain (or the address itself) must be a
+   * VERIFIED SES identity in this account before you deploy — Cognito checks at
+   * stack-update time and fails the deploy otherwise.
+   *
+   * Leave unset and Cognito uses its own sender. That default is capped at 50
+   * emails/day account-wide, sends from a shared amazonses.com address with poor
+   * reputation, and reports NOTHING about delivery — no bounces, no metrics, no
+   * logs. An invite that never arrives is indistinguishable from one that was
+   * never sent, which is a bad property for the emails that gate console access.
+   */
+  adminFromEmail?: string;
   /** A REGIONAL WebACL you own, associated with the API stage (#225). */
   apiWebAclArn?: string;
   /** A CLOUDFRONT-scope WebACL (us-east-1) for both SPA distributions. */
@@ -70,6 +83,7 @@ function loadConfig(): BootstrapConfig {
     adminHostedUiDomainPrefix: cfg.adminHostedUiDomainPrefix ?? "addressium-admin",
     opsAlertTopicArn: cfg.opsAlertTopicArn,
     opsAlertEmail: cfg.opsAlertEmail,
+    adminFromEmail: cfg.adminFromEmail,
     apiWebAclArn: cfg.apiWebAclArn,
     cloudfrontWebAclArn: cfg.cloudfrontWebAclArn,
   };
@@ -118,6 +132,7 @@ new ControlPlaneStack(app, `addressium-${config.stage}`, {
   adminHostedUiDomainPrefix: config.adminHostedUiDomainPrefix,
   opsAlertTopicArn: config.opsAlertTopicArn,
   opsAlertEmail: config.opsAlertEmail,
+  adminFromEmail: config.adminFromEmail,
   apiWebAclArn: config.apiWebAclArn,
   cloudfrontWebAclArn: config.cloudfrontWebAclArn,
   env: {
