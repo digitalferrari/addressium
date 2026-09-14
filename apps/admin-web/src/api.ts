@@ -480,8 +480,17 @@ export interface CreateOrgResult {
   dns: { type: string; name: string; value: string; note?: string }[];
 }
 
+/** One row in the org switcher. Deliberately small — see orgsListHandler. */
+export interface OrgSummary {
+  orgId: string;
+  name: string;
+  environment: string;
+  setupComplete: boolean;
+}
+
 export const api = {
   createOrg: (input: CreateOrgInput) => call<CreateOrgResult>("POST", `/orgs`, input),
+  listOrgs: () => call<{ orgs: OrgSummary[] }>("GET", `/orgs`),
   health: (org: string) => call<HealthReport>("GET", `/orgs/${org}/health`),
   team: (org: string) => call<TeamMemberRow[]>("GET", `/orgs/${org}/team`),
   inviteMember: (orgId: string, email: string, role: string, orgs: string[]) =>

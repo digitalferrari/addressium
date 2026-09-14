@@ -62,10 +62,30 @@ function Console() {
     return t ? decodeClaims(t.idToken) : {};
   }, []);
   const grant: Grant | null = useMemo(() => grantFromClaims(claims), [claims]);
-  const orgs = useMemo(() => {
+  // Seeded from the claim so the switcher is populated on first paint, then
+  // replaced by GET /orgs. The claim alone is not enough: "*" means "every org",
+  // which it cannot enumerate — so a developer_admin, the one person entitled to
+  // see every organization, fell through to a free-text box and had to type an
+  // org id from memory to make the console do anything at all.
+  const claimOrgs = useMemo(() => {
     const raw = (claims["custom:orgs"] ?? "").trim();
     return raw === "*" ? [] : raw.split(",").map((o) => o.trim()).filter(Boolean);
   }, [claims]);
+  const [orgs, setOrgs] = useState<string[]>(claimOrgs);
+  useEffect(() => {
+    let cancelled = false;
+    void api
+      .listOrgs()
+      .then((r) => {
+        if (!cancelled) setOrgs(r.orgs.map((o) => o.orgId));
+      })
+      // A failure here leaves whatever the claim gave us. The switcher degrades
+      // to the old behaviour rather than emptying itself under the user.
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const [org, setOrg] = useState(orgs[0] ?? "");
   const [view, setView] = useState<View>("dashboard");

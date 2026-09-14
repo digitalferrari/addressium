@@ -737,6 +737,46 @@ export async function orgMetaHandler(event: HttpEvent): Promise<HttpResult> {
 }
 
 /**
+ * GET /orgs — the organizations this caller may act on, for the console's org
+ * switcher (#6 design reference).
+ *
+ * Scoped by the caller's own grant rather than by a separate capability. The
+ * console cannot offer a switcher without knowing what to switch between, and
+ * the alternative — gating on `identity:manage` like POST /orgs — would mean an
+ * admin scoped to one organization could not populate a list containing only
+ * that organization. `custom:orgs` already answers "which orgs is this person
+ * for", so it answers this too: "*" sees every org, a scoped grant sees its own,
+ * and an empty claim sees none (grantFromClaims denies by default).
+ *
+ * `reports:view` is the capability because this returns only what the console
+ * header already shows for a single org. No SES identity, no domains, no
+ * configuration — a name, an id, and whether setup is finished.
+ */
+export async function orgsListHandler(event: HttpEvent): Promise<HttpResult> {
+  try {
+    const claims = event.requestContext?.authorizer?.jwt?.claims ?? {};
+    const grant = grantFromClaims(claims);
+    const all = await stores().organizations.list();
+    // Filter to the grant BEFORE returning, not in the console: a client-side
+    // filter still ships every org name over the wire.
+    const visible =
+      grant.orgs === "*" ? all : all.filter((o) => (grant.orgs as string[]).includes(o.orgId));
+    return json(200, {
+      orgs: visible
+        .map((o) => ({
+          orgId: o.orgId,
+          name: o.name,
+          environment: o.environment ?? "prod",
+          setupComplete: o.setupComplete ?? false,
+        }))
+        .sort((a, b) => a.name.localeCompare(b.name)),
+    });
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+/**
  * GET /version — what is actually deployed.
  *
  * Public and unauthenticated by design: it reports only the release and schema
@@ -2155,6 +2195,7 @@ export async function preferencesHandler(event: HttpEvent): Promise<HttpResult> 
 }
 
 const ADMIN_ROUTES: Record<string, RouteHandler> = {
+  "GET /orgs": orgsListHandler,
   "GET /orgs/{org}": orgMetaHandler,
   "GET /orgs/{org}/setup": setupStateHandler,
   "GET /orgs/{org}/lists": listsHandler,

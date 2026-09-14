@@ -1645,6 +1645,10 @@ export class ControlPlaneStack extends Stack {
       integration: new HttpLambdaIntegration("TokensInt", tokensFn),
     });
 
+    // GET /orgs is the console's org switcher; POST /orgs (registered above with
+    // its own integration) creates one. Same path, different capability: listing
+    // is scoped by the caller's own grant, creating requires identity:manage.
+    adminRoute("OrgsListFn", "orgsListHandler", HttpMethod.GET, "/orgs");
     adminRoute("OrgMetaFn", "orgMetaHandler", HttpMethod.GET, "/orgs/{org}");
     adminRoute("SetupStateFn", "setupStateHandler", HttpMethod.GET, "/orgs/{org}/setup");
     adminRoute("ListsGetFn", "listsHandler", HttpMethod.GET, "/orgs/{org}/lists");
