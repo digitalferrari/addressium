@@ -115,8 +115,82 @@ Resources:
               - wafv2:*
               - cloudfront:*
               - xray:*
+              # NOT conditioned on iam:PermissionsBoundary — PassRole does not
+              # support that key (it is not an API operation; it lives in the
+              # Service Authorization Reference's separate table). A condition
+              # here would never match and would silently deny every PassRole.
+              # services/schedule passes SchedulerRole at RUNTIME, so this is
+              # load-bearing for the app, not just for deploys.
               - iam:PassRole
+              # CloudFormation resolves the BootstrapVersion parameter — typed
+              # AWS::SSM::Parameter::Value<String> — before it touches any
+              # resource, using the BATCH api. GetParameters, plural: the
+              # singular GetParameter is a different action and does not cover
+              # it. Scoped to the one parameter cdk bootstrap writes.
+              - ssm:GetParameters
+              - events:*
             Resource: "*"
+          # A boundary is an INTERSECTION: an action needs an Allow here as well
+          # as in the identity policy. DeployPolicy grants sts:AssumeRole on the
+          # four CDK roles, but without this statement the boundary caps it away
+          # and the deploy identity cannot assume anything — which makes it
+          # unusable for its only purpose. Enumerated rather than wildcarded, and
+          # deliberately NOT including cdk-*-cfn-exec-role: that one holds
+          # AdministratorAccess and is assumed by CloudFormation alone, never by
+          # a human or an agent. Keep this list identical to AssumeCdkRolesOnly
+          # in DeployPolicy below.
+          - Sid: AssumeCdkRolesOnly
+            Effect: Allow
+            Action: sts:AssumeRole
+            Resource:
+              - !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/cdk-${CdkQualifier}-deploy-role-${AWS::AccountId}-${AWS::Region}"
+              - !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/cdk-${CdkQualifier}-file-publishing-role-${AWS::AccountId}-${AWS::Region}"
+              - !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/cdk-${CdkQualifier}-image-publishing-role-${AWS::AccountId}-${AWS::Region}"
+              - !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/cdk-${CdkQualifier}-lookup-role-${AWS::AccountId}-${AWS::Region}"
+          # The app is 29 Lambdas, and CDK gives each its own execution role +
+          # inline policy — 31 roles, 30 policies. CloudFormation cannot create
+          # any of them unless the boundary allows it, so a boundary with only
+          # iam:PassRole makes the stack undeployable.
+          #
+          # Granting CreateRole is exactly the privilege escalation this policy
+          # exists to prevent, so it is granted ONLY when the new role carries
+          # this same boundary. A role created through here is capped by the
+          # policy you are reading: the deployer cannot mint itself something
+          # stronger than itself. Omitting the condition — or using
+          # ...IfExists — would let CloudFormation create an UNCAPPED role and
+          # hand the whole boundary back.
+          - Sid: CreateRolesOnlyInsideThisBoundary
+            Effect: Allow
+            Action:
+              - iam:CreateRole
+              - iam:AttachRolePolicy
+              - iam:DetachRolePolicy
+              - iam:PutRolePolicy
+              - iam:DeleteRolePolicy
+              - iam:DeleteRole
+              - iam:UpdateAssumeRolePolicy
+              - iam:UpdateRole
+              - iam:UpdateRoleDescription
+            Resource: !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/*"
+            Condition:
+              StringEquals:
+                iam:PermissionsBoundary: !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/addressium-${Stage}-boundary"
+          # Reads and tagging. Split out because these do NOT all support the
+          # iam:PermissionsBoundary condition key — TagRole and ListRoleTags do
+          # not, and a condition on a key an action does not support never
+          # matches, which reads as a deny. Harmless to leave unconditioned:
+          # none of them grant anything.
+          - Sid: ReadAndTagRoles
+            Effect: Allow
+            Action:
+              - iam:GetRole
+              - iam:GetRolePolicy
+              - iam:ListRolePolicies
+              - iam:ListAttachedRolePolicies
+              - iam:ListRoleTags
+              - iam:TagRole
+              - iam:UntagRole
+            Resource: !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/*"
           - Sid: NoPrivilegeEscalation
             Effect: Deny
             Action:
@@ -124,13 +198,62 @@ Resources:
               - iam:CreateAccessKey
               - iam:AttachUserPolicy
               - iam:PutUserPolicy
-              - iam:UpdateAssumeRolePolicy
-              - iam:DeleteRolePermissionsBoundary
-              - iam:PutRolePermissionsBoundary
+              # iam:UpdateAssumeRolePolicy, iam:PutRolePermissionsBoundary and
+              # iam:DeleteRolePermissionsBoundary were denied here. All three
+              # have moved: the first into the conditioned Allow above, the
+              # boundary pair into NoBoundaryEscape below.
+              #
+              # Denying the boundary pair outright looked like the safe choice
+              # and was not. It never blocked what it appeared to: a boundary is
+              # attached as a PARAMETER of iam:CreateRole, so creation was never
+              # gated on PutRolePermissionsBoundary in the first place. What the
+              # Deny did block was the CloudFormation UPDATE handler, which
+              # calls both — including when REVERSING a failed update. An
+              # explicit Deny there strands the stack in UPDATE_ROLLBACK_FAILED,
+              # which needs console surgery to escape.
               - organizations:*
               - account:*
               - aws-portal:*
             Resource: "*"
+          # Where the boundary pair actually belongs. Allowed only when the
+          # boundary being set is THIS one, so CloudFormation can write and
+          # rewrite it during updates and rollbacks, but cannot swap a role onto
+          # a weaker boundary. Removal is denied unconditionally — Delete* takes
+          # no boundary to condition on, so there is no safe form of it.
+          - Sid: NoBoundaryEscape
+            Effect: Allow
+            Action: iam:PutRolePermissionsBoundary
+            Resource: !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/*"
+            Condition:
+              StringEquals:
+                iam:PermissionsBoundary: !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/addressium-${Stage}-boundary"
+          # Flat Deny, matching AWS's own NoBoundaryDelete example, because
+          # DeleteRolePermissionsBoundary carries no boundary ARN in the
+          # request — there is nothing to write a condition against, so it is
+          # either denied outright or it is an open escalation path.
+          #
+          # The cost, accepted deliberately: CloudFormation calls this on the
+          # update path, so a template change that REMOVES PermissionsBoundary
+          # from a role will fail, and can fail a rollback. That is the intended
+          # behaviour — the boundary is applied uniformly by the app-level
+          # context in bin/addressium.ts and no role should ever shed it. If you
+          # are ever genuinely retiring this boundary, delete the whole stack
+          # rather than trying to detach it role by role.
+          - Sid: NoDetachingTheBoundary
+            Effect: Deny
+            Action: iam:DeleteRolePermissionsBoundary
+            Resource: "*"
+          # The boundary is only as strong as its own document. Without this,
+          # a deployed role could publish a new version of this policy saying
+          # "Allow *" and promote it — escaping without ever detaching anything.
+          - Sid: NoRewritingThisBoundary
+            Effect: Deny
+            Action:
+              - iam:CreatePolicyVersion
+              - iam:DeletePolicyVersion
+              - iam:SetDefaultPolicyVersion
+              - iam:DeletePolicy
+            Resource: !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/addressium-${Stage}-boundary"
 
   # --------------------------------------------------------------------------
   # Deploy identity.
@@ -157,8 +280,15 @@ Resources:
               - !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/cdk-${CdkQualifier}-image-publishing-role-${AWS::AccountId}-${AWS::Region}"
               - !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/cdk-${CdkQualifier}-lookup-role-${AWS::AccountId}-${AWS::Region}"
           - Sid: ReadBootstrapVersion
+            # BOTH spellings. The CLI reads this parameter directly
+            # (GetParameter), while CloudFormation resolves the stack's
+            # BootstrapVersion parameter through the batch API (GetParameters).
+            # They are separate IAM actions and granting only the singular
+            # leaves the deploy failing at change-set creation.
             Effect: Allow
-            Action: ssm:GetParameter
+            Action:
+              - ssm:GetParameter
+              - ssm:GetParameters
             Resource: !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/cdk-bootstrap/${CdkQualifier}/version"
           - Sid: ObserveOwnDeployments
             Effect: Allow

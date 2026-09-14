@@ -154,10 +154,10 @@ Deploy from the **repo root**, not from `infra/cdk`:
 npm run deploy         # deploy:check runs first and cannot be skipped
 ```
 
-`deploy` is wired to a `predeploy` hook, so `scripts/deploy-check.sh` always runs
-first. It creates a CloudFormation **change set without executing it**, inspects
-it, and exits non-zero — aborting the deploy — if any data-holding resource would
-be **replaced or removed**:
+`deploy` invokes `deploy:check` directly (`deploy:check && cdk deploy`), so
+`scripts/deploy-check.sh` always runs first. It creates a CloudFormation **change
+set without executing it**, inspects it, and exits non-zero — aborting the deploy
+— if any data-holding resource would be **replaced or removed**:
 
 ```
 ✗ REFUSING: this change would destroy or replace data-holding resources
@@ -169,8 +169,21 @@ be **replaced or removed**:
 resource *replacement*. Change a partition key and CloudFormation creates a new,
 empty table and orphans the old one — nothing is "deleted", RETAIN is satisfied,
 and every subscriber vanishes from the application's view. Only a pre-flight
-change-set inspection catches that. `cd infra/cdk && npm run deploy` bypasses the
-hook; don't.
+change-set inspection catches that. `cd infra/cdk && npm run deploy` calls `cdk`
+directly and runs no checks at all; don't.
+
+> This was previously an npm `predeploy` lifecycle hook, and it never ran for
+> anyone with `ignore-scripts=true` in their npm config — a common hardening
+> setting, and the default under some CI runners and package managers. npm
+> reports nothing when it skips a lifecycle hook, so the deploy looked clean
+> while the guard was silently absent. A `&&` chain in the script body cannot be
+> disabled by configuration. Don't move it back into a hook.
+
+It also refuses to deploy if any IAM role synthesizes **without the permissions
+boundary** (§11). That is not a style check: the bootstrap boundary grants
+`iam:CreateRole` only when the new role carries the boundary, so an unbounded
+role means CloudFormation is denied partway through and leaves a stack to roll
+back.
 
 > `deploy:check` is validated against change-set fixtures, **never against real
 > CloudFormation**. It is the only preflight that exists — there is no `doctor`

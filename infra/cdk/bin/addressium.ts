@@ -12,7 +12,7 @@
  */
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { App } from "aws-cdk-lib";
+import { App, PERMISSIONS_BOUNDARY_CONTEXT_KEY, Tags } from "aws-cdk-lib";
 import { ControlPlaneStack, parseStage } from "../lib/control-plane-stack.js";
 
 interface BootstrapConfig {
@@ -76,7 +76,41 @@ function loadConfig(): BootstrapConfig {
 }
 
 const config = loadConfig();
-const app = new App();
+
+// Every role this app creates is capped by the same boundary that caps the
+// deployer. This is not belt-and-braces: infra/bootstrap grants iam:CreateRole
+// ONLY when the new role carries this boundary, so without this line the 31
+// roles CDK synthesizes are created uncapped — or, once the condition is in
+// place, not created at all and the deploy fails at the first role.
+//
+// Set as CONTEXT rather than per-role because the Aspect behind this key
+// matches on the CloudFormation type string, so it also reaches roles built by
+// the low-level CustomResourceProvider path — the S3 auto-delete provider
+// role, which is NOT an iam.Role and which a per-construct approach misses.
+//
+// Must be passed to the App constructor: the Stack constructor reads this key
+// eagerly, and setContext() after a child exists throws. The name is derived
+// from the stage because the boundary is named per-stage (#190 — a stage typo
+// must not silently attach the dev boundary to a prod stack).
+const app = new App({
+  context: {
+    [PERMISSIONS_BOUNDARY_CONTEXT_KEY]: { name: `addressium-${config.stage}-boundary` },
+  },
+});
+
+// Tag everything. addressium is designed to be self-hosted into an account the
+// operator already uses for other things, so "which of these 300+ resources are
+// yours?" has to have an answer that does not depend on reading the stack.
+// These are also what makes Cost Explorer able to say what addressium costs as
+// opposed to everything else in the account — but they must be activated as
+// cost allocation tags in Billing first; tagging alone does not do it.
+//
+// Applied at App scope so it reaches every stack. Tags propagate to resources
+// that support them; the handful that do not (and CloudFront distributions in
+// particular) simply ignore this.
+Tags.of(app).add("Application", "addressium");
+Tags.of(app).add("Stage", config.stage);
+Tags.of(app).add("ManagedBy", "cdk");
 
 new ControlPlaneStack(app, `addressium-${config.stage}`, {
   stage: config.stage,

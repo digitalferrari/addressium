@@ -100,6 +100,40 @@ fi
 say "Building"
 (cd "$ROOT" && npm run build) >/dev/null
 
+# Every role must carry the permissions boundary. The bootstrap boundary grants
+# iam:CreateRole only when the new role carries it, so a role that synthesizes
+# without one is not a policy nit — CloudFormation cannot create it, and the
+# deploy fails partway through with a stack to roll back.
+#
+# Checked against synthesized output rather than source because the boundary is
+# applied by an Aspect at synth time: reading bin/addressium.ts proves the
+# context key is set, not that it reached every role. A construct that builds a
+# role outside the App tree would pass a source grep and fail here, which is the
+# whole point.
+say "Checking every IAM role carries the permissions boundary"
+(cd "$CDK_DIR" && npx --yes cdk synth "$STACK" --quiet) >/dev/null
+TEMPLATE="$CDK_DIR/cdk.out/${STACK}.template.json"
+if [ ! -f "$TEMPLATE" ]; then
+  fail "expected synthesized template at ${TEMPLATE}"
+  exit 1
+fi
+NAKED="$(python3 -c '
+import json, sys
+with open(sys.argv[1]) as fh:
+    resources = json.load(fh).get("Resources", {})
+print(" ".join(
+    name for name, body in resources.items()
+    if body.get("Type") == "AWS::IAM::Role"
+    and not body.get("Properties", {}).get("PermissionsBoundary")
+))' "$TEMPLATE")"
+if [ -n "$NAKED" ]; then
+  fail "these roles synthesize with NO permissions boundary:"
+  for role in $NAKED; do fail "    $role"; done
+  fail "the deploy would be denied at iam:CreateRole — see infra/bootstrap"
+  exit 1
+fi
+ok "all IAM roles carry the boundary"
+
 say "Creating change set for ${STACK} (nothing is applied)"
 if ! aws cloudformation describe-stacks --stack-name "$STACK" --region "$REGION" >/dev/null 2>&1; then
   info "Stack does not exist yet — this would be a CREATE."

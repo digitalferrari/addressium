@@ -674,7 +674,63 @@ export class ControlPlaneStack extends Stack {
         runtime: Runtime.NODEJS_22_X,
         timeout: Duration.seconds(30),
         environment: { ...baseEnv, ...extraEnv },
-        bundling: { format: "esm" as never, target: "node22" },
+        bundling: {
+          format: "esm" as never,
+          target: "node22",
+          // @cedar-policy/cedar-wasm is a wasm-pack "nodejs" build: its JS does
+          // `readFileSync(`${__dirname}/cedar_wasm_bg.wasm`)`. esbuild can
+          // inline the JS but NOT the binary sidecar, so bundling it produced
+          // handlers that threw on first invoke —
+          //   ReferenceError: __dirname is not defined in ES module scope
+          // — and every RBAC-checking Lambda (28 of 29) was dead on arrival
+          // while the stack still reported CREATE_COMPLETE.
+          //
+          // Listing it here makes CDK `npm install` the package into the asset
+          // instead of inlining it, so it ships as real CommonJS with its own
+          // package.json (where __dirname genuinely exists) and the .wasm file
+          // sitting next to it. A banner shim defining __dirname would NOT fix
+          // this — it resolves, then fails ENOENT on the missing .wasm.
+          //
+          // This is also why the eight services that use @addressium/rbac each
+          // declare cedar-wasm directly, despite importing it only transitively:
+          // `nodeModules` resolves the version by walking UP from the handler
+          // ENTRY file (findUp "package.json"), so it reads
+          // services/<name>/package.json — not infra/cdk's, and not the root's.
+          // Declaring it anywhere else fails synth with
+          // CannotExtractModuleVersion. CDK's fallback of requiring
+          // '<mod>/package.json' cannot rescue it either: cedar-wasm's `exports`
+          // map does not expose ./package.json. Keep those ranges in step with
+          // packages/rbac.
+          //
+          // ALL 12 services declare it, not just the 8 that use RBAC, because
+          // this option is set on the shared `fn()` helper and so applies to
+          // every function. analytics-export, feeds, privacy and segment-indexer
+          // never import cedar and it costs them a couple of unused MB in the
+          // asset — but removing it there breaks `cdk synth` outright, which is
+          // how 18 template tests failed once already. It is not dead weight to
+          // be tidied away.
+          nodeModules: ["@cedar-policy/cedar-wasm"],
+          // esbuild's ESM output replaces CommonJS `require` with a stub that
+          // throws `Dynamic require of "x" is not supported`. The AWS SDK hits
+          // it — @smithy/util-buffer-from does `require("buffer")` at module
+          // scope — so without this every handler dies on first invoke. This
+          // was masked until now: cedar failed earlier in module load, so the
+          // SDK's turn never came.
+          //
+          // createRequire gives ESM a real CommonJS require bound to this file,
+          // which is the supported way to satisfy such calls. Also defining
+          // __filename/__dirname because bundled CJS dependencies reach for them
+          // just as readily, and a second round-trip to discover that costs a
+          // deploy.
+          banner: [
+            "import{createRequire as __cdkCreateRequire}from'module';",
+            "import{fileURLToPath as __cdkFileURLToPath}from'url';",
+            "import{dirname as __cdkDirname}from'path';",
+            "const require=__cdkCreateRequire(import.meta.url);",
+            "const __filename=__cdkFileURLToPath(import.meta.url);",
+            "const __dirname=__cdkDirname(__filename);",
+          ].join(""),
+        },
         // Lambda's default log retention is NEVER EXPIRE. With ~40 functions
         // that is unbounded CloudWatch cost forever (#187).
         logGroup: new LogGroup(this, `${id}Logs`, {
@@ -1434,7 +1490,19 @@ export class ControlPlaneStack extends Stack {
         resources: [adminPool.userPoolArn],
       }),
     );
-    const adminApiInt = new HttpLambdaIntegration("AdminApiInt", adminApiFn);
+    // scopePermissionToRoute:false emits ONE api-scoped permission (`*/*/*`)
+    // instead of one per route. With the default (true), each of the ~49 admin
+    // routes appends its own statement to adminApiFn's resource policy, which
+    // overflows Lambda's hard 20,480-byte limit part-way through the create:
+    //   "The final policy size (20698) is bigger than the limit (20480)."
+    // Nothing is lost by widening it. Every route here shares this one function
+    // AND one JWT authorizer (adminAuth), so a caller who can reach any admin
+    // route can already reach them all — the per-route ARNs never separated
+    // anything. Authorization is the authorizer plus the handler's own RBAC
+    // checks, not the resource policy.
+    const adminApiInt = new HttpLambdaIntegration("AdminApiInt", adminApiFn, {
+      scopePermissionToRoute: false,
+    });
     const adminRoute = (_id: string, _handler: string, method: HttpMethod, path: string) => {
       api.addRoutes({
         path,

@@ -610,6 +610,18 @@ function cspBySite(t: Template): Record<string, string> {
   for (const [id, p] of Object.entries(t.findResources("AWS::CloudFront::ResponseHeadersPolicy"))) {
     const cfg = (p.Properties as { ResponseHeadersPolicyConfig: Record<string, unknown> })
       .ResponseHeadersPolicyConfig;
+    // CSP belongs in SecurityHeadersConfig: CloudFront classifies it as a
+    // security header and rejects it in CustomHeaders with a 400, so a policy
+    // that carries it there cannot deploy at all. CustomHeaders is still read
+    // second, so a regression back to the un-deployable shape fails the CSP
+    // assertions below rather than silently reporting "no CSP configured".
+    const secCsp = (
+      cfg.SecurityHeadersConfig as { ContentSecurityPolicy?: { ContentSecurityPolicy?: unknown } }
+    )?.ContentSecurityPolicy?.ContentSecurityPolicy;
+    if (secCsp !== undefined) {
+      out[id] = flatten(secCsp);
+      continue;
+    }
     const items =
       ((cfg.CustomHeadersConfig as { Items?: { Header: string; Value: unknown }[] } | undefined)
         ?.Items ?? []);

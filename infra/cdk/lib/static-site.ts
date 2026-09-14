@@ -82,12 +82,20 @@ export class StaticSite extends Construct {
       autoDeleteObjects: !props.prod,
     });
 
-    // CSP is set as a custom header rather than through `contentSecurityPolicy`
-    // in `securityHeadersBehavior`, because the policy string contains
-    // CloudFormation tokens (the API and Hosted-UI origins) and the L2 typing
-    // for that field is identical in effect.
     const headers = new ResponseHeadersPolicy(this, "Headers", {
       securityHeadersBehavior: {
+        // MUST live here and not in `customHeaders`. CloudFront classifies
+        // content-security-policy as a security header and rejects it in
+        // CustomHeaders outright:
+        //   "The parameter CustomHeaders contains content-security-policy that
+        //    is a security header and cannot be set as custom header."
+        // That is a synth-clean, deploy-time 400 — it took a full stack
+        // rollback to surface. Holding a CloudFormation token is not a reason
+        // to move it: this field is typed `string`, and a token IS a string.
+        contentSecurityPolicy: {
+          contentSecurityPolicy: buildCsp(props.connectOrigins ?? []),
+          override: true,
+        },
         // Two years, preloadable. The SPA is HTTPS-only already; HSTS is what
         // stops the FIRST request of a session from being downgraded.
         strictTransportSecurity: {
@@ -106,11 +114,6 @@ export class StaticSite extends Construct {
       },
       customHeadersBehavior: {
         customHeaders: [
-          {
-            header: "content-security-policy",
-            value: buildCsp(props.connectOrigins ?? []),
-            override: true,
-          },
           // Neither SPA uses any of these, and an injected script inheriting a
           // permission the page never asked for is free reach.
           {

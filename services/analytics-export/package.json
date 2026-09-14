@@ -12,6 +12,7 @@
     "@addressium/core": "0.1.0",
     "@addressium/domain": "0.1.0",
     "@aws-sdk/client-dynamodb": "^3.1090.0",
-    "@aws-sdk/client-s3": "^3.1090.0"
+    "@aws-sdk/client-s3": "^3.1090.0",
+    "@cedar-policy/cedar-wasm": "^4.11.2"
   }
 }

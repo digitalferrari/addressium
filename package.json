@@ -19,11 +19,10 @@
     "clean": "tsc --build --clean",
     "test": "npm run build && node --test packages/domain/dist/test/*.test.js packages/integration-tests/dist/test/*.test.js infra/cdk/dist/test/*.test.js",
     "test:web": "vitest run",
-    "deploy": "npm --workspace @addressium/infra-cdk run deploy",
+    "deploy": "npm run deploy:check && npm --workspace @addressium/infra-cdk run deploy",
     "bootstrap:aws": "./scripts/aws-bootstrap.sh",
     "teardown:aws": "./scripts/aws-teardown.sh",
     "deploy:check": "./scripts/deploy-check.sh",
-    "predeploy": "./scripts/deploy-check.sh",
     "dev": "npm run build && node scripts/dev-server.mjs",
     "test:e2e": "node scripts/smoke-e2e.mjs"
   },
