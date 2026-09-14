@@ -12,6 +12,10 @@ import { Construct } from "constructs";
 import { Bucket, BlockPublicAccess } from "aws-cdk-lib/aws-s3";
 import {
   Distribution,
+  Function,
+  FunctionCode,
+  FunctionEventType,
+  FunctionRuntime,
   HeadersFrameOption,
   HeadersReferrerPolicy,
   ResponseHeadersPolicy,
@@ -126,6 +130,32 @@ export class StaticSite extends Construct {
       },
     });
 
+    // `defaultRootObject` only applies to the distribution ROOT, so a request
+    // for a directory — `/signup/` — asks S3 for a key that does not exist, and
+    // the 404 mapping below answers it with the ROOT `/index.html`. On a bucket
+    // holding one app that is invisible. On this one it served subscriber-web's
+    // shell at public-web's URL: the wrong application, with a 200.
+    //
+    // Appending `index.html` in a viewer-request function fixes it at the only
+    // point that can, because it happens BEFORE the origin lookup that would
+    // otherwise miss. Deep client-side routes still 404 into the SPA fallback as
+    // intended — they have no trailing slash and no extension, so they are left
+    // alone here.
+    const directoryIndex = new Function(this, "DirectoryIndex", {
+      runtime: FunctionRuntime.JS_2_0,
+      comment: "Append index.html to directory URIs so subpath-hosted SPAs resolve",
+      code: FunctionCode.fromInline(`
+function handler(event) {
+  var request = event.request;
+  var uri = request.uri;
+  if (uri.endsWith('/')) {
+    request.uri = uri + 'index.html';
+  }
+  return request;
+}
+      `),
+    });
+
     this.distribution = new Distribution(this, "Dist", {
       defaultRootObject: "index.html",
       webAclId: props.webAclId,
@@ -133,6 +163,9 @@ export class StaticSite extends Construct {
         origin: S3BucketOrigin.withOriginAccessControl(this.bucket),
         viewerProtocolPolicy: ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
         responseHeadersPolicy: headers,
+        functionAssociations: [
+          { function: directoryIndex, eventType: FunctionEventType.VIEWER_REQUEST },
+        ],
       },
       // 404 ONLY (#202). Mapping 403 → 200 meant every WAF-blocked request was
       // answered `200 OK` with the app's own HTML: the block still happened, but
