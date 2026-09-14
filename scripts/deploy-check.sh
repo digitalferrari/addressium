@@ -97,6 +97,31 @@ else
   warn "no ${CFG} — cannot check alert routing"
 fi
 
+# The confirm link is the ONE url a subscriber must be able to open for double
+# opt-in to complete. Its default is the literal placeholder
+# `https://your-site.example/confirm`, which deploys perfectly happily and then
+# puts a dead link in every confirmation email — signup succeeds, the mail
+# arrives, and nobody can ever confirm. Nothing else in the stack notices,
+# because from its side the send worked.
+say "Checking the double opt-in confirm URL"
+CONFIRM_BASE="$(python3 -c "
+import json,sys
+try:
+    print((json.load(open('$CDK_DIR/cdk.json')).get('context',{}) or {}).get('confirmUrlBase','') or '')
+except Exception:
+    print('')
+" 2>/dev/null || echo "")"
+if [[ -z "$CONFIRM_BASE" || "$CONFIRM_BASE" == *"your-site.example"* ]]; then
+  warn "confirmUrlBase is unset — confirmation emails will link to"
+  warn "  https://your-site.example/confirm, a domain you do not own."
+  warn "Set it in ${CDK_DIR}/cdk.json under \"context\", or pass"
+  warn "  -c confirmUrlBase=https://<your-subscriber-site>/confirm"
+  warn "It must point at the PUBLIC distribution — that is where subscriber-web"
+  warn "serves /confirm."
+else
+  ok "confirm URL points at ${CONFIRM_BASE}"
+fi
+
 say "Building"
 (cd "$ROOT" && npm run build) >/dev/null
 

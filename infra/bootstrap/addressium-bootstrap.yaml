@@ -115,13 +115,7 @@ Resources:
               - wafv2:*
               - cloudfront:*
               - xray:*
-              # NOT conditioned on iam:PermissionsBoundary — PassRole does not
-              # support that key (it is not an API operation; it lives in the
-              # Service Authorization Reference's separate table). A condition
-              # here would never match and would silently deny every PassRole.
-              # services/schedule passes SchedulerRole at RUNTIME, so this is
-              # load-bearing for the app, not just for deploys.
-              - iam:PassRole
+              # iam:PassRole is NOT here — see PassRoleOnlyToOurServices below.
               # CloudFormation resolves the BootstrapVersion parameter — typed
               # AWS::SSM::Parameter::Value<String> — before it touches any
               # resource, using the BATCH api. GetParameters, plural: the
@@ -130,6 +124,33 @@ Resources:
               - ssm:GetParameters
               - events:*
             Resource: "*"
+          # PassRole was in the Allow above with `Resource: "*"`, which let any
+          # role capped by this boundary hand ANY role in the account to ANY
+          # service. Paired with lambda:* that is a path out of the boundary:
+          # attach a stronger role to a function and invoke it. Nothing in
+          # addressium needs that breadth — the whole app passes exactly one role
+          # (services/schedule → SchedulerRole), and the three services that ever
+          # receive one are below.
+          #
+          # iam:PassedToService is the right key rather than a role-ARN list: the
+          # role ARNs are CloudFormation-generated and unknowable here, but the
+          # services are fixed by the architecture. A role passed to, say, ec2 or
+          # to another account's principal is denied no matter whose it is.
+          #
+          # NOT conditioned on iam:PermissionsBoundary — PassRole does not support
+          # that key (it is not an API operation; it sits in the Service
+          # Authorization Reference's separate table), and a condition on an
+          # unsupported key never matches, which reads as a deny.
+          - Sid: PassRoleOnlyToOurServices
+            Effect: Allow
+            Action: iam:PassRole
+            Resource: !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/*"
+            Condition:
+              StringEquals:
+                iam:PassedToService:
+                  - lambda.amazonaws.com
+                  - scheduler.amazonaws.com
+                  - states.amazonaws.com
           # A boundary is an INTERSECTION: an action needs an Allow here as well
           # as in the identity policy. DeployPolicy grants sts:AssumeRole on the
           # four CDK roles, but without this statement the boundary caps it away
