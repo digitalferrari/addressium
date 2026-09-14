@@ -77,7 +77,14 @@ function Console() {
     void api
       .listOrgs()
       .then((r) => {
-        if (!cancelled) setOrgs(r.orgs.map((o) => o.orgId));
+        if (cancelled) return;
+        const ids = r.orgs.map((o) => o.orgId);
+        setOrgs(ids);
+        // useState(orgs[0]) only ran at mount, when the list was still empty, so
+        // without this the picker SHOWS the first org while `org` is still ""
+        // — every request then goes to /orgs//lists and 404s, and the header
+        // reads "Dashboard · —" next to a populated dropdown.
+        setOrg((cur) => (cur === "" && ids.length > 0 ? ids[0] : cur));
       })
       // A failure here leaves whatever the claim gave us. The switcher degrades
       // to the old behaviour rather than emptying itself under the user.
