@@ -14,7 +14,7 @@
  */
 import { afterEach, expect, test, vi } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
-import { Dashboard } from "./App.js";
+import { Dashboard } from "./screens/Dashboard.js";
 import { api, type AlertConfig, type CampaignReport, type CampaignRow, type SetupState } from "./api.js";
 
 const SENT: CampaignRow = {

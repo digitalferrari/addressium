@@ -10,7 +10,7 @@
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { Report } from "./App.js";
+import { Report } from "./screens/Report.js";
 import { api, type CampaignReport } from "./api.js";
 import type { Grant } from "./rbac.js";
 

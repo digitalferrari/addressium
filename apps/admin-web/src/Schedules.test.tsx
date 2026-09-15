@@ -12,7 +12,7 @@
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 import type { SendScheduleState } from "@addressium/core";
-import { Schedules } from "./App.js";
+import { Schedules } from "./screens/Schedules.js";
 import { api } from "./api.js";
 import type { Grant } from "./rbac.js";
 

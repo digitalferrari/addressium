@@ -11,7 +11,7 @@
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { Subscribers } from "./App.js";
+import { Subscribers } from "./screens/Subscribers.js";
 import { api, type SuppressionImportReport } from "./api.js";
 import type { Grant } from "./rbac.js";
 

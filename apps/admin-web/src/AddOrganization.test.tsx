@@ -14,7 +14,7 @@
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { AddOrganization, isDevAllowlistEntry, parseDevAllowlist } from "./App.js";
+import { AddOrganization, isDevAllowlistEntry, parseDevAllowlist } from "./screens/AddOrganization.js";
 import { api } from "./api.js";
 
 let createOrg: ReturnType<typeof vi.fn>;
