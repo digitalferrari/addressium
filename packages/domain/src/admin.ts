@@ -190,6 +190,8 @@ export async function recordScheduledCampaign(
     /** One-off send time. Absent for a recurring series parent. */
     sendAt?: string;
     timezone: string;
+    type?: Campaign["type"];
+    seriesId?: string;
   },
 ): Promise<Campaign> {
   const existing = await stores.campaigns.get(input.orgId, input.campaignId);
@@ -197,11 +199,11 @@ export async function recordScheduledCampaign(
     ...existing,
     orgId: input.orgId,
     campaignId: input.campaignId,
-    // `scheduleCampaignSchema` has no `type` field, and both of its values would
-    // be a lie for a recurring parent: its EDITIONS are the `series_edition`s,
-    // and they are the record-less ids above. A draft that already declared
-    // itself keeps what it declared.
-    type: existing?.type ?? "one_off",
+    // `scheduleCampaignSchema` has no `type` field. Recurring callers provide
+    // the explicit series-edition type and parent id; one-off callers retain the
+    // ordinary one-off default.
+    type: input.type ?? existing?.type ?? "one_off",
+    ...(input.seriesId ?? existing?.seriesId ? { seriesId: input.seriesId ?? existing?.seriesId } : {}),
     subject: input.subject,
     // The schedule payload carries an INLINE body, not a saved template id, so
     // there is no real id to record. Preserve a draft's if it had one rather
@@ -231,6 +233,36 @@ export async function recordScheduledCampaign(
   // `campaignsListHandler` puts in front of the operator. A recurring series has
   // no single send time; its cron lives on the lifecycle record.
   if (!input.sendAt) delete campaign.schedule;
+  await stores.campaigns.put(campaign);
+  return campaign;
+}
+
+/** Create the durable campaign row for one recurring edition. */
+export async function recordSeriesEdition(
+  stores: Stores,
+  input: {
+    orgId: string;
+    seriesId: string;
+    campaignId: string;
+    subject: string;
+    listId: string;
+    segmentId?: string;
+  },
+): Promise<Campaign> {
+  const existing = await stores.campaigns.get(input.orgId, input.campaignId);
+  const parent = await stores.campaigns.get(input.orgId, input.seriesId);
+  const campaign: Campaign = {
+    ...existing,
+    orgId: input.orgId,
+    campaignId: input.campaignId,
+    type: "series_edition",
+    seriesId: input.seriesId,
+    subject: input.subject,
+    templateId: existing?.templateId ?? parent?.templateId ?? "",
+    audience: { listId: input.listId, ...(input.segmentId ? { segmentId: input.segmentId } : {}) },
+    status: existing?.status === "halted" ? "halted" : (existing?.status ?? "scheduled"),
+    counters: existing?.counters ?? { ...ZERO_COUNTERS },
+  };
   await stores.campaigns.put(campaign);
   return campaign;
 }
@@ -442,6 +474,27 @@ export async function listAudienceCounts(
 }
 
 /**
+ * What a list with no `presentation` shows publicly (§4.10, #33).
+ *
+ * This is the "never configured" rendering, not a house style: a list whose
+ * operator has not opened the Presentation screen advertises only its
+ * description. Frequency and send-time stay off because their labels are
+ * free text nobody has written yet, and the two counts stay off because
+ * audience size is not published by default.
+ *
+ * Exported so the console's Presentation editor can mirror it exactly (#262).
+ * `setListPresentation` replaces the whole object, so an editor that prefilled
+ * anything else would turn opening the screen into a silent edit.
+ */
+export const UNCONFIGURED_PRESENTATION: ListPresentation = {
+  showFrequency: false,
+  showSendTime: false,
+  showDescription: true,
+  showReaderCount: false,
+  showFreePaidCount: false,
+};
+
+/**
  * Public subscriber-site view of a list: description + presentation toggles, and
  * the aggregate counts ONLY when their toggle is on (never a subscriber roster).
  */
@@ -461,13 +514,10 @@ export async function publicListView(
 } | undefined> {
   const list = await stores.lists.get(orgId, listId);
   if (!list) return undefined;
-  const p: ListPresentation = list.presentation ?? {
-    showFrequency: false,
-    showSendTime: false,
-    showDescription: true,
-    showReaderCount: false,
-    showFreePaidCount: false,
-  };
+  // Spread, not the shared reference: this object is returned to the caller,
+  // and handing every unconfigured list the same mutable module-level object
+  // would let one caller's edit reach all of them.
+  const p: ListPresentation = list.presentation ?? { ...UNCONFIGURED_PRESENTATION };
   const needCounts = p.showReaderCount || p.showFreePaidCount;
   const counts = needCounts ? await listAudienceCounts(stores, orgId, listId) : undefined;
   return {

@@ -1,5 +1,5 @@
 /**
- * Subscriber-site API client (public + confirm/unsubscribe). Branding + list
+ * Subscriber-site API client (public + preference centre + confirm/unsubscribe). Branding + list
  * presentation are read from the public endpoints; signup posts to the API.
  */
 const BASE = import.meta.env.VITE_API_BASE ?? "";
@@ -78,6 +78,20 @@ export interface PublicList {
   freePaidCount?: { free: number; paid: number };
 }
 
+export interface PreferenceRow {
+  listId: string;
+  name: string;
+  description?: string;
+  status?: "pending" | "confirmed" | "unsubscribed" | "bounced" | "complained";
+  subscribed: boolean;
+}
+
+export interface PreferenceView {
+  orgId: string;
+  email: string;
+  rows: PreferenceRow[];
+}
+
 export const api = {
   branding: () => j<Branding | null>("GET", `/orgs/${ORG}/branding`),
   /**
@@ -91,6 +105,12 @@ export const api = {
   signup: (email: string, listId: string) => j<{ status: string }>("POST", `/signup`, { orgId: ORG, email, listId }),
   signupMany: (email: string, listIds: string[]) =>
     j<{ status: string; lists: string[] }>("POST", `/signup/batch`, { orgId: ORG, email, listIds }),
+  requestPreferences: (email: string) =>
+    j<{ status: string; message: string }>("POST", "/preferences/request", { orgId: ORG, email }),
+  preferences: (token: string) =>
+    j<PreferenceView>("GET", `/preferences?token=${encodeURIComponent(token)}`),
+  updatePreferences: (token: string, changes: { listId: string; subscribed: boolean }[]) =>
+    j<{ unsubscribed: string[]; resubscribed: string[]; rejected: string[]; view: PreferenceView }>("POST", "/preferences", { token, changes }),
   confirm: (token: string) => j<{ status: string; confirmed?: number }>("GET", `/confirm?token=${encodeURIComponent(token)}`),
   unsubscribe: (token: string) => j<{ status: string }>("POST", `/unsubscribe`, { token }),
 };

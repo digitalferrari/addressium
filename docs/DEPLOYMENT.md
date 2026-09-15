@@ -154,6 +154,7 @@ Pass with `-c key=value` on `cdk deploy`, or add to `cdk.json` → `context`:
 | `enableOpenSearchMirror` | **off** | When `true`, provisions the OpenSearch Serverless mirror fed by DynamoDB Streams (segment search at scale). Off by default (#64). |
 | `auditRetentionYears` | `7` | Object Lock default retention on the audit bucket, in years (7 → 2555 days). See §9. |
 | `confirmUrlBase` | `https://your-site.example/confirm` | Base URL used in double-opt-in confirmation links. **Not derived — it is a literal placeholder**, and leaving it puts a dead link in every confirmation email: the signup succeeds, the mail sends, and no subscriber can ever confirm. Set it to your public distribution's origin plus `/confirm`, which is where `subscriber-web` serves that route. `deploy:check` warns when it is unset. |
+| `preferencesUrlBase` | `https://your-site.example/preferences` | Base URL used in subscription-management emails. Set it to the subscriber distribution's `/preferences` route so the emailed management link opens the SPA page. |
 | `sesMaxSendRate` | `14` | Your account's SES send rate in messages/second (a fresh production account gets 14) — set it to your real quota. Everything that sends divides this down rather than each taking it whole, so the aggregate stays inside the limit (#176). |
 | `senderMaxConcurrency` | `5` | How many sender Lambdas may run at once. Sets the SQS event source's cap *and* the divisor the sender applies to `sesMaxSendRate`, from one value — the two drifting apart is worse than neither, because it looks configured. |
 
@@ -360,17 +361,17 @@ build time:
 | App | Purpose | Key env vars |
 | --- | --- | --- |
 | `apps/admin-web` | Operator console | `VITE_API_BASE`, `VITE_COGNITO_*` (Hosted-UI PKCE) |
-| `apps/subscriber-web` | Directory / confirm / unsubscribe | `VITE_API_BASE`, `VITE_ORG_ID` |
+| `apps/subscriber-web` | Directory / preferences / confirm / unsubscribe | `VITE_API_BASE`, `VITE_ORG_ID` |
 | `apps/public-web` | Standalone + embeddable signup | `VITE_API_BASE`, `VITE_ORG_ID` |
 
-> **The subscriber site has no login, and r2 does not call for one.** Its four
-> routes are directory, subscribe-to-all, confirm and unsubscribe, all reached
+> **The subscriber site has no login, and r2 does not call for one.** Its five
+> routes are directory, subscribe-to-all, preferences, confirm and unsubscribe, all reached
 > with a signed token or no auth at all — it reads no `VITE_COGNITO_*` and sends
 > no `Authorization` header. A subscriber pool belongs to the org, not to
 > addressium, and the addressium subscriber record is the primary identity (§6).
-> The token-based **preference-centre API** is built (#74 —
-> `POST /preferences/request`, `GET`/`POST /preferences`); its page in the
-> subscriber SPA is **not yet built** (ARCHITECTURE.md §4.10).
+> The token-based **preference-centre** is built (#74 —
+> `POST /preferences/request`, `GET`/`POST /preferences`); its management page
+> is `/preferences` in the subscriber SPA.
 
 **There is no npm script that publishes an SPA.** Building and syncing are two
 separate manual steps, and the second one is plain `aws s3 sync` against the

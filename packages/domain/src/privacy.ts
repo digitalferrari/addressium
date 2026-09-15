@@ -121,6 +121,8 @@ export async function eraseSubscriber(
       entitlementAsof: undefined,
       source: undefined,
       locale: undefined,
+      lastEngagedAt: undefined,
+      lastOpenedAt: undefined,
     },
     { ifRev: subscriber.rev },
   );

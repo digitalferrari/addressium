@@ -101,6 +101,7 @@ import {
   saveSegment,
   listSegmentMembers,
   subscriberDetail,
+  subscriberTimeline,
   setSubscriberAttributes,
   setSubscriptionStatus,
   updateSegmentMembership,
@@ -108,6 +109,10 @@ import {
   saveTemplate,
   saveMergeTag,
   listMergeTags,
+  issueApiKey,
+  listApiKeys,
+  revokeApiKey,
+  authenticateApiKey,
   resolveReengagementPolicy,
   deleteMergeTag,
   saveCampaignSeries,
@@ -117,6 +122,7 @@ import {
   signup,
   signupMany,
   unsubscribeAll,
+  unsubscribeAllWithChanges,
   unsubscribeFromList,
   verifyWebhookSignature,
   type DripStarter,
@@ -286,7 +292,11 @@ async function publishCustomerSync(
   if (!org?.customerSync?.enabled || !subscriber?.externalId) return;
   try {
     await queue.enqueue({
-      eventId: `${subscription.orgId}/${subscription.subscriberId}/${subscription.listId}/${type}`,
+      // `updatedAt` is the durable version of this subscription transition.
+      // It keeps retries idempotent while allowing a real unsubscribe ->
+      // resubscribe (or later repeated transition) to produce a new FIFO
+      // message instead of being swallowed by SQS's five-minute dedupe window.
+      eventId: `${subscription.orgId}/${subscription.subscriberId}/${subscription.listId}/${subscription.updatedAt}/${type}`,
       type,
       orgId: subscription.orgId,
       subscriberId: subscription.subscriberId,
@@ -303,6 +313,33 @@ async function publishCustomerSync(
       subscriberId: subscription.subscriberId,
       listId: subscription.listId,
       type,
+      error: (e as Error).message,
+    });
+  }
+}
+
+/**
+ * Backfill the current membership state after an external ID is attached.
+ * Confirmation can happen before Cognito/account identity sync finishes; if we
+ * only publish at the moment of confirmation, the external customer record
+ * would never learn about that already-confirmed list. Reusing the durable
+ * subscription timestamp keeps these backfills idempotent at the endpoint.
+ */
+async function publishCurrentCustomerSync(orgId: string, subscriberId: string): Promise<void> {
+  try {
+    const memberships = await stores().subscriptions.listBySubscriber(orgId, subscriberId);
+    await Promise.all(
+      memberships
+        .filter((subscription) => subscription.status === "confirmed" || subscription.status === "unsubscribed")
+        .map((subscription) => publishCustomerSync(subscription, subscription.status === "confirmed" ? "subscribed" : "unsubscribed")),
+    );
+  } catch (e) {
+    // Identity sync/account provisioning has already succeeded. Customer-record
+    // delivery remains best-effort and will be retried by the next membership
+    // transition rather than turning the identity write into a false failure.
+    console.error("customer-sync: membership backfill failed", {
+      orgId,
+      subscriberId,
       error: (e as Error).message,
     });
   }
@@ -675,13 +712,14 @@ export async function subscriberAccountHandler(event: SubscriberAccountRequest):
       current: org.subscriberPoolId,
     });
   }
-  await provisionSubscriberAccount(
+  const updated = await provisionSubscriberAccount(
     stores(),
     new CognitoSubscriberAccounts(),
     event.orgId,
     org.subscriberPoolId,
     event.subscriberId,
   );
+  if (updated) await publishCurrentCustomerSync(event.orgId, updated.sub);
 }
 
 /**
@@ -737,6 +775,7 @@ export async function scheduleCampaignHandler(
       // segment picker whose value was dropped here, so a "send to my test
       // cohort" campaign mailed the entire list.
       ...(body.segmentId ? { segmentId: body.segmentId } : {}),
+      ...(body.when.type === "recurring" ? { seriesId: body.campaignId } : {}),
     };
     const feed = body.feedId ? await stores().feeds.get(body.orgId, body.feedId) : undefined;
     if (body.feedId && !feed) return json(400, { error: `unknown feed "${body.feedId}"` });
@@ -777,6 +816,7 @@ export async function scheduleCampaignHandler(
           segmentId: body.segmentId,
           sendAt: at.toISOString(),
           timezone,
+          type: "one_off",
         });
         // The same instant onto the LIFECYCLE record (#248). The Schedules view
         // lists these rows, not campaigns, and it is the screen an operator
@@ -811,19 +851,15 @@ export async function scheduleCampaignHandler(
           // that firing, so idempotency still holds.
           payload: {
             descriptor,
-            ...(feed ? { feed: { url: feed.url, format: feed.format, fieldMap: feed.fieldMap } } : {}),
+            ...(feed ? { feed: { feedId: feed.feedId, url: feed.url, format: feed.format, fieldMap: feed.fieldMap } } : {}),
             editionKey: "<aws.scheduler.scheduled-time>",
           },
         });
         // The series PARENT gets a record too, with no `schedule.sendAt` — a
         // recurring series has no single send time, and its cron already lives on
-        // the lifecycle record the Schedules view reads. It is deliberately NOT
-        // given counters from its editions: each edition sends under its own
-        // `<base>-<editionKey>` id, which by design has no Campaign item
-        // (feed.ts, and the `campaignMissing` branch in dynamo.ts), so the parent
-        // stays at zero and the per-edition numbers come from the event log.
-        // Recording it anyway is what puts the series in `campaigns.list`, so the
-        // console's report picker can offer it at all.
+        // the lifecycle record the Schedules view reads. Each launch creates a
+        // separate `series_edition` row tied to this parent, so reports can
+        // aggregate actual stored counters without guessing from an id prefix.
         await recordScheduledCampaign(stores(), {
           orgId: body.orgId,
           campaignId: body.campaignId,
@@ -1071,7 +1107,40 @@ export async function orgMetaHandler(event: HttpEvent): Promise<HttpResult> {
       // key ARN or kid — is what Settings needs to say "on for this org" rather
       // than describing a feature the org does not use.
       magicLinkEnabled: org.magicLink !== undefined,
+      segmentEngine: process.env.SEGMENT_ENGINE === "opensearch" ? "opensearch" : "gsi",
     });
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+/**
+ * GET /orgs/{org}/search?q= — bounded, org-scoped shell search. This deliberately
+ * searches named operator resources only; subscriber email search remains on the
+ * Subscribers screen behind `subscribers:manage` so the global shell does not
+ * widen access to personal data.
+ */
+export async function searchHandler(event: HttpEvent): Promise<HttpResult> {
+  try {
+    const orgId = event.pathParameters?.org ?? "";
+    requireGrant(event, "reports:view", orgId);
+    const q = (event.queryStringParameters?.q ?? "").trim().toLowerCase();
+    if (q.length < 2) return json(200, { results: [] });
+    const [lists, campaigns, series, templates, segments] = await Promise.all([
+      stores().lists.list(orgId),
+      stores().campaigns.list(orgId),
+      stores().series.list(orgId),
+      stores().templates.list(orgId),
+      stores().segments.list(orgId),
+    ]);
+    const results = [
+      ...lists.filter((x) => `${x.listId} ${x.name}`.toLowerCase().includes(q)).map((x) => ({ kind: "newsletters", id: x.listId, label: x.name })),
+      ...campaigns.filter((x) => `${x.campaignId} ${x.subject}`.toLowerCase().includes(q)).map((x) => ({ kind: "campaigns", id: x.campaignId, label: x.subject })),
+      ...series.filter((x) => `${x.seriesId} ${x.name}`.toLowerCase().includes(q)).map((x) => ({ kind: "drips", id: x.seriesId, label: x.name })),
+      ...templates.filter((x) => `${x.templateId} ${x.name}`.toLowerCase().includes(q)).map((x) => ({ kind: "templates", id: x.templateId, label: x.name })),
+      ...segments.filter((x) => `${x.segmentId} ${x.name}`.toLowerCase().includes(q)).map((x) => ({ kind: "segments", id: x.segmentId, label: x.name })),
+    ].slice(0, 12);
+    return json(200, { results });
   } catch (e) {
     return fail(e);
   }
@@ -1121,6 +1190,8 @@ export async function orgIdentityHandler(event: HttpEvent): Promise<HttpResult> 
             kid: org.magicLink.kid,
             issuer: org.magicLink.issuer,
             audience: org.magicLink.audience,
+            keyCount: org.magicLink.keys?.length ?? 1,
+            rotatedAt: org.magicLink.rotatedAt,
             jwksPath: `/orgs/${encodeURIComponent(org.orgId)}/.well-known/jwks.json`,
           }
         : { enabled: false },
@@ -1394,12 +1465,98 @@ export async function mergeTagDeleteHandler(event: HttpEvent): Promise<HttpResul
 }
 
 /**
+ * GET /orgs/{org}/api-keys — the org's keys, revoked ones included and flagged.
+ * POST /api-keys — issue one. The ONLY response in the product that carries a
+ * plaintext key, and it carries it once.
+ *
+ * Both halves are `apikeys:manage`, INCLUDING the read. Every other registry
+ * here gates its GET on `reports:view` so an analyst can see what exists; a
+ * credential list is different in kind. It names each integration, what it may
+ * do and when it last did it, which is a map of the org's machine access — and
+ * `apikeys:manage` is the capability that already means "this person is trusted
+ * with the org's credentials". Nothing about a key is a report.
+ *
+ * `createdBy` is the caller's admin-pool `sub`, taken from the verified JWT
+ * claims rather than from the body: a field saying who issued a credential is
+ * worth nothing if the issuer can write it.
+ */
+export async function apiKeysHandler(event: HttpEvent): Promise<HttpResult> {
+  try {
+    const method = event.requestContext?.http?.method ?? (event.body ? "POST" : "GET");
+    if (method === "POST") {
+      const input = schemas.issueApiKeySchema.parse(JSON.parse(event.body ?? "{}"));
+      requireGrant(event, "apikeys:manage", input.orgId);
+      const createdBy = event.requestContext?.authorizer?.jwt?.claims?.["sub"];
+      return json(200, await issueApiKey(stores(), clock, input, createdBy));
+    }
+    const orgId = event.pathParameters?.org ?? "";
+    requireGrant(event, "apikeys:manage", orgId);
+    return json(200, await listApiKeys(stores(), orgId));
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+/**
+ * POST /api-keys/revoke — cut off one key.
+ *
+ * Revocation keeps the row and stamps `revokedAt` (see `api-keys.ts`), so this
+ * is a POST rather than a DELETE: nothing is removed. Revoking an
+ * already-revoked key is an `InvalidInputError` naming the date, because an
+ * operator reaching for this during an incident needs to know whether they are
+ * the one who cut it off.
+ */
+export async function apiKeyRevokeHandler(event: HttpEvent): Promise<HttpResult> {
+  try {
+    const input = schemas.revokeApiKeySchema.parse(JSON.parse(event.body ?? "{}"));
+    requireGrant(event, "apikeys:manage", input.orgId);
+    return json(200, await revokeApiKey(stores(), clock, input.orgId, input.keyId));
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+/**
+ * POST /api-keys/verify — check a key the operator holds, and record the use.
+ *
+ * ADMIN-GATED ON PURPOSE. This is the one route that turns a plaintext key into
+ * a yes/no, which on the public surface would be an oracle anyone could grind
+ * candidate keys against. Behind the JWT authorizer and `apikeys:manage`, every
+ * caller already has full console access to the org, so there is nothing here to
+ * learn that the list does not already show — and it answers the question an
+ * operator actually has: *is the key in our CI the live one, or the one we
+ * revoked?*
+ *
+ * It is also what makes "Last used" a fact. `authenticateApiKey` is the only
+ * writer of `lastUsedAt` in the product, this is its only HTTP entry point, and
+ * a key that has never been through here reads "Never" truthfully.
+ *
+ * The org is passed to the domain rather than compared after the fact: the stamp
+ * is written inside `authenticateApiKey`, so a handler-side check would run
+ * after another tenant's credential had already been touched. A key belonging to
+ * a different org is refused exactly like an unknown one — same sentence, no
+ * stamp.
+ */
+export async function apiKeyVerifyHandler(event: HttpEvent): Promise<HttpResult> {
+  try {
+    const body = JSON.parse(event.body ?? "{}") as { orgId?: unknown; key?: unknown };
+    const orgId = schemas.idSchema.parse(body.orgId);
+    requireGrant(event, "apikeys:manage", orgId);
+    const key = typeof body.key === "string" ? body.key : "";
+    return json(200, await authenticateApiKey(stores(), clock, key, { orgId }));
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+/**
  * GET /orgs/{org}/series — list. GET …/series/{id} — one. POST /series — save.
  *
- * Gated on `campaigns:manage` for both read and write. A series IS a campaign construct — it is the parent of
- * every `series_edition` — and writing one sets the template and the ad HTML
- * that every future edition will carry, which is the same authority as editing
- * a campaign. There is deliberately no delete: editions and series-bound ad
+ * Reads are gated on `reports:view`, while writes require `campaigns:manage`.
+ * A series IS a campaign construct — it is the parent of every
+ * `series_edition` — and writing one sets the template and the ad HTML that
+ * every future edition will carry, which is the same authority as editing a
+ * campaign. There is deliberately no delete: editions and series-bound ad
  * fills reference a series by id, so removing the parent would orphan them
  * (same reasoning as send schedules, which are never deleted either, §4.6).
  */
@@ -1412,7 +1569,7 @@ export async function seriesHandler(event: HttpEvent): Promise<HttpResult> {
       return json(200, await saveCampaignSeries(stores(), input));
     }
     const orgId = event.pathParameters?.org ?? "";
-    requireGrant(event, "campaigns:manage", orgId);
+    requireGrant(event, "reports:view", orgId);
     const seriesId = event.pathParameters?.id;
     if (seriesId) {
       const s = await getCampaignSeries(stores(), orgId, seriesId);
@@ -1707,6 +1864,17 @@ export async function subscriberDetailHandler(event: HttpEvent): Promise<HttpRes
     const orgId = event.pathParameters?.org ?? "";
     requireGrant(event, "subscribers:manage", orgId);
     return json(200, await subscriberDetail(stores(), orgId, event.pathParameters?.sub ?? ""));
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+/** GET /orgs/{org}/subscribers/{sub}/timeline — recent engagement events. */
+export async function subscriberTimelineHandler(event: HttpEvent): Promise<HttpResult> {
+  try {
+    const orgId = event.pathParameters?.org ?? "";
+    requireGrant(event, "subscribers:manage", orgId);
+    return json(200, await subscriberTimeline(stores(), orgId, event.pathParameters?.sub ?? ""));
   } catch (e) {
     return fail(e);
   }
@@ -2280,6 +2448,54 @@ export async function importUploadUrlHandler(event: HttpEvent): Promise<HttpResu
 }
 
 /**
+ * POST /orgs/{org}/import/upload-preview — preview a file already uploaded to
+ * the import bucket (#252).
+ *
+ * Large files cannot be sent through API Gateway just to discover their columns.
+ * The browser uploads once to the scoped presigned key, then this route reads
+ * that same object server-side and returns the exact preview shape used by the
+ * inline mapper. The object is not imported or claimed as a batch until the
+ * operator confirms the mapping through /import/async.
+ */
+export async function importUploadPreviewHandler(event: HttpEvent): Promise<HttpResult> {
+  try {
+    const orgId = event.pathParameters?.org ?? "";
+    requireGrant(event, "subscribers:manage", orgId);
+    const body = JSON.parse(event.body ?? "{}") as {
+      batchId?: string;
+      consentBasis?: "explicit" | "implicit";
+    };
+    const batchIdCheck = schemas.batchIdSchema.safeParse(body.batchId);
+    if (!batchIdCheck.success) return json(400, { error: "valid batchId required" });
+
+    const bytes = await importFiles().read(importObjectKey(orgId, batchIdCheck.data));
+    const preview = previewCsv(bytes);
+    if (preview.headers.length === 0) {
+      return json(400, {
+        error: "could not read the file: expected a CSV with a header row, or JSON Lines of endpoint objects (gzip supported)",
+      });
+    }
+    const lists = await stores().lists.list(orgId);
+    const plan = suggestMapping(preview, {
+      knownLists: lists.map((l) => ({ listId: l.listId, name: l.name })),
+      ...(body.consentBasis ? { consentBasis: body.consentBasis } : {}),
+    });
+    const saved = await stores().importMappings.findByFingerprint(orgId, preview.fingerprint);
+    return json(200, {
+      headers: preview.headers,
+      sample: preview.sample,
+      rowCount: preview.rowCount,
+      fingerprint: preview.fingerprint,
+      suggested: plan,
+      saved,
+      problems: validateMapping(plan, preview.headers),
+    });
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+/**
  * POST /orgs/{org}/import/async — run an uploaded file as a job (#242).
  *
  * Returns 202 with the batch id; the run itself outlives this request. Status is
@@ -2525,10 +2741,9 @@ export async function subscriberUnsubscribeHandler(event: HttpEvent): Promise<Ht
       return json(200, { status: "unsubscribed", scope: "list" });
     }
     if (!email) return json(400, { error: "email required for unsubscribe-all" });
-    const n = await unsubscribeAll(stores(), clock, { orgId, subscriberId, email });
-    const after = await stores().subscriptions.listBySubscriber(orgId, subscriberId);
-    await Promise.all(after.filter((subscription) => subscription.status === "unsubscribed").map((subscription) => publishCustomerSync(subscription, "unsubscribed")));
-    return json(200, { status: "unsubscribed", scope: "all", lists: n });
+    const result = await unsubscribeAllWithChanges(stores(), clock, { orgId, subscriberId, email });
+    await Promise.all(result.changed.map((subscription) => publishCustomerSync(subscription, "unsubscribed")));
+    return json(200, { status: "unsubscribed", scope: "all", lists: result.count });
   } catch (e) {
     return fail(e);
   }
@@ -2741,7 +2956,12 @@ export async function identitySyncHandler(event: HttpEvent): Promise<HttpResult>
     if (!verifyWebhookSignature(secret, raw, sig)) {
       return json(401, { error: "bad signature" });
     }
-    const result = await applyIdentitySync(stores(), clock, JSON.parse(raw) as unknown);
+    const payload = JSON.parse(raw) as unknown;
+    const result = await applyIdentitySync(stores(), clock, payload);
+    const orgId = (payload as { orgId?: string }).orgId;
+    if (orgId && result.subscriberId && result.action !== "deleted") {
+      await publishCurrentCustomerSync(orgId, result.subscriberId);
+    }
     return json(200, result);
   } catch (e) {
     return fail(e);
@@ -2814,6 +3034,19 @@ export async function preferencesHandler(event: HttpEvent): Promise<HttpResult> 
     const changes = body.changes as { listId: string; subscribed: boolean }[] | undefined;
     if (!Array.isArray(changes)) return json(400, { error: "changes required" });
     const result = await applyPreferences(s, clock, claims.orgId, claims.sub, changes);
+    // The preference centre is another public subscribe/unsubscribe surface.
+    // `applyPreferences` reports only real transitions, so unchanged checkboxes
+    // do not create duplicate external-customer events.
+    await Promise.all([
+      ...result.unsubscribed.map(async (listId) => {
+        const subscription = await s.subscriptions.get(claims.orgId, claims.sub, listId);
+        if (subscription) await publishCustomerSync(subscription, "unsubscribed");
+      }),
+      ...result.resubscribed.map(async (listId) => {
+        const subscription = await s.subscriptions.get(claims.orgId, claims.sub, listId);
+        if (subscription) await publishCustomerSync(subscription, "subscribed");
+      }),
+    ]);
     return json(200, { ...result, view: await preferenceCentre(s, claims.orgId, claims.sub) });
   } catch (e) {
     if (e instanceof RetiredKeyError || e instanceof TokenExpiredError) {
@@ -2826,6 +3059,7 @@ export async function preferencesHandler(event: HttpEvent): Promise<HttpResult> 
 const ADMIN_ROUTES: Record<string, RouteHandler> = {
   "GET /orgs": orgsListHandler,
   "GET /orgs/{org}": orgMetaHandler,
+  "GET /orgs/{org}/search": searchHandler,
   "GET /orgs/{org}/identity": orgIdentityHandler,
   "GET /orgs/{org}/sending-identity": sendingIdentityHandler,
   "GET /orgs/{org}/setup": setupStateHandler,
@@ -2849,6 +3083,10 @@ const ADMIN_ROUTES: Record<string, RouteHandler> = {
   "GET /orgs/{org}/merge-tags": mergeTagsHandler,
   "POST /merge-tags": mergeTagsHandler,
   "POST /merge-tags/delete": mergeTagDeleteHandler,
+  "GET /orgs/{org}/api-keys": apiKeysHandler,
+  "POST /api-keys": apiKeysHandler,
+  "POST /api-keys/revoke": apiKeyRevokeHandler,
+  "POST /api-keys/verify": apiKeyVerifyHandler,
   "GET /orgs/{org}/series": seriesHandler,
   "GET /orgs/{org}/series/{id}": seriesHandler,
   "POST /series": seriesHandler,
@@ -2863,6 +3101,7 @@ const ADMIN_ROUTES: Record<string, RouteHandler> = {
   "POST /drip-sequences/enroll": dripEnrollHandler,
   "GET /orgs/{org}/subscribers": subscribersListHandler,
   "GET /orgs/{org}/subscribers/{sub}": subscriberDetailHandler,
+  "GET /orgs/{org}/subscribers/{sub}/timeline": subscriberTimelineHandler,
   "POST /subscribers/attributes": subscriberAttributesHandler,
   "POST /subscribers/subscription": subscriptionStatusHandler,
   "GET /orgs/{org}/suppressions": suppressionsListHandler,
@@ -2880,6 +3119,7 @@ const ADMIN_ROUTES: Record<string, RouteHandler> = {
   "POST /orgs/{org}/import/suppression": importSuppressionHandler,
   "POST /orgs/{org}/import/segment": importSegmentHandler,
   "POST /orgs/{org}/import/upload-url": importUploadUrlHandler,
+  "POST /orgs/{org}/import/upload-preview": importUploadPreviewHandler,
   "POST /orgs/{org}/import/async": importAsyncHandler,
   "POST /orgs/{org}/import/mapped": importMappedHandler,
   "GET /orgs/{org}/import/batches": importBatchesHandler,

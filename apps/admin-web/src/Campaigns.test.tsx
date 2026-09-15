@@ -229,6 +229,24 @@ test("a schedules failure costs the lifecycle column, not the campaign list", as
   expect(within(row).getByText("unknown")).toBeTruthy();
 });
 
+test("a one-off that has already sent is not offered Start or Pause here either (#263)", async () => {
+  // This table carries the same lifecycle controls as Schedules, so it needs
+  // the same gate. `completed` is the status the sender writes; the archived
+  // row below is the case `completeScheduleRange` leaves behind when an
+  // operator archived the send before its last slice finished.
+  mount([SENT], [{ ...SENT_SCHEDULE, status: "completed", completedRanges: [{}] }]);
+  const row = await rowFor("ledger-2026-07-20");
+  expect(within(row).getByText("COMPLETED")).toBeTruthy();
+  expect(within(row).getByRole("button", { name: "Start" })).toBeDisabled();
+  expect(within(row).getByRole("button", { name: "Pause" })).toBeDisabled();
+});
+
+test("a one-off archived mid-send is gated on its ranges, not its status", async () => {
+  mount([SENT], [{ ...SENT_SCHEDULE, status: "archived", completedRanges: [{}] }]);
+  const row = await rowFor("ledger-2026-07-20");
+  expect(within(row).getByRole("button", { name: "Start" })).toBeDisabled();
+});
+
 test("an org with no campaigns gets an empty state, not an empty table", async () => {
   mount([], []);
   expect(await screen.findByText(/has no campaigns yet/)).toBeTruthy();

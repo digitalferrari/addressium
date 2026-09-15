@@ -19,12 +19,15 @@ const KIND_LABELS: { kind: RowKind; label: string }[] = [
   { kind: "list", label: "Subscribed to list" },
   { kind: "entitlement", label: "Entitlement" },
   { kind: "attribute", label: "Attribute" },
+  { kind: "last_open_at", label: "Last opened" },
 ];
 
 export function Segments({ org }: { org: string }) {
   const [rev, setRev] = useState(0);
   const segments = useAsync(() => api.segments(org), [org, rev]);
   const lists = useAsync(() => api.lists(org), [org]);
+  const orgMeta = useAsync(() => api.orgMeta(org), [org]);
+  const openSearch = orgMeta.data?.segmentEngine === "opensearch";
   const [segmentId, setSegmentId] = useState("");
   const [name, setName] = useState("");
   const [predicate, setPredicate] = useState("");
@@ -44,7 +47,8 @@ export function Segments({ org }: { org: string }) {
     // being flattened into rows that would drop the parts it has no control for
     // — saving that back would silently rewrite the operator's audience.
     const parsed = isExplicitPredicate(s.predicate) ? null : fromPredicate(s.predicate);
-    if (parsed) { setRows(parsed.rows); setRaw(false); }
+    const hasEngagement = parsed?.rows.some((row) => row.kind === "last_open_at") ?? false;
+    if (parsed && (!hasEngagement || openSearch)) { setRows(parsed.rows); setRaw(false); }
     else { setRaw(!isExplicitPredicate(s.predicate)); }
   };
   const reset = () => {
@@ -52,7 +56,7 @@ export function Segments({ org }: { org: string }) {
     setRows([newRow("list")]); setRaw(false);
   };
 
-  const problem = predicateProblem(rows);
+  const problem = predicateProblem(rows, !openSearch);
 
   const save = async () => {
     setMsg(""); setBusy(true);
@@ -85,9 +89,9 @@ export function Segments({ org }: { org: string }) {
     <div>
       <div className="pagehead"><div><h1>Segments</h1><p>Saved predicates over lists, entitlements and subscriber attributes.</p></div></div>
       <p className="muted">
-        Reusable audience filters that target within a list. Build the rule from conditions —
-        the shipped v1 engine ranges over one list, so a “Subscribed to list” condition is the
-        base of every <code>ALL</code> rule.
+        Reusable audience filters that target within a list. {openSearch
+          ? <>This deployment also supports open-recency rules through the OpenSearch mirror.</>
+          : <>The shipped v1 engine ranges over one list, so a “Subscribed to list” condition is the base of every <code>ALL</code> rule.</>}
       </p>
       {segments.loading && <div className="card muted">Loading…</div>}
       {segments.error && <p className="err">{segments.error}</p>}
@@ -139,7 +143,7 @@ export function Segments({ org }: { org: string }) {
             <RuleBuilder
               rows={rows} setRows={setRows}
               lists={lists.data ?? null} listsError={lists.error} busy={busy}
-              problem={problem} onRaw={() => {
+              problem={problem} allowEngagement={openSearch} onRaw={() => {
                 // Seed the raw editor from what the builder currently holds, so
                 // switching is a continuation rather than a blank page.
                 setPredicate(JSON.stringify(toPredicate(rows), null, 2));
@@ -172,15 +176,12 @@ export function Segments({ org }: { org: string }) {
 /**
  * The structured predicate builder (#282 / ISSUES #256).
  *
- * It offers exactly the conditions both engines can resolve, and every rule it
- * builds matches ALL of them. What it leaves out, and why, is documented against
- * the engine code in `segment-predicate.ts` — engagement recency, subscription
- * status and `match: "any"` are each unresolvable, dead, or actively dangerous
- * on the shipped engine. All three remain reachable from the advanced editor,
- * where the API answers for itself.
+ * It offers conditions the selected deployment can resolve. Engagement recency
+ * appears only when the OpenSearch mirror is active; the GSI deployment keeps it
+ * in the advanced editor but refuses it at save time.
  */
 function RuleBuilder({
-  rows, setRows, lists, listsError, busy, problem, onRaw,
+  rows, setRows, lists, listsError, busy, problem, allowEngagement, onRaw,
 }: {
   rows: Row[];
   setRows: (r: Row[]) => void;
@@ -188,6 +189,7 @@ function RuleBuilder({
   listsError?: string;
   busy: boolean;
   problem: string | null;
+  allowEngagement: boolean;
   onRaw: () => void;
 }) {
   const update = (id: string, patch: Partial<Row>) =>
@@ -216,7 +218,7 @@ function RuleBuilder({
                   update(row.id, { kind, value: "", field: "", op: "eq" });
                 }}
               >
-                {KIND_LABELS.map((k) => (
+                {KIND_LABELS.filter((k) => allowEngagement || k.kind !== "last_open_at").map((k) => (
                   <option key={k.kind} value={k.kind}>{k.label}</option>
                 ))}
               </select>
@@ -244,6 +246,16 @@ function RuleBuilder({
                     <option value="neq">is not</option>
                     <option value="exists">exists</option>
                   </select>
+                </>
+              )}
+
+              {row.kind === "last_open_at" && (
+                <>
+                  <select value={row.op} aria-label="Recency operator" disabled={busy} onChange={(e) => update(row.id, { op: e.target.value as Row["op"] })}>
+                    <option value="after">after</option>
+                    <option value="before">before</option>
+                  </select>
+                  <input type="datetime-local" value={row.value} aria-label="Recency date" disabled={busy} onChange={(e) => update(row.id, { value: e.target.value })} />
                 </>
               )}
 

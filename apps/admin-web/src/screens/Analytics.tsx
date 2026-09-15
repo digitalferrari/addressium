@@ -17,10 +17,9 @@
  * documents both, and `deriveCounters` builds them with a Set), so the "unique"
  * wording here is the data's own, not a label borrowed from the mock.
  *
- * The click-map overlay tab is permanently in its explanatory state: the send
- * path computes `EmailArchive.s3Key` but never writes the rendered body, so
- * there is no archived HTML to paint badges onto. It is a standing gap, not a
- * load failure, and the tab says which half exists (the counts, on Links).
+ * The click-map overlay reads an authenticated decorated archive endpoint. Older
+ * campaigns may still have only the Dynamo link map, so the explanatory fallback
+ * remains intentional for those records.
  *
  * Arithmetic lives in exported pure helpers so it can be tested without a DOM
  * (`Analytics.test.tsx`), following `Report.tsx`'s export-for-test convention.
@@ -29,7 +28,7 @@ import { useState } from "react";
 import { useAsync } from "../useAsync.js";
 import { Kpi } from "../Kpi.js";
 import { can, type Grant } from "../rbac.js";
-import { api, type CampaignReport, type ClickMapRow } from "../api.js";
+import { api, type AnalyticsTrends, type CampaignReport, type ClickMapRow } from "../api.js";
 
 type Tab = "links" | "map" | "funnel";
 
@@ -105,18 +104,29 @@ export function linkCtr(row: ClickMapRow, sent: number): string {
 
 export function Analytics({ org, grant }: { org: string; grant: Grant | null }) {
   const campaigns = useAsync(() => api.campaigns(org), [org]);
+  const trends = useAsync(() => api.analyticsTrends(org, 30), [org]);
   const [campaign, setCampaign] = useState("");
   const [report, setReport] = useState<CampaignReport | null>(null);
   const [tab, setTab] = useState<Tab>("links");
   const [err, setErr] = useState("");
   const [loading, setLoading] = useState(false);
+  const [archiveHtml, setArchiveHtml] = useState<string | null>(null);
 
   const load = async () => {
     setErr("");
     setReport(null);
+    setArchiveHtml(null);
     setLoading(true);
     try {
-      setReport(await api.report(org, campaign));
+      const next = await api.report(org, campaign);
+      setReport(next);
+      try {
+        setArchiveHtml((await api.archive(org, campaign)).html);
+      } catch {
+        // Older sends may have the Dynamo archive/link map but predate the
+        // generic S3 body. Keep the report useful and explain that state below.
+        setArchiveHtml(null);
+      }
     } catch (e) {
       setErr(String(e));
     } finally {
@@ -162,6 +172,8 @@ export function Analytics({ org, grant }: { org: string; grant: Grant | null }) 
       {campaigns.error && <p className="err">{campaigns.error}</p>}
       {err && <p className="err">{err}</p>}
 
+      <TrendsPanel trends={trends.data} loading={trends.loading} error={trends.error} />
+
       {report && c && (
         <>
           <div className="card">
@@ -206,10 +218,67 @@ export function Analytics({ org, grant }: { org: string; grant: Grant | null }) 
           </div>
 
           {tab === "links" && <LinksTab report={report} />}
-          {tab === "map" && <ClickMapTab rowCount={rows.length} />}
+          {tab === "map" && <ClickMapTab rowCount={rows.length} archiveHtml={archiveHtml} />}
           {tab === "funnel" && <FunnelTab report={report} />}
         </>
       )}
+    </div>
+  );
+}
+
+export function TrendsPanel({ trends, loading, error }: { trends?: AnalyticsTrends | null; loading: boolean; error?: string }) {
+  const points = trends?.points ?? [];
+  const maxSent = Math.max(1, ...points.map((point) => point.sent));
+  return (
+    <div className="card">
+      <div className="row" style={{ justifyContent: "space-between" }}>
+        <div>
+          <strong>30-day trends</strong>
+          <div className="muted">Daily event totals across campaigns. Opens and clicks are unique subscribers per day.</div>
+        </div>
+        {trends && <span className="muted">{trends.from} → {trends.through}</span>}
+      </div>
+      {loading && <p className="muted">Loading trends…</p>}
+      {error && <p className="muted">Trends unavailable: {error}</p>}
+      {!loading && !error && trends && (
+        <>
+          {trends.summary && <TrendSummary summary={trends.summary} />}
+          {points.every((point) => point.sent === 0 && point.delivered === 0 && point.opens === 0 && point.clicks === 0 && point.bounces === 0 && point.complaints === 0) ?
+            <p className="muted">No events in this window.</p> :
+            <table>
+            <thead><tr><th>Date</th><th>Sent</th><th>Delivered</th><th>Opens</th><th>Clicks</th><th /></tr></thead>
+            <tbody>
+              {points.filter((point) => point.sent || point.delivered || point.opens || point.clicks || point.bounces || point.complaints).map((point) => (
+                <tr key={point.date}>
+                  <td>{point.date}</td>
+                  <td>{point.sent}</td>
+                  <td>{point.delivered}</td>
+                  <td>{point.opens} <span className="muted">({pctOf(point.opens, point.sent)})</span></td>
+                  <td>{point.clicks} <span className="muted">({pctOf(point.clicks, point.sent)})</span></td>
+                  <td style={{ width: "24%" }}><div className="bar" style={{ width: `${barWidth(point.sent, maxSent)}%` }} /></td>
+                </tr>
+              ))}
+            </tbody>
+            </table>}
+        </>
+      )}
+    </div>
+  );
+}
+
+function comparison(current: number, previous: number): string {
+  if (previous <= 0) return "—";
+  const delta = ((current - previous) / previous) * 100;
+  return `${delta >= 0 ? "+" : ""}${delta.toFixed(1)}% vs prior period`;
+}
+
+function TrendSummary({ summary }: { summary: NonNullable<AnalyticsTrends["summary"]> }) {
+  return (
+    <div className="kpis" style={{ margin: "14px 0" }}>
+      <Kpi n={summary.subscriberCount} l="subscribers" />
+      <Kpi n={summary.current.emailsSent} l={`emails sent · ${comparison(summary.current.emailsSent, summary.previous.emailsSent)}`} />
+      <Kpi n={`${(summary.current.openRate * 100).toFixed(1)}%`} l={`average open rate · ${comparison(summary.current.openRate, summary.previous.openRate)}`} />
+      <Kpi n={`${(summary.current.clickRate * 100).toFixed(1)}%`} l={`average click rate · ${comparison(summary.current.clickRate, summary.previous.clickRate)}`} />
     </div>
   );
 }
@@ -307,22 +376,27 @@ function LinksTab({ report }: { report: CampaignReport }) {
  * the archived body it would paint onto is never written, so the tab explains
  * the gap and points at the half that does ship.
  */
-function ClickMapTab({ rowCount }: { rowCount: number }) {
+function ClickMapTab({ rowCount, archiveHtml }: { rowCount: number; archiveHtml: string | null }) {
+  if (archiveHtml) {
+    return <div className="card">
+      <div className="muted" style={{ marginBottom: 8 }}>Click map · archived copy</div>
+      <p className="muted">Click counts are attached to the links below. The preview is the generic campaign body; recipient-specific values and magic-link tokens are intentionally not shown.</p>
+      <iframe title="Campaign click map" srcDoc={archiveHtml} style={{ width: "100%", minHeight: 520, border: "1px solid var(--border)", borderRadius: 8, background: "white" }} sandbox="" />
+    </div>;
+  }
   return (
     <div className="card">
       <div className="muted" style={{ marginBottom: 8 }}>
         Click map · archived copy
       </div>
       <p className="muted">
-        <b>Not yet built — the overlay, not the numbers.</b> Each campaign's archive record stores the link map and the
-        S3 key that a generic rendered copy of the email <i>would</i> live at, but that body is never written, so there
-        is nothing to paint click badges onto. The click counts themselves are real and complete
+        <b>Archive preview unavailable for this campaign.</b> The click counts themselves are real and complete
         {rowCount > 0 ? ` — all ${rowCount} of them are on the Links tab.` : "; they appear on the Links tab once a campaign has a recorded link map."}
       </p>
       <p className="muted">
-        Building this needs two things that do not exist yet: the send path writing the rendered body to that key, and a
-        read grant for the admin router over the archive prefix. Until both land, the Links tab is the whole of the
-        click data — the overlay would only rearrange it onto a picture.
+        New sends write a generic rendered body and the reporting service decorates it with click badges. This older
+        campaign either predates that body or the archive read is temporarily unavailable, so the Links tab remains
+        the authoritative click data.
       </p>
     </div>
   );

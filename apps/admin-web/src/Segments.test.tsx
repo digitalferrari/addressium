@@ -6,12 +6,9 @@
  * two rules that decide what it may OFFER, because both are the difference
  * between a segment that sends and one that fails after claiming itself:
  *
- *  1. Engagement recency is NOT offered. `gsiEngineLimitation` rejects
- *     `last_open_at` on the v1 GSI engine, and although the OpenSearch engine's
- *     `buildQuery` can range over the field, `services/segment-indexer` never
- *     passes `lastOpenAt` into `subscriberToIndexOp` — so the field is absent
- *     from every mirrored document and the range matches NOBODY. A builder row
- *     for it would be a control that quietly produces an empty send.
+ *  1. Engagement recency is offered only when the org reports the OpenSearch
+ *     engine. The GSI engine rejects `last_open_at`; OpenSearch receives the
+ *     provider-recorded timestamp in the subscriber projection.
  *
  *  2. An `ALL` rule must carry a base `list` condition. `SEGMENT_ENGINE` is read
  *     server-side and exposed on no route, so the console cannot know which
@@ -54,7 +51,7 @@ afterEach(() => {
 // What the builder offers — and what it refuses to offer.
 // ---------------------------------------------------------------------------
 
-test("engagement recency is not offered as a condition — it resolves on neither engine", async () => {
+test("engagement recency is hidden on the GSI deployment", async () => {
   render(<Segments org="acme" />);
   const picker = await screen.findByLabelText("Condition type");
   const offered = Array.from(picker.querySelectorAll("option")).map((o) => o.textContent);
@@ -64,6 +61,20 @@ test("engagement recency is not offered as a condition — it resolves on neithe
   // `last_open_at` condition, under any label.
   expect(offered.join(" ").toLowerCase()).not.toContain("open");
   expect(offered.join(" ").toLowerCase()).not.toContain("engagement");
+});
+
+test("engagement recency is offered and normalized on OpenSearch", async () => {
+  vi.spyOn(api, "orgMeta").mockResolvedValue({ orgId: "acme", segmentEngine: "opensearch" } as never);
+  render(<Segments org="acme" />);
+  const picker = await screen.findByLabelText("Condition type");
+  expect(Array.from(picker.querySelectorAll("option")).map((o) => o.textContent)).toContain("Last opened");
+  const user = userEvent.setup();
+  await user.selectOptions(picker, "last_open_at");
+  await user.selectOptions(screen.getByLabelText("Recency operator"), "before");
+  await user.type(screen.getByLabelText("Recency date"), "2026-01-01T00:00");
+  expect(toPredicate([{ ...newRow("last_open_at"), op: "before", value: "2026-01-01T00:00" }])).toEqual({
+    match: "all", conditions: [{ field: "last_open_at", op: "before", value: new Date("2026-01-01T00:00").toISOString() }],
+  });
 });
 
 test("the list condition is a picker of real lists, not a typed id", async () => {
@@ -150,10 +161,8 @@ test("the advanced editor opens seeded from the builder, and can come back", asy
   expect(screen.getByLabelText("Condition type")).toBeInTheDocument();
 });
 
-test("editing a predicate the builder cannot express opens the raw editor, not lossy rows", async () => {
-  // An engagement-recency predicate stored before this builder existed. Showing
-  // it as rows would drop the condition the builder has no control for, and
-  // saving would rewrite the segment into a different audience.
+test("editing a predicate the GSI builder cannot express opens the raw editor, not lossy rows", async () => {
+  vi.spyOn(api, "orgMeta").mockResolvedValue({ orgId: "acme", segmentEngine: "gsi" } as never);
   vi.spyOn(api, "segments").mockResolvedValue([
     {
       orgId: "acme", segmentId: "lapsed", name: "Lapsed",

@@ -23,6 +23,7 @@ import {
   sendCampaign,
   recordOpen,
   recordClick,
+  subscriberTimeline,
   buildClickMap,
   redactToken,
   type EmailTemplate,
@@ -145,6 +146,88 @@ test("signup → double opt-in → send, and the magic-link token verifies", asy
   assert.equal(claims.entitlement, "free");
 });
 
+test("a recurring series fill replaces the authored ad fallback at send time", async () => {
+  const h = await harness();
+  const r = await signup(h.stores, h.confirmSigner, h.clock, {
+    orgId: ORG,
+    email: "series@example.com",
+    listId: LIST,
+    attributes: { first_name: "Series" },
+  });
+  await confirmOptIn(h.stores, h.confirmSigner, h.clock, r.confirmationToken);
+  await h.stores.series.put({
+    orgId: ORG,
+    seriesId: "weekly-ledger",
+    name: "Weekly Ledger",
+    cadence: "weekly",
+    templateId: "ledger-template",
+    adSlotFills: [{
+      slot: "ad_top",
+      html: '<a href="https://sponsor.example/series">series sponsor</a>',
+      binding: { kind: "series", seriesId: "weekly-ledger" },
+      version: 1,
+    }],
+    aggregate: {
+      sent: 0, delivered: 0, opens: 0, clicks: 0, bounces: 0,
+      complaints: 0, unsubscribes: 0, rejects: 0, renderingFailures: 0,
+      deliveryDelays: 0,
+    },
+  });
+
+  const out = await sendCampaign(h.stores, h.sender, undefined, h.clock, {
+    orgId: ORG,
+    campaignId: "weekly-ledger-2026-09-15",
+    seriesId: "weekly-ledger",
+    listId: LIST,
+    subject: "Weekly Ledger",
+    template,
+  });
+  assert.equal(out.sent, 1);
+  const html = need(h.sender.sent[0], "series message sent").html;
+  assert.match(html, /sponsor\.example\/series/);
+  assert.doesNotMatch(html, /li\.example\/c\.png/);
+});
+
+test("a recurring series fill replaces a raw HTML slot marker", async () => {
+  const h = await harness();
+  const r = await signup(h.stores, h.confirmSigner, h.clock, {
+    orgId: ORG,
+    email: "raw-series@example.com",
+    listId: LIST,
+  });
+  await confirmOptIn(h.stores, h.confirmSigner, h.clock, r.confirmationToken);
+  await h.stores.series.put({
+    orgId: ORG,
+    seriesId: "raw-weekly",
+    name: "Raw weekly",
+    cadence: "weekly",
+    templateId: "raw-template",
+    adSlotFills: [{
+      slot: "ad_top",
+      html: "<aside>raw series sponsor</aside>",
+      binding: { kind: "series", seriesId: "raw-weekly" },
+      version: 1,
+    }],
+    aggregate: {
+      sent: 0, delivered: 0, opens: 0, clicks: 0, bounces: 0,
+      complaints: 0, unsubscribes: 0, rejects: 0, renderingFailures: 0,
+      deliveryDelays: 0,
+    },
+  });
+
+  await sendCampaign(h.stores, h.sender, undefined, h.clock, {
+    orgId: ORG,
+    campaignId: "raw-weekly-2026-09-15",
+    seriesId: "raw-weekly",
+    listId: LIST,
+    subject: "Raw weekly",
+    template: { html: "<main>{{ ad_top }}</main>" },
+  });
+  const html = need(h.sender.sent[0], "raw series message sent").html;
+  assert.match(html, /<aside>raw series sponsor<\/aside>/);
+  assert.doesNotMatch(html, /ad_top/);
+});
+
 test("verifier rejects wrong audience, tampering, and algorithm confusion", async () => {
   const h = await harness();
   const token = await h.magic.mint({ orgId: ORG, sub: "abc", externalId: "pool-abc", entitlement: "paid" });
@@ -209,6 +292,11 @@ test("click map aggregates by link-id and the token is redacted at rest", async 
   });
   await confirmOptIn(h.stores, h.confirmSigner, h.clock, r.confirmationToken);
   await linkPoolAccount(h.stores, r.subscriber.sub);
+  await h.stores.campaigns.put({
+    orgId: ORG, campaignId: "c3", type: "one_off", subject: "x", templateId: "t",
+    audience: { listId: LIST }, status: "sent",
+    counters: { sent: 0, delivered: 0, opens: 0, clicks: 0, bounces: 0, complaints: 0, unsubscribes: 0, rejects: 0, renderingFailures: 0, deliveryDelays: 0 },
+  });
   await sendCampaign(h.stores, h.sender, h.magic, h.clock, {
     orgId: ORG,
     campaignId: "c3",
@@ -222,6 +310,7 @@ test("click map aggregates by link-id and the token is redacted at rest", async 
   assert.equal(redactToken(clickedUrl), ARTICLE);
 
   await recordOpen(h.stores, h.clock, ORG, "c3", r.subscriber.sub);
+  assert.equal((await h.stores.subscribers.get(ORG, r.subscriber.sub))?.lastOpenedAt, h.clock.now().toISOString());
   const linkId = await recordClick(h.stores, h.clock, {
     orgId: ORG,
     campaignId: "c3",
@@ -235,6 +324,9 @@ test("click map aggregates by link-id and the token is redacted at rest", async 
   const row = need(map.rows.find((x) => x.linkId === "l0"), "l0 row");
   assert.equal(row.clicks, 1);
   assert.equal(row.unique, 1);
+  const timeline = await subscriberTimeline(h.stores, ORG, r.subscriber.sub);
+  assert.equal(timeline.events.length, 3);
+  assert.deepEqual(new Set(timeline.events.map((e) => e.type)), new Set(["click", "open", "sent"]));
 
   // No persisted event may contain a token.
   const events = await h.stores.events.all(ORG, "c3");

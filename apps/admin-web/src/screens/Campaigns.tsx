@@ -17,7 +17,7 @@ import { useMemo, useState } from "react";
 import { useAsync } from "../useAsync.js";
 import { relativeTime } from "../time.js";
 import { can, type Grant } from "../rbac.js";
-import { api, type CampaignRow, type SendScheduleState } from "../api.js";
+import { api, scheduleHasSent, type CampaignRow, type SendScheduleState } from "../api.js";
 
 /**
  * The two state machines this screen shows at once.
@@ -177,9 +177,14 @@ function StatusPill({ status }: { status: string }) {
   );
 }
 
+/** COMPLETED gets its own colour here for the same reason it does on Schedules
+ *  (#263): "it sent" and "I filed it away" are different answers, and this
+ *  table is the other place an operator scans for what is still pending. */
 function LifecyclePill({ status }: { status: SendScheduleState["status"] }) {
-  const color = status === "active" ? "#1b7a3d" : status === "paused" ? "#7a4d00" : "#555";
-  const bg = status === "active" ? "#d7f0df" : status === "paused" ? "#ffe8a3" : "#e2e2e2";
+  const color =
+    status === "active" ? "#1b7a3d" : status === "paused" ? "#7a4d00" : status === "completed" ? "#2a4b8d" : "#555";
+  const bg =
+    status === "active" ? "#d7f0df" : status === "paused" ? "#ffe8a3" : status === "completed" ? "#dde5f6" : "#e2e2e2";
   return (
     <span style={{ padding: "2px 8px", borderRadius: 4, fontSize: 11, fontWeight: 700, color, background: bg }}>
       {status.toUpperCase()}
@@ -367,8 +372,13 @@ export function Campaigns({ org, grant, onCompose }: { org: string; grant: Grant
                         <span className="muted">read-only</span>
                       ) : (
                         <span style={{ display: "flex", gap: 6 }}>
-                          <button className="btn ghost" disabled={s.status === "active" || !!busy} onClick={() => void act(s.scheduleId, "start")}>Start</button>
-                          <button className="btn ghost" disabled={s.status !== "active" || !!busy} onClick={() => void act(s.scheduleId, "pause")}>Pause</button>
+                          {/* Same gate as Schedules (#263): the domain refuses
+                              start and pause on a one-off that has already
+                              sent, so offering them here implies a send that
+                              has not gone out. This table carries the same
+                              controls, so it needs the same rule. */}
+                          <button className="btn ghost" disabled={s.status === "active" || scheduleHasSent(s) || !!busy} onClick={() => void act(s.scheduleId, "start")}>Start</button>
+                          <button className="btn ghost" disabled={s.status !== "active" || scheduleHasSent(s) || !!busy} onClick={() => void act(s.scheduleId, "pause")}>Pause</button>
                           <button className="btn ghost" disabled={s.status === "archived" || !!busy} onClick={() => void act(s.scheduleId, "archive")}>Archive</button>
                         </span>
                       )}

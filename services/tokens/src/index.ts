@@ -42,7 +42,10 @@ export async function handler(event: JwksEvent) {
     };
   }
 
-  const jwks = await provider.jwks(org.magicLink.kmsKeyArn, org.magicLink.kid);
+  const keys = org.magicLink.keys?.length
+    ? org.magicLink.keys
+    : [{ kmsKeyArn: org.magicLink.kmsKeyArn, kid: org.magicLink.kid }];
+  const jwks = await provider.jwks(keys);
   return {
     statusCode: 200,
     headers: { "content-type": "application/json", "cache-control": "public, max-age=300" },

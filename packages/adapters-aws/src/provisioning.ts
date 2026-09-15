@@ -6,7 +6,7 @@
  * Public-key export → JWKS is the tokens service's job (KmsJwksProvider); here
  * we just mint the key + kid.
  */
-import { KMSClient, CreateKeyCommand, CreateAliasCommand } from "@aws-sdk/client-kms";
+import { KMSClient, CreateKeyCommand, CreateAliasCommand, UpdateAliasCommand } from "@aws-sdk/client-kms";
 import {
   SESv2Client,
   CreateEmailIdentityCommand,
@@ -69,6 +69,26 @@ export class AwsProvisioningProviders implements ProvisioningProviders {
   }
 
   async createSigningKey(orgId: string): Promise<SigningKey> {
+    const key = await this.createSigningKeyWithoutAlias(orgId);
+    await this.kms.send(
+      new CreateAliasCommand({ AliasName: `alias/addressium-${orgId}-magiclink`, TargetKeyId: key.kid }),
+    );
+    // kid is the key id; the JWKS publishes the public half under this kid.
+    return key;
+  }
+
+  async rotateSigningKey(orgId: string): Promise<SigningKey> {
+    const key = await this.createSigningKeyWithoutAlias(orgId);
+    await this.kms.send(
+      new UpdateAliasCommand({
+        AliasName: `alias/addressium-${orgId}-magiclink`,
+        TargetKeyId: key.kid,
+      }),
+    );
+    return key;
+  }
+
+  private async createSigningKeyWithoutAlias(orgId: string): Promise<SigningKey> {
     const res = await this.kms.send(
       new CreateKeyCommand({
         KeySpec: "ECC_NIST_P256",
@@ -83,10 +103,6 @@ export class AwsProvisioningProviders implements ProvisioningProviders {
     const arn = res.KeyMetadata?.Arn;
     const keyId = res.KeyMetadata?.KeyId;
     if (!arn || !keyId) throw new Error("KMS did not return a key");
-    await this.kms.send(
-      new CreateAliasCommand({ AliasName: `alias/addressium-${orgId}-magiclink`, TargetKeyId: keyId }),
-    );
-    // kid is the key id; the JWKS publishes the public half under this kid.
     return { kmsKeyArn: arn, kid: keyId };
   }
 

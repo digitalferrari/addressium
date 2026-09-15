@@ -1,9 +1,10 @@
 # @addressium/subscriber-web
 
 Subscriber-facing site (React + Vite SPA): newsletter directory (themed by the
-org's **branding** #31, honoring per-list **presentation toggles** #33), double
-opt-in confirm landing, and one-click unsubscribe. Branding is applied as CSS
-variables at load. Builds to the public S3 + CloudFront distribution.
+org's **branding** #31, honoring per-list **presentation toggles** #33), signed
+preference centre, double opt-in confirm landing, and one-click unsubscribe.
+Branding is applied as CSS variables at load. Builds to the public S3 +
+CloudFront distribution.
 
 ## Dev
 ```

@@ -7,8 +7,9 @@
  * Athena tier, which is off by default (`enableAnalytics`); this endpoint is the
  * low-latency dashboard read and never depends on it.
  */
-import { DynamoStores } from "@addressium/adapters-aws";
-import { SystemClock, buildCampaignReport, meterOrgUsage, recordUsage, usagePeriodOf } from "@addressium/domain";
+import { DynamoStores, S3ArchiveWriter } from "@addressium/adapters-aws";
+import type { EngagementEvent, HotCounters } from "@addressium/core";
+import { SystemClock, buildCampaignReport, deliverabilityRates, meterOrgUsage, recordUsage, usagePeriodOf } from "@addressium/domain";
 import { authorize, grantFromClaims } from "@addressium/rbac";
 
 const clock = new SystemClock();
@@ -26,7 +27,173 @@ export interface ReportEvent {
   pathParameters?: { org?: string; campaign?: string } | null;
   orgId?: string;
   campaignId?: string;
+  queryStringParameters?: Record<string, string | undefined> | null;
   requestContext?: { authorizer?: { jwt?: { claims?: Record<string, string> } } };
+}
+
+export interface TrendPoint {
+  date: string;
+  sent: number;
+  delivered: number;
+  opens: number;
+  clicks: number;
+  bounces: number;
+  complaints: number;
+  openRate: number;
+  clickRate: number;
+}
+
+export interface TrendSummary {
+  subscriberCount: number;
+  current: { emailsSent: number; openRate: number; clickRate: number };
+  previous: { emailsSent: number; openRate: number; clickRate: number };
+}
+
+const TREND_TYPES = ["sent", "delivered", "open", "click", "bounce", "complaint"] as const;
+
+/** Aggregate real event timestamps into daily, unique-engagement trend points. */
+export function aggregateTrends(events: EngagementEvent[], from: string, through: string): TrendPoint[] {
+  const points = new Map<string, {
+    sent: number; delivered: number; bounces: number; complaints: number;
+    opens: Set<string>; clicks: Set<string>;
+  }>();
+  for (let cursor = new Date(`${from}T00:00:00.000Z`); cursor <= new Date(`${through}T00:00:00.000Z`); cursor.setUTCDate(cursor.getUTCDate() + 1)) {
+    points.set(cursor.toISOString().slice(0, 10), { sent: 0, delivered: 0, bounces: 0, complaints: 0, opens: new Set(), clicks: new Set() });
+  }
+  for (const event of events) {
+    if (!TREND_TYPES.includes(event.type as (typeof TREND_TYPES)[number])) continue;
+    const date = event.at.slice(0, 10);
+    const point = points.get(date);
+    if (!point) continue;
+    switch (event.type) {
+      case "sent": point.sent++; break;
+      case "delivered": point.delivered++; break;
+      case "bounce": point.bounces++; break;
+      case "complaint": point.complaints++; break;
+      case "open": point.opens.add(event.subscriberId); break;
+      case "click": point.clicks.add(event.subscriberId); break;
+    }
+  }
+  return [...points].map(([date, point]) => ({
+    date,
+    sent: point.sent,
+    delivered: point.delivered,
+    opens: point.opens.size,
+    clicks: point.clicks.size,
+    bounces: point.bounces,
+    complaints: point.complaints,
+    openRate: point.sent > 0 ? point.opens.size / point.sent : 0,
+    clickRate: point.sent > 0 ? point.clicks.size / point.sent : 0,
+  }));
+}
+
+function summarizeWindow(events: EngagementEvent[], from: string, through: string) {
+  const inWindow = events.filter((event) => {
+    const day = event.at.slice(0, 10);
+    return day >= from && day <= through;
+  });
+  const sent = inWindow.filter((event) => event.type === "sent").length;
+  const opens = new Set(inWindow.filter((event) => event.type === "open").map((event) => event.subscriberId)).size;
+  const clicks = new Set(inWindow.filter((event) => event.type === "click").map((event) => event.subscriberId)).size;
+  return {
+    emailsSent: sent,
+    openRate: sent > 0 ? opens / sent : 0,
+    clickRate: sent > 0 ? clicks / sent : 0,
+  };
+}
+
+/** GET daily event trends for the selected org. The event log is the source of truth. */
+export async function trendsHandler(event: ReportEvent) {
+  const orgId = event.pathParameters?.org ?? event.orgId;
+  if (!orgId) return { statusCode: 400, headers: {}, body: JSON.stringify({ error: "org required" }) };
+  try {
+    authorize(grantFromClaims(event.requestContext?.authorizer?.jwt?.claims ?? {}), "reports:view", orgId);
+  } catch (e) {
+    const msg = (e as Error).message;
+    return { statusCode: msg.startsWith("Forbidden") ? 403 : 400, headers: {}, body: JSON.stringify({ error: msg }) };
+  }
+  const rawDays = Number(event.queryStringParameters?.days ?? "30");
+  const days = Number.isInteger(rawDays) && rawDays >= 1 && rawDays <= 90 ? rawDays : 30;
+  const through = clock.now().toISOString().slice(0, 10);
+  const fromDate = new Date(`${through}T00:00:00.000Z`);
+  fromDate.setUTCDate(fromDate.getUTCDate() - days + 1);
+  const from = fromDate.toISOString().slice(0, 10);
+  const previousThroughDate = new Date(`${from}T00:00:00.000Z`);
+  previousThroughDate.setUTCDate(previousThroughDate.getUTCDate() - 1);
+  const previousThrough = previousThroughDate.toISOString().slice(0, 10);
+  const previousFromDate = new Date(`${previousThrough}T00:00:00.000Z`);
+  previousFromDate.setUTCDate(previousFromDate.getUTCDate() - days + 1);
+  const previousFrom = previousFromDate.toISOString().slice(0, 10);
+  const events: EngagementEvent[] = [];
+  for (const campaign of await stores().campaigns.list(orgId)) {
+    events.push(...await stores().events.all(orgId, campaign.campaignId));
+  }
+  let subscriberCount = 0;
+  for await (const _subscriber of stores().subscribers.stream(orgId)) subscriberCount++;
+  const summary: TrendSummary = {
+    subscriberCount,
+    current: summarizeWindow(events, from, through),
+    previous: summarizeWindow(events, previousFrom, previousThrough),
+  };
+  return {
+    statusCode: 200,
+    headers: { "content-type": "application/json", "cache-control": "private, max-age=60" },
+    body: JSON.stringify({ orgId, from, through, days, points: aggregateTrends(events, from, through), summary }),
+  };
+}
+
+export interface SeriesReportEvent extends ReportEvent {
+  pathParameters?: { org?: string; campaign?: string; series?: string } | null;
+  seriesId?: string;
+}
+
+function addCounters(total: HotCounters, next: HotCounters): HotCounters {
+  return {
+    sent: total.sent + next.sent,
+    delivered: total.delivered + next.delivered,
+    opens: total.opens + next.opens,
+    clicks: total.clicks + next.clicks,
+    bounces: total.bounces + next.bounces,
+    complaints: total.complaints + next.complaints,
+    unsubscribes: total.unsubscribes + next.unsubscribes,
+    rejects: total.rejects + next.rejects,
+    renderingFailures: total.renderingFailures + next.renderingFailures,
+    deliveryDelays: total.deliveryDelays + next.deliveryDelays,
+  };
+}
+
+/** Aggregate the durable edition rows belonging to a recurring series. */
+export async function seriesReportHandler(event: SeriesReportEvent) {
+  const orgId = event.pathParameters?.org;
+  const seriesId = event.pathParameters?.series ?? event.seriesId;
+  if (!orgId || !seriesId) {
+    return { statusCode: 400, headers: {}, body: JSON.stringify({ error: "org and series required" }) };
+  }
+  try {
+    authorize(grantFromClaims(event.requestContext?.authorizer?.jwt?.claims ?? {}), "reports:view", orgId);
+  } catch (e) {
+    const msg = (e as Error).message;
+    return { statusCode: msg.startsWith("Forbidden") ? 403 : 400, headers: {}, body: JSON.stringify({ error: msg }) };
+  }
+  const editions = (await stores().campaigns.list(orgId))
+    .filter((campaign) => campaign.type === "series_edition" && campaign.seriesId === seriesId && campaign.campaignId !== seriesId)
+    .sort((a, b) => b.campaignId.localeCompare(a.campaignId));
+  let aggregate: HotCounters = {
+    sent: 0, delivered: 0, opens: 0, clicks: 0, bounces: 0, complaints: 0,
+    unsubscribes: 0, rejects: 0, renderingFailures: 0, deliveryDelays: 0,
+  };
+  for (const edition of editions) aggregate = addCounters(aggregate, edition.counters);
+  return {
+    statusCode: 200,
+    headers: { "content-type": "application/json", "cache-control": "private, max-age=15" },
+    body: JSON.stringify({
+      orgId,
+      seriesId,
+      editions: editions.map((edition) => ({ campaignId: edition.campaignId, subject: edition.subject, status: edition.status, counters: edition.counters })),
+      aggregate,
+      rates: deliverabilityRates(aggregate),
+    }),
+  };
 }
 
 export async function handler(event: ReportEvent) {
@@ -50,6 +217,50 @@ export async function handler(event: ReportEvent) {
     statusCode: 200,
     headers: { "content-type": "application/json", "cache-control": "private, max-age=15" },
     body: JSON.stringify(report),
+  };
+}
+
+function decorateArchive(html: string, rows: Array<{ linkId: string; clicks: number; unique: number }>): string {
+  const counts = new Map(rows.map((row) => [row.linkId, row]));
+  const decorated = html.replace(
+    /(<a\b[^>]*data-linkid=["'](l\d+)["'][^>]*>[\s\S]*?<\/a>)/gi,
+    (whole, _unused, linkId: string) => {
+      const row = counts.get(linkId);
+      if (!row) return whole;
+      return `${whole}<span class="addressium-click-badge">${row.clicks} clicks · ${row.unique} unique</span>`;
+    },
+  );
+  return `<!doctype html><html><head><meta charset="utf-8"><style>
+    body{font-family:system-ui,sans-serif;max-width:760px;margin:24px auto;padding:0 20px;color:#18212f;line-height:1.5}
+    .addressium-click-badge{display:inline-block;margin:0 0 0 8px;padding:2px 7px;border-radius:999px;background:#e5efff;color:#2457a6;font:12px system-ui,sans-serif;vertical-align:middle}
+  </style></head><body>${decorated}</body></html>`;
+}
+
+/** Authenticated preview of the generic campaign body with click counts attached. */
+export async function archiveHandler(event: ReportEvent) {
+  const orgId = event.pathParameters?.org ?? event.orgId;
+  const campaignId = event.pathParameters?.campaign ?? event.campaignId;
+  if (!orgId || !campaignId) {
+    return { statusCode: 400, headers: {}, body: JSON.stringify({ error: "org and campaign required" }) };
+  }
+  try {
+    authorize(grantFromClaims(event.requestContext?.authorizer?.jwt?.claims ?? {}), "reports:view", orgId);
+  } catch (e) {
+    const msg = (e as Error).message;
+    return { statusCode: msg.startsWith("Forbidden") ? 403 : 400, headers: {}, body: JSON.stringify({ error: msg }) };
+  }
+  const bucket = process.env.ARCHIVE_BUCKET;
+  if (!bucket) return { statusCode: 503, headers: {}, body: JSON.stringify({ error: "archive preview unavailable" }) };
+  const s = stores();
+  const archive = await s.archive.get(orgId, campaignId);
+  if (!archive) return { statusCode: 404, headers: {}, body: JSON.stringify({ error: "campaign archive not found" }) };
+  const html = await new S3ArchiveWriter(bucket).get(archive.s3Key);
+  if (html === undefined) return { statusCode: 404, headers: {}, body: JSON.stringify({ error: "campaign body not found" }) };
+  const report = await buildCampaignReport(s, orgId, campaignId);
+  return {
+    statusCode: 200,
+    headers: { "content-type": "application/json", "cache-control": "private, max-age=15" },
+    body: JSON.stringify({ html: decorateArchive(html, report.clickMap.rows) }),
   };
 }
 

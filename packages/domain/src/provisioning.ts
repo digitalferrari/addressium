@@ -78,6 +78,8 @@ export interface ProvisioningProviders {
   /** Validate the operator's pool and return its id. Never creates a pool. */
   linkSubscriberPool(orgId: string, spec: SubscriberPoolSpec): Promise<{ poolId: string }>;
   createSigningKey(orgId: string): Promise<SigningKey>;
+  /** Create and make a new key current, retaining the old key for verification. */
+  rotateSigningKey?(orgId: string): Promise<SigningKey>;
   /**
    * @param dedicatedIpPoolName an SES pool the OPERATOR created (#237). Assigned
    * to both configuration sets when present; addressium never creates one.
@@ -235,6 +237,7 @@ export async function provisionOrganization(
       kid: key.kid,
       issuer: `https://${input.siteDomain}/${orgId}`,
       audience: input.siteDomain,
+      keys: [{ kmsKeyArn: key.kmsKeyArn, kid: key.kid }],
     };
   }
   const ses = await providers.ensureSesDomainIdentity(orgId, input.primaryDomain, input.dedicatedIpPoolName);

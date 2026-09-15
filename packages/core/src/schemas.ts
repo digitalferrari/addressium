@@ -642,3 +642,44 @@ export const createOrgSchema = z
     }
   });
 export type CreateOrgInput = z.infer<typeof createOrgSchema>;
+
+// ---- API keys (#280) ----
+
+/**
+ * A key's permission set (§4.12, #280). Mirrors `ApiKeyScope` in entities.ts as
+ * a closed zod enum, so an unknown scope is refused at the boundary rather than
+ * stored and silently never matched.
+ */
+export const apiKeyScope = z.enum([
+  "subscribers:read",
+  "subscribers:write",
+  "entitlement:write",
+  "campaigns:read",
+  "suppression:write",
+]);
+
+/**
+ * Issue one API key.
+ *
+ * `keyId` is `idSchema` for the same reason every other tenant id is: it becomes
+ * a DynamoDB sort key (`APIKEY#<keyId>`), and an unvalidated one could shape the
+ * key rather than occupy it.
+ *
+ * At least one scope is required. A key scoped to nothing is a credential that
+ * authenticates and then may do nothing — it reads as a broken integration
+ * rather than a deliberate one, exactly as `assertGrantable` argues for a member
+ * scoped to no org. `.min(1)` here is a ZodError (a generic 400); the duplicate
+ * check lives in `issueApiKey` as an `InvalidInputError` so the operator reads
+ * WHICH scope repeated.
+ */
+export const issueApiKeySchema = z.object({
+  orgId: idSchema,
+  keyId: idSchema,
+  name: z.string().min(1).max(120),
+  scopes: z.array(apiKeyScope).min(1),
+});
+export type IssueApiKeyInput = z.infer<typeof issueApiKeySchema>;
+
+/** Revoke one API key. Revocation keeps the row — see `ApiKeyStore`. */
+export const revokeApiKeySchema = z.object({ orgId: idSchema, keyId: idSchema });
+export type RevokeApiKeyInput = z.infer<typeof revokeApiKeySchema>;

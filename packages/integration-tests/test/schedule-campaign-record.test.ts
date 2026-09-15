@@ -37,7 +37,7 @@ import type { AddressInfo } from "node:net";
 import { DynamoDBClient, CreateTableCommand } from "@aws-sdk/client-dynamodb";
 import type { Campaign, Organization } from "@addressium/core";
 import { DynamoStores } from "@addressium/adapters-aws";
-import { memStores, SystemClock, recordScheduledCampaign, type CampaignScheduler, type SendDescriptor } from "@addressium/domain";
+import { memStores, SystemClock, recordScheduledCampaign, recordSeriesEdition, type CampaignScheduler, type SendDescriptor } from "@addressium/domain";
 
 const require = createRequire(import.meta.url);
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -368,12 +368,39 @@ test("with the record present, engagement events actually move the stored counte
   assert.equal(campaign.counters.delivered, 1);
   assert.equal(campaign.counters.opens, 1);
 
-  // The control: the same three events under a record-less id move nothing, which
-  // is the deliberate behaviour for recurring editions and drip steps and must
-  // survive this fix.
+  // The control: an arbitrary unknown id still cannot resurrect a campaign row.
+  // Recurring editions now create their own durable rows before enqueueing, so
+  // this deliberately uses an id that no scheduler could have authored.
   for (const [i, type] of (["sent", "delivered", "open"] as const).entries()) {
-    await mem.events.append({ orgId: ORG, campaignId: "live-counters-2026091413", subscriberId: "s1", type, at, eventId: `x${i}` });
+    await mem.events.append({ orgId: ORG, campaignId: "unknown-campaign-id", subscriberId: "s1", type, at, eventId: `x${i}` });
   }
-  assert.equal(await mem.campaigns.get(ORG, "live-counters-2026091413"), undefined, "an edition id must stay record-less");
-  assert.equal((await mem.events.all(ORG, "live-counters-2026091413")).length, 3, "...while its events are still kept");
+  assert.equal(await mem.campaigns.get(ORG, "unknown-campaign-id"), undefined, "an unknown id must stay record-less");
+  assert.equal((await mem.events.all(ORG, "unknown-campaign-id")).length, 3, "...while its events are still kept");
+});
+
+test("a recurring edition is durably tied to its parent series for aggregation", async () => {
+  const mem = memStores();
+  await mem.campaigns.put({
+    orgId: ORG,
+    campaignId: "weekly-ledger",
+    type: "series_edition",
+    seriesId: "weekly-ledger",
+    subject: "Weekly ledger",
+    templateId: "newsletter",
+    audience: { listId: LIST },
+    status: "scheduled",
+    counters: { sent: 0, delivered: 0, opens: 0, clicks: 0, bounces: 0, complaints: 0, unsubscribes: 0, rejects: 0, renderingFailures: 0, deliveryDelays: 0 },
+  });
+  await recordSeriesEdition(mem, {
+    orgId: ORG,
+    seriesId: "weekly-ledger",
+    campaignId: "weekly-ledger-2026091512",
+    subject: "Markets rally",
+    listId: LIST,
+  });
+  await mem.events.append({ orgId: ORG, campaignId: "weekly-ledger-2026091512", subscriberId: "s1", type: "sent", at: "2026-09-15T12:00:00.000Z", eventId: "edition-sent" });
+  const edition = await mem.campaigns.get(ORG, "weekly-ledger-2026091512");
+  assert.equal(edition?.type, "series_edition");
+  assert.equal(edition?.seriesId, "weekly-ledger");
+  assert.equal(edition?.counters.sent, 1);
 });

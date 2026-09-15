@@ -99,13 +99,20 @@ test("the router declares no handler for a route CDK never registers", () => {
  * - `POST /orgs` — `services/provisioning`, which holds `kms:CreateKey` and
  *   `ses:CreateEmailIdentity`. Folding it into the consolidated API function
  *   would put those grants behind every admin route.
+ * - `POST /orgs/{org}/identity/rotate-key` — the same provisioning service,
+ *   because rotation needs its KMS create/update-alias grant.
  * - the JWKS route — `services/tokens`, which holds `kms:GetPublicKey`.
  * - report and usage — `services/reporting`.
+ * - trends — `services/reporting` reads the append-only event log across campaigns.
  */
 const SERVED_BY_ANOTHER_SERVICE = new Set([
   "POST /orgs",
+  "POST /orgs/{org}/identity/rotate-key",
   "GET /orgs/{org}/.well-known/jwks.json",
   "GET /orgs/{org}/campaigns/{campaign}/report",
+  "GET /orgs/{org}/analytics/trends",
+  "GET /orgs/{org}/series/{series}/report",
+  "GET /orgs/{org}/campaigns/{campaign}/archive",
   "GET /orgs/{org}/usage",
   "GET /orgs/{org}/usage/{period}",
 ]);

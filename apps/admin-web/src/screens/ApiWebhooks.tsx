@@ -1,4 +1,16 @@
-export function ApiWebhooks() {
+/**
+ * API & webhooks — the integration boundary between this organization and
+ * everything outside it.
+ *
+ * Three things, in the order an operator cares about them: the inbound webhooks
+ * that already ship, the API keys they can now issue (#280), and the outbound
+ * customer-record delivery boundary. The latter is configured in Settings so
+ * this page explains the contract without creating a second configuration writer.
+ */
+import { ApiKeys } from "./ApiKeys.js";
+import type { Grant } from "../rbac.js";
+
+export function ApiWebhooks({ org, grant }: { org: string; grant: Grant | null }) {
   return (
     <div>
       <div className="pagehead">
@@ -15,12 +27,32 @@ export function ApiWebhooks() {
           <div className="kpi"><div className="n">POST</div><div className="l">/webhooks/entitlement</div></div>
           <div className="kpi"><div className="n">POST</div><div className="l">/webhooks/identity</div></div>
         </div>
-        <p className="muted" style={{ marginBottom: 0 }}>Signatures are verified server-side before either event can change subscriber state.</p>
+        <p className="muted" style={{ marginBottom: 0 }}>
+          Signatures are verified server-side before either event can change subscriber state. These
+          are authenticated by their HMAC signature, not by an API key — issuing or revoking a key
+          below does not affect them.
+        </p>
       </div>
 
-      <div className="card" style={{ borderColor: "var(--warn)", background: "var(--warn-soft)" }}>
-        <strong>Outbound webhooks are not in v1</strong>
-        <p className="muted">There is no delivery queue, retry policy, dead-letter queue or signing configuration to expose yet. API-key management is also planned for a later wave and is not represented by a non-functional control.</p>
+      <ApiKeys org={org} grant={grant} />
+
+      <div className="card">
+        <div className="cardhead" style={{ margin: "-18px -18px 16px" }}><h2>Outbound customer updates</h2><span className="pill p-good">Built</span></div>
+        <p className="muted">
+          Addressium can notify your external customer-record system when a subscriber confirms or
+          ends a newsletter subscription. Configure the HTTPS endpoint, external table name, and
+          delivery secret in <b>Settings → Customer sync</b>.
+        </p>
+        <p className="muted" style={{ marginBottom: 0 }}>
+          Delivery is asynchronous through a FIFO queue with retries and a dead-letter queue, so a
+          customer-system outage does not block signup or unsubscribe. The current contract uses the
+          configured secret as a basic credential; HMAC signing, rotation, and replay protection
+          remain intentionally deferred under #267.
+        </p>
+        <p className="muted" style={{ marginBottom: 0 }}>
+          API keys above are key <b>management</b> only: no route in this build is authenticated by
+          one, and their scopes do not gate the operator console.
+        </p>
       </div>
     </div>
   );

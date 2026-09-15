@@ -6,6 +6,7 @@
  */
 import type {
   AlertConfig,
+  ApiKey,
   Campaign,
   CampaignSeries,
   DripSequence,
@@ -54,6 +55,8 @@ export interface SendDescriptor {
   template: EmailTemplate;
   /** Values resolved once for the campaign, such as fields from a feed edition. */
   campaignAttributes?: Record<string, string>;
+  /** Parent series for a recurring edition; absent for one-off sends. */
+  seriesId?: string;
   /**
    * Narrow this send to a segment's members (#203). The list still selects the
    * base set — a segment targets WITHIN a list, and the list is what carries the
@@ -248,6 +251,8 @@ export interface SubscriberStore {
    * only — opens don't count. No-op if the subscriber is unknown. O(1) update.
    */
   markEngaged(orgId: string, sub: string, at: string): Promise<void>;
+  /** Advance open recency for segmentation only; opens do not drive re-engagement. */
+  markOpened(orgId: string, sub: string, at: string): Promise<void>;
 }
 
 export interface SubscriptionStore {
@@ -500,6 +505,41 @@ export interface MergeTagStore {
   put(t: MergeTag): Promise<void>;
   list(orgId: string): Promise<MergeTag[]>;
   delete(orgId: string, name: string): Promise<void>;
+}
+
+/**
+ * Issued machine credentials (#280). Identity is `(orgId, keyId)`.
+ *
+ * NOTHING HERE STORES A PLAINTEXT KEY. `ApiKey.keyHash` is a SHA-256 digest, and
+ * the plaintext exists only in the return value of `issueApiKey`, once.
+ *
+ * `findByHash` is the reason this store has a method the other registries do
+ * not. A caller presenting a key knows the key and nothing else — not the org,
+ * not the keyId — so verification has to resolve a digest to a record WITHOUT an
+ * org partition to query. Implementations therefore maintain a second,
+ * org-independent lookup keyed by the digest; `put` writes both halves and
+ * `delete` removes both. An implementation that satisfies `get`/`list` but lets
+ * `findByHash` drift is one where a revoked key still authenticates, so the
+ * Dynamo integration test asserts the pair specifically.
+ *
+ * REVOCATION IS NOT DELETION. `revokeApiKey` stamps `revokedAt` and leaves the
+ * row, because "who held a credential, and when was it cut off" is the question
+ * an operator asks after an incident, and a deleted row cannot answer it.
+ * `list` therefore returns revoked keys too — the console labels them — and
+ * `authenticateApiKey` is what refuses them. `delete` exists for erasure-style
+ * cleanup, not for the console's Revoke button.
+ *
+ * Missing record: `get` and `findByHash` resolve to `undefined` rather than
+ * throwing, matching every other store here.
+ */
+export interface ApiKeyStore {
+  get(orgId: string, keyId: string): Promise<ApiKey | undefined>;
+  /** Resolve a key by its SHA-256 digest, across orgs. See the note above. */
+  findByHash(keyHash: string): Promise<ApiKey | undefined>;
+  put(k: ApiKey): Promise<void>;
+  /** Every key the org has ever been issued, revoked ones included. */
+  list(orgId: string): Promise<ApiKey[]>;
+  delete(orgId: string, keyId: string): Promise<void>;
 }
 
 /** Drip/journey sequence definitions (§4.6). */
@@ -777,6 +817,8 @@ export interface Stores {
   templates: TemplateStore;
   /** Org-defined merge tags (§4.15); reserved names are not stored, they are merged in on read. */
   mergeTags: MergeTagStore;
+  /** Issued machine credentials (#280). Hashed at rest; revoked rows are kept. */
+  apiKeys: ApiKeyStore;
   alerts: AlertConfigStore;
   usage: UsageStore;
   segments: SegmentStore;

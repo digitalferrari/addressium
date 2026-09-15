@@ -104,6 +104,36 @@ export interface CampaignReport {
   rates: { openRate: number; clickRate: number; bounceRate: number; complaintRate: number };
   clickMap: { sent: number; rows: ClickMapRow[] };
 }
+export interface SeriesReport {
+  orgId: string;
+  seriesId: string;
+  editions: Array<{ campaignId: string; subject: string; status: string; counters: CampaignReport["counters"] }>;
+  aggregate: CampaignReport["counters"];
+  rates: CampaignReport["rates"];
+}
+export interface TrendPoint {
+  date: string;
+  sent: number;
+  delivered: number;
+  opens: number;
+  clicks: number;
+  bounces: number;
+  complaints: number;
+  openRate: number;
+  clickRate: number;
+}
+export interface AnalyticsTrends {
+  orgId: string;
+  from: string;
+  through: string;
+  days: number;
+  points: TrendPoint[];
+  summary?: {
+    subscriberCount: number;
+    current: { emailsSent: number; openRate: number; clickRate: number };
+    previous: { emailsSent: number; openRate: number; clickRate: number };
+  };
+}
 
 export interface UsageRecord {
   period: string;
@@ -150,7 +180,15 @@ export interface OrgMeta {
   domains?: string[];
   /** True when this org mints magic-link tokens (it has a signing key). */
   magicLinkEnabled?: boolean;
+  /** Segment resolver selected by deployment: GSI or the OpenSearch mirror. */
+  segmentEngine?: "gsi" | "opensearch";
   /** Configured AI analytics provider (vendor + model only; key never echoed) — #144. */
+}
+
+export interface SearchResult {
+  kind: "newsletters" | "campaigns" | "drips" | "templates" | "segments";
+  id: string;
+  label: string;
 }
 
 /**
@@ -178,6 +216,8 @@ export type OrgIdentity = {
         kid: string;
         issuer: string;
         audience: string;
+        keyCount: number;
+        rotatedAt?: string;
         jwksPath: string;
       };
 };
@@ -272,6 +312,10 @@ export interface Feed {
   targetListId: string;
   fieldMap: Record<string, string>;
   pullIntervalMins: number;
+  lastPulledAt?: string;
+  lastItemCount?: number;
+  lastStatus?: "ok" | "error";
+  lastError?: string;
 }
 export interface SaveFeedBody {
   orgId: string;
@@ -331,6 +375,52 @@ export interface SaveMergeTagBody {
   scope: MergeTagScope;
   example?: string;
   fallback?: string;
+}
+
+// ---- API keys (#280) ----
+
+/** Mirrors `ApiKeyScope` in `@addressium/core`. A closed set — the server refuses anything else. */
+export type ApiKeyScope =
+  | "subscribers:read"
+  | "subscribers:write"
+  | "entitlement:write"
+  | "campaigns:read"
+  | "suppression:write";
+
+/**
+ * One issued key as the API returns it. NOTE WHAT IS ABSENT: the plaintext key
+ * and its SHA-256 digest. Neither ever crosses this boundary after issuance —
+ * `displayPrefix` is the only part of the secret a screen can render, which is
+ * why the Key column shows that and not a masked full value it does not have.
+ *
+ * `lastUsedAt` absent means the key has genuinely never been presented to
+ * `POST /api-keys/verify`, the one route that records a use. It is not a
+ * loading state and must never be rendered as a guess.
+ */
+export interface ApiKeyEntry {
+  orgId: string;
+  keyId: string;
+  name: string;
+  scopes: ApiKeyScope[];
+  displayPrefix: string;
+  createdAt: string;
+  createdBy?: string;
+  revokedAt?: string;
+  lastUsedAt?: string;
+  revoked: boolean;
+}
+
+/** The ONE response carrying a plaintext key. There is no way to fetch it again. */
+export interface IssuedApiKey {
+  key: ApiKeyEntry;
+  plaintext: string;
+}
+
+export interface IssueApiKeyBody {
+  orgId: string;
+  keyId: string;
+  name: string;
+  scopes: ApiKeyScope[];
 }
 
 /** What POST /lists requires. Mirrors `createListSchema` — CAN-SPAM makes the
@@ -393,7 +483,27 @@ export interface SendScheduleState {
   orgId: string;
   scheduleId: string;
   kind: "one_off" | "recurring";
-  status: "active" | "paused" | "archived";
+  /**
+   * `"completed"` is terminal and one-off-only (#263): the sender records it
+   * once the full recipient range has gone out. This mirror carried only the
+   * three operator-driven states, so a fired one-off arrived as a status the
+   * console had no case for and fell through to the ACTIVE-vs-not branches —
+   * a green badge and a live Start button on a send that already happened.
+   * `schedulesListHandler` returns the stored record verbatim, so the server
+   * has been sending `"completed"` since the domain side shipped.
+   */
+  status: "active" | "paused" | "archived" | "completed";
+  /**
+   * Recipient key ranges the sender has finished. A single `{}` means the whole
+   * send is covered — which is what `status: "completed"` is written FROM.
+   *
+   * Mirrored because `status` alone does not answer "has this already sent".
+   * `completeScheduleRange` deliberately preserves `archived` over `completed`
+   * (archiving is an operator decision the sender must not overwrite), so a
+   * one-off archived mid-send lands on full ranges with `status: "archived"` —
+   * and the domain refuses start/pause on THAT too. See `scheduleHasSent`.
+   */
+  completedRanges?: Array<{ after?: string; until?: string }>;
   cron?: string;
   timezone?: string;
   /**
@@ -409,6 +519,28 @@ export interface SendScheduleState {
   sendAt?: string;
   createdAt: string;
   updatedAt: string;
+}
+
+/**
+ * Has this one-off already sent? (#263)
+ *
+ * Mirrors the rule `transitionSchedule` and `markScheduleActive` enforce in
+ * `packages/domain/src/schedule-state.ts`, which is TWO conditions, not one:
+ * `status === "completed"` OR a `completedRanges` entry covering the whole key
+ * space. The second is not redundant — `completeScheduleRange` writes
+ * `complete && status !== "archived" ? "completed" : status`, deliberately
+ * letting an operator's archive stand, so a one-off archived mid-send finishes
+ * with full ranges and `status: "archived"`. Gating on the status alone would
+ * leave Start live on that row and the server would answer with the
+ * `InvalidInputError` #263 is about: a control implying an action it cannot
+ * perform.
+ *
+ * This only HIDES controls. Server-side RBAC and these same domain checks are
+ * the boundary; the console mirrors them so it does not offer a refused action.
+ */
+export function scheduleHasSent(s: Pick<SendScheduleState, "status" | "completedRanges">): boolean {
+  if (s.status === "completed") return true;
+  return !!s.completedRanges?.some((r) => r.after === undefined && r.until === undefined);
 }
 
 export interface CampaignRow {
@@ -496,6 +628,17 @@ export interface SubscriberDetail {
   lists: SubscriberListState[];
   segments: { segmentId: string; name: string }[];
   suppressed: boolean;
+}
+export interface SubscriberTimelineEvent {
+  campaignId: string;
+  subject: string;
+  type: string;
+  at: string;
+  linkId?: string;
+}
+export interface SubscriberTimeline {
+  events: SubscriberTimelineEvent[];
+  hasMore: boolean;
 }
 
 export interface SuppressionEntry {
@@ -668,6 +811,9 @@ export interface ImportBatch {
   updated: number;
   subscriptionsCreated: number;
   rowCount: number;
+  status?: "running" | "completed" | "failed";
+  finishedAt?: string;
+  error?: string;
 }
 export interface ImportBatchDetail {
   batch: ImportBatch;
@@ -695,6 +841,12 @@ export interface NewListDefaults {
   fromAddress: string;
   complianceFooter: string;
   physicalAddress: string;
+}
+
+export interface ImportUploadTicket {
+  batchId: string;
+  key: string;
+  url: string;
 }
 
 export interface TeamMemberRow {
@@ -779,6 +931,27 @@ export const api = {
     newListDefaults?: NewListDefaults;
     dryRun?: boolean;
   }) => call<MappedImportReport>("POST", `/orgs/${orgId}/import/mapped`, body),
+  importUploadUrl: (orgId: string) =>
+    call<ImportUploadTicket>("POST", `/orgs/${orgId}/import/upload-url`, {}),
+  importUploadPreview: (orgId: string, batchId: string, consentBasis?: "explicit" | "implicit") =>
+    call<ImportPreview>("POST", `/orgs/${orgId}/import/upload-preview`, { batchId, consentBasis }),
+  importAsync: (orgId: string, body: {
+    batchId: string;
+    plan: MappingPlan;
+    status?: "confirmed" | "pending";
+    sourceFile?: string;
+    newListDefaults?: NewListDefaults;
+  }) => call<{ batchId: string; status: "running" }>("POST", `/orgs/${orgId}/import/async`, body),
+  uploadImportFile: async (orgId: string, file: File): Promise<ImportUploadTicket> => {
+    const ticket = await call<ImportUploadTicket>("POST", `/orgs/${orgId}/import/upload-url`, {});
+    const response = await fetch(ticket.url, {
+      method: "PUT",
+      headers: { "content-type": file.type || "application/octet-stream" },
+      body: file,
+    });
+    if (!response.ok) throw new Error(`PUT import file → ${response.status}`);
+    return ticket;
+  },
   /**
    * The WORM audit log (#191). `"GLOBAL"` reads the cross-org scope — org
    * creation and pool linking, which belong to no single org.
@@ -799,7 +972,10 @@ export const api = {
   saveReengagement: (body: ReengagementPolicy & { orgId: string }) =>
     call<{ configured: boolean; policy: ReengagementPolicy }>("POST", `/orgs/reengagement`, body),
   orgMeta: (org: string) => call<OrgMeta>("GET", `/orgs/${org}`),
+  search: (org: string, q: string) => call<{ results: SearchResult[] }>("GET", `/orgs/${org}/search?q=${encodeURIComponent(q)}`),
   orgIdentity: (org: string) => call<OrgIdentity>("GET", `/orgs/${org}/identity`),
+  rotateMagicLinkKey: (org: string) =>
+    call<{ orgId: string; kid: string; keyCount: number; rotatedAt: string }>("POST", `/orgs/${org}/identity/rotate-key`, { action: "rotateMagicLinkKey" }),
   /**
    * Live SES verification + sandbox state (#285). Every call is a fresh read of
    * SES, and deliberately so: this is the one readout whose whole value is that
@@ -849,6 +1025,8 @@ export const api = {
   /** The full subscriber record: attributes, per-list status, segments (#205). */
   subscriber: (org: string, sub: string) =>
     call<SubscriberDetail>("GET", `/orgs/${org}/subscribers/${encodeURIComponent(sub)}`),
+  subscriberTimeline: (org: string, sub: string) =>
+    call<SubscriberTimeline>("GET", `/orgs/${org}/subscribers/${encodeURIComponent(sub)}/timeline`),
   setSubscriberAttributes: (orgId: string, sub: string, attributes: Record<string, string>) =>
     call<SubscriberDetail>("POST", `/subscribers/attributes`, { orgId, sub, attributes }),
   /**
@@ -898,6 +1076,14 @@ export const api = {
   saveMergeTag: (body: SaveMergeTagBody) => call<MergeTagEntry>("POST", `/merge-tags`, body),
   deleteMergeTag: (orgId: string, name: string) =>
     call<{ deleted: string }>("POST", `/merge-tags/delete`, { orgId, name }),
+  apiKeys: (org: string) => call<ApiKeyEntry[]>("GET", `/orgs/${org}/api-keys`),
+  /** The plaintext in the response is shown once and is not retrievable again. */
+  issueApiKey: (body: IssueApiKeyBody) => call<IssuedApiKey>("POST", `/api-keys`, body),
+  revokeApiKey: (orgId: string, keyId: string) =>
+    call<ApiKeyEntry>("POST", `/api-keys/revoke`, { orgId, keyId }),
+  /** Admin-gated. Succeeds only for a live key of this org, and RECORDS the use. */
+  verifyApiKey: (orgId: string, key: string) =>
+    call<ApiKeyEntry>("POST", `/api-keys/verify`, { orgId, key }),
   scheduleCampaign: (body: ScheduleCampaignBody) => call<ScheduleResult>("POST", `/campaigns/schedule`, body),
   scheduleLifecycle: (orgId: string, scheduleId: string, action: "start" | "pause" | "archive") =>
     call<SendScheduleState>("POST", `/campaigns/lifecycle`, { orgId, scheduleId, action }),
@@ -907,6 +1093,9 @@ export const api = {
   setVisibility: (orgId: string, listId: string, visibility: "open" | "closed") =>
     call<unknown>("POST", `/lists/visibility`, { orgId, listId, visibility }),
   report: (org: string, campaign: string) => call<CampaignReport>("GET", `/orgs/${org}/campaigns/${campaign}/report`),
+  analyticsTrends: (org: string, days = 30) => call<AnalyticsTrends>("GET", `/orgs/${org}/analytics/trends?days=${days}`),
+  archive: (org: string, campaign: string) => call<{ html: string }>("GET", `/orgs/${org}/campaigns/${campaign}/archive`),
+  seriesReport: (org: string, series: string) => call<SeriesReport>("GET", `/orgs/${org}/series/${series}/report`),
   getBranding: (org: string) => call<Branding | null>("GET", `/orgs/${org}/branding`),
   setBranding: (orgId: string, branding: Branding) => call<Branding>("POST", `/orgs/branding`, { orgId, branding }),
   setPresentation: (orgId: string, listId: string, presentation: ListPresentation) =>

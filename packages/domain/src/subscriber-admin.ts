@@ -52,6 +52,19 @@ export interface SubscriberDetail {
   suppressed: boolean;
 }
 
+export interface SubscriberTimelineEvent {
+  campaignId: string;
+  subject: string;
+  type: string;
+  at: string;
+  linkId?: string;
+}
+
+export interface SubscriberTimeline {
+  events: SubscriberTimelineEvent[];
+  hasMore: boolean;
+}
+
 /**
  * The full record behind one row of the Subscribers screen (#205).
  *
@@ -108,6 +121,38 @@ export async function subscriberDetail(
       subscriber.status === "suppressed" ||
       (await stores.suppression.isSuppressed(orgId, subscriber.email)),
   };
+}
+
+/**
+ * Return the recent engagement history for one subscriber without exposing
+ * another subscriber's event rows. Events are stored by campaign, so this is a
+ * bounded fan-out over the org's campaigns; the admin view caps the result and
+ * explicitly says when older rows were omitted.
+ */
+export async function subscriberTimeline(
+  stores: Stores,
+  orgId: string,
+  sub: string,
+  limit = 100,
+): Promise<SubscriberTimeline> {
+  const subscriber = await stores.subscribers.get(orgId, sub);
+  if (!subscriber) throw new InvalidInputError(`unknown subscriber ${sub}`);
+  const campaigns = await stores.campaigns.list(orgId);
+  const rows: SubscriberTimelineEvent[] = [];
+  for (const campaign of campaigns) {
+    for (const event of await stores.events.all(orgId, campaign.campaignId)) {
+      if (event.subscriberId !== sub) continue;
+      rows.push({
+        campaignId: event.campaignId,
+        subject: campaign.subject,
+        type: event.type,
+        at: event.at,
+        ...(event.linkId ? { linkId: event.linkId } : {}),
+      });
+    }
+  }
+  rows.sort((a, b) => b.at.localeCompare(a.at));
+  return { events: rows.slice(0, limit), hasMore: rows.length > limit };
 }
 
 /**

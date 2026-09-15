@@ -5,8 +5,8 @@ import { useAsync } from "../useAsync.js";
 const FIELDS = ["title", "link", "description", "date", "author", "content"];
 
 function parseFieldMap(value: string): Record<string, string> {
-  return Object.fromEntries(value.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).map((line) => {
-    const [field, tag] = line.split("=").map((part) => part?.trim() ?? "");
+  return Object.fromEntries(value.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).map((line): [string, string] => {
+    const [field = "", tag = ""] = line.split("=").map((part) => part.trim());
     return [field, tag];
   }).filter(([field, tag]) => FIELDS.includes(field) && /^[a-z0-9][a-z0-9_-]*$/.test(tag)));
 }
@@ -27,7 +27,14 @@ export function Feeds({ org }: { org: string }) {
   const [message, setMessage] = useState("");
   const [localFeeds, setLocalFeeds] = useState<Feed[] | undefined>();
 
-  useEffect(() => { setForm((current) => ({ ...current, orgId: org })); }, [org]);
+  // Clearing localFeeds is load-bearing, not tidiness: it holds the PREVIOUS
+  // org's list after a save, and it wins over feeds.data — so without this the
+  // table renders org A's feeds under org B's header after an org switch.
+  useEffect(() => { setLocalFeeds(undefined); setForm((current) => ({ ...current, orgId: org })); }, [org]);
+
+  const rows = localFeeds ?? feeds.data ?? [];
+  const listName = (listId: string) =>
+    (lists.data ?? []).find((list) => list.listId === listId)?.name ?? listId;
 
   const begin = (feed?: Feed) => {
     const next = feed ?? { ...form, orgId: org, targetListId: lists.data?.[0]?.listId ?? "" };
@@ -68,11 +75,35 @@ export function Feeds({ org }: { org: string }) {
       <div style={{ display: "flex", gap: 8 }}><button className="btn" onClick={() => void save()}>Save feed</button><button className="btn ghost" onClick={() => setShowForm(false)}>Cancel</button></div>
     </div>}
     {feeds.loading && <p className="muted">Loading feeds…</p>}
-    {!feeds.loading && (localFeeds ?? feeds.data ?? []).length === 0 && !showForm && <div className="card muted">No feeds configured yet.</div>}
-    {(localFeeds ?? feeds.data ?? []).map((feed) => <div className="card" key={feed.feedId}>
-      <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}><div><h2 style={{ marginTop: 0 }}>{feed.feedId}</h2><p className="muted">{feed.url}</p></div><button className="btn ghost" onClick={() => begin(feed)}>Edit</button></div>
-      <p>{feed.format.toUpperCase()} · suggested pull every {feed.pullIntervalMins} minutes · newsletter <code>{feed.targetListId}</code></p>
-      <p className="muted">{Object.entries(feed.fieldMap).map(([field, tag]) => `${field} → {{${tag}}}`).join(" · ") || "No field mappings"}</p>
-    </div>)}
+    {feeds.error && <p className="err">{feeds.error}</p>}
+    {!feeds.loading && !feeds.error && rows.length === 0 && !showForm && <div className="card muted">No feeds configured yet.</div>}
+    {rows.length > 0 && <div className="card" style={{ padding: 0, overflowX: "auto" }}>
+      <table className="table">
+        <thead><tr><th>Feed</th><th>Maps to</th><th>Last pulled</th><th>Items</th><th>Status</th><th /></tr></thead>
+        <tbody>{rows.map((feed) => <tr key={feed.feedId}>
+          <td>
+            <b>{feed.feedId}</b>
+            <div className="muted" style={{ wordBreak: "break-all" }}>{feed.format.toUpperCase()} · {feed.url}</div>
+          </td>
+          <td>
+            {listName(feed.targetListId)}
+            <div className="muted">{Object.entries(feed.fieldMap ?? {}).map(([field, tag]) => `${field} → {{${tag}}}`).join(" · ") || "No field mappings"}</div>
+          </td>
+          <td className="muted">{feed.lastPulledAt ? new Date(feed.lastPulledAt).toLocaleString() : "Not pulled yet"}</td>
+          <td className="muted">{feed.lastItemCount ?? "—"}</td>
+          <td>
+            {!feed.lastStatus && <span className="muted">Not pulled yet</span>}
+            {feed.lastStatus === "ok" && <span className="pill">OK</span>}
+            {feed.lastStatus === "error" && <span className="pill" style={{ color: "#b42318", background: "#fee4e2" }} title={feed.lastError}>Error</span>}
+          </td>
+          <td><button className="btn ghost" onClick={() => begin(feed)}>Edit</button></td>
+        </tr>)}</tbody>
+      </table>
+    </div>}
+    {rows.length > 0 && <p className="muted">
+      These values come from the most recent recurring campaign launch that referenced the
+      feed. A feed is not pulled merely by saving it; attach it to a recurring campaign to
+      start recording runs.
+    </p>}
   </div>;
 }

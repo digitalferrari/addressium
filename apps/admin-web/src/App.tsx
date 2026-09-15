@@ -168,7 +168,7 @@ function Console() {
         onSignOut={() => { logout(); location.reload(); }}
       />
       <main className="main">
-        <Topbar orgName={orgName} org={org} view={view} orgEnv={orgEnv} claims={claims} />
+        <Topbar orgName={orgName} org={org} view={view} orgEnv={orgEnv} claims={claims} onNavigate={setView} />
         <div className="view" key={view}>
         {view === "dashboard" && (<><HealthBadge org={org} /><Dashboard org={org} onGoToSetup={() => setView("setup")} onCompose={() => setView("compose")} onViewCampaigns={() => setView("campaigns")} /></>)}
         {view === "setup" && <Setup org={org} />}
@@ -186,7 +186,7 @@ function Console() {
         {view === "suppression" && <Suppression org={org} />}
         {view === "feeds" && <Feeds org={org} />}
         {view === "adtags" && <AdTags org={org} />}
-        {view === "apiwebhooks" && <ApiWebhooks />}
+        {view === "apiwebhooks" && <ApiWebhooks org={org} grant={grant} />}
         {view === "segments" && <Segments org={org} />}
         {view === "importmap" && <ImportMapper org={org} />}
         {view === "import" && <ImportSubscribers org={org} />}

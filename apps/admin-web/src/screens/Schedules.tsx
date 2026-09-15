@@ -1,12 +1,12 @@
 /**
  * Schedules — start, pause, archive. Exported for `Schedules.test.tsx` (#248,
- * file #263): whether a sent one-off still reads ACTIVE is a property of this
+ * #263): whether a sent one-off still reads ACTIVE is a property of this
  * component's rendering, not of `api.ts`.
  */
 import { useEffect, useState } from "react";
 import { relativeTime } from "../time.js";
 import { can, type Grant } from "../rbac.js";
-import { api, type SendScheduleState } from "../api.js";
+import { api, scheduleHasSent, type SendScheduleState } from "../api.js";
 
 /**
  * When a row fires: a one-off's send time, a series' cron (#248).
@@ -61,10 +61,18 @@ export function Schedules({ org, grant }: { org: string; grant: Grant | null }) 
     }
   };
 
+  /**
+   * COMPLETED is its own colour, not the grey `archived` shares (#263). Both
+   * are terminal, but they answer different questions: archived is "the
+   * operator put it away", completed is "it sent". Rendering them alike would
+   * leave the one state an operator most wants to spot — the send that already
+   * went out — indistinguishable from one they filed themselves.
+   */
   const badge = (s: SendScheduleState["status"]) => {
     const color =
-      s === "active" ? "#1b7a3d" : s === "paused" ? "#7a4d00" : "#555";
-    const bg = s === "active" ? "#d7f0df" : s === "paused" ? "#ffe8a3" : "#e2e2e2";
+      s === "active" ? "#1b7a3d" : s === "paused" ? "#7a4d00" : s === "completed" ? "#2a4b8d" : "#555";
+    const bg =
+      s === "active" ? "#d7f0df" : s === "paused" ? "#ffe8a3" : s === "completed" ? "#dde5f6" : "#e2e2e2";
     return (
       <span style={{ padding: "2px 8px", borderRadius: 4, fontSize: 11, fontWeight: 700, color, background: bg }}>
         {s.toUpperCase()}
@@ -104,8 +112,19 @@ export function Schedules({ org, grant }: { org: string; grant: Grant | null }) 
                   <td>
                     {canManage ? (
                       <span style={{ display: "flex", gap: 6 }}>
-                        <button className="btn ghost" disabled={r.status === "active" || !!busy} onClick={() => act(r.scheduleId, "start")}>Start</button>
-                        <button className="btn ghost" disabled={r.status !== "active" || !!busy} onClick={() => act(r.scheduleId, "pause")}>Pause</button>
+                        {/* A one-off that has sent can only be archived (#263).
+                            `transitionSchedule` rejects start and pause on it
+                            with an InvalidInputError, so leaving Start live
+                            offered a restart the server was always going to
+                            refuse — and worse, implied the send had not gone
+                            out. `scheduleHasSent`, not `status === "completed"`:
+                            an archived-mid-send one-off finishes with full
+                            ranges and keeps `archived`. Archive stays enabled —
+                            it is the one transition the domain still allows,
+                            and it is how a fired one-off leaves the list an
+                            operator scans for what is still pending. */}
+                        <button className="btn ghost" disabled={r.status === "active" || scheduleHasSent(r) || !!busy} onClick={() => act(r.scheduleId, "start")}>Start</button>
+                        <button className="btn ghost" disabled={r.status !== "active" || scheduleHasSent(r) || !!busy} onClick={() => act(r.scheduleId, "pause")}>Pause</button>
                         <button className="btn ghost" disabled={r.status === "archived" || !!busy} onClick={() => act(r.scheduleId, "archive")}>Archive</button>
                       </span>
                     ) : (

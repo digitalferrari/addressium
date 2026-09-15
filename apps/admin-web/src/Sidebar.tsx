@@ -6,10 +6,10 @@
  *
  * The nav is a capability-filtered list of the 22 views the console actually
  * has, grouped five ways to match the design. It is NOT the prototype's list:
- * `demo/index.html` advertises screens this build has no code for (API &
- * outbound webhooks), and a nav row that
- * leads nowhere is worse than an absent one. Every entry below resolves to a
- * real `View` in App.tsx's switch.
+ * Every entry below resolves to a real `View` in App.tsx's switch. The API &
+ * webhooks page documents the inbound contracts, API-key management, and the
+ * configured outbound customer-sync boundary; its broader public API remains
+ * tracked separately rather than being implied by the page.
  */
 import { can, type Capability, type Grant } from "./rbac.js";
 

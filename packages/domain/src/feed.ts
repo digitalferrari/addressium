@@ -221,7 +221,7 @@ export interface RecurringLaunchPayload {
   /** Base descriptor: list, fallback subject/template, and the campaign-id stem. */
   descriptor: SendDescriptor;
   /** Optional feed the edition is built from on each firing. */
-  feed?: { url: string; format: FeedFormat; fieldMap?: Record<string, string> };
+  feed?: { feedId?: string; url: string; format: FeedFormat; fieldMap?: Record<string, string> };
   /** Stable per-firing key (e.g. the scheduled date) → idempotent edition id. */
   editionKey: string;
 }

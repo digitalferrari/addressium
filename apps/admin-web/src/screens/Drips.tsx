@@ -415,10 +415,14 @@ function EnrollCard({
 
       <label style={{ marginTop: 12 }}>Subscriber</label>
       <div style={{ display: "flex", gap: 8 }}>
+        {/* Enter resets exactly as Find does, `setConfirming(false)` included: a
+            new search drops the pick, and an armed confirmation whose subscriber
+            has gone renders NEITHER button — `!confirming` hides "Enroll →", and
+            `confirming && picked` hides the confirm pair. */}
         <input
           value={q}
           onChange={(e) => setQ(e.target.value)}
-          onKeyDown={(e) => { if (e.key === "Enter") { setPicked(null); setQuery(q.trim()); } }}
+          onKeyDown={(e) => { if (e.key === "Enter") { setPicked(null); setConfirming(false); setQuery(q.trim()); } }}
           placeholder="Email starts with…"
           style={{ flex: 1 }}
           disabled={!allowed || busy}

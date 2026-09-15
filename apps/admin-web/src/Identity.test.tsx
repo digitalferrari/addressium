@@ -13,6 +13,7 @@ test("Identity describes and copies the organization's own JWKS URL", async () =
     orgId: "acme", subscriberPoolId: "subscriber-pool",
     magicLink: {
       enabled: true, jwksPath: "/orgs/acme/.well-known/jwks.json", kid: "key-1",
+      keyCount: 1,
       kmsKeyArn: "arn:aws:kms:us-east-1:123456789012:key/key-1", issuer: "acme", audience: "readers",
     },
   });

@@ -102,11 +102,11 @@ Cognito permission at all. The provisioner's grant is three enumerated actions,
 narrowed to exact pool ARNs when the operator names them at deploy time, with an
 explicit `Deny` on the admin pool. There is no subscriber login at all,
 and r2 does not call for one — the pool is the org's, not ours. The subscriber
-SPA surface is four unauthenticated routes: directory, subscribe-to-all, confirm
-and unsubscribe, the last two reached by signed token. The tokenized
-**preference centre** API is built (#74): `POST /preferences/request` issues a
-signed, `manage`-scoped link and `GET`/`POST /preferences` sit behind it with
-enumeration-safe 202s; the preference page in the SPA is still pending. The
+SPA surface is five unauthenticated routes: directory, subscribe-to-all,
+preferences, confirm and unsubscribe; the tokenized routes are reached by
+signed token. The tokenized **preference centre** is built (#74):
+`POST /preferences/request` issues a signed, `manage`-scoped link and
+`GET`/`POST /preferences` sit behind it with enumeration-safe 202s. The
 wider unauthenticated surface — signup, webhooks, JWKS, directory, branding,
 preferences — is enumerated in ARCHITECTURE §4.3.
 

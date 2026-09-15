@@ -3,6 +3,12 @@ import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { api, type AdminList, type ListPresentation } from "./api.js";
 import { PresentationEditor } from "./screens/PresentationEditor.js";
+// The real constant `publicListView` renders for a list with no `presentation`,
+// imported rather than restated so the editor's local mirror cannot drift from
+// it silently. Note this resolves to `@addressium/domain`'s BUILT output, so it
+// catches drift on a full `npm test` (which builds first) rather than the
+// instant the domain source is edited.
+import { UNCONFIGURED_PRESENTATION } from "@addressium/domain";
 
 const TOGGLES: ListPresentation = {
   showFrequency: true,
@@ -45,12 +51,32 @@ test("saving a checkbox change does not materialize absent labels (#262)", async
   expect(save.mock.calls[0]![2]).not.toHaveProperty("sendTimeLabel");
 });
 
+test("saving an untouched unconfigured list writes what it already renders (#262)", async () => {
+  const { user, save } = await mount();
+  // The form shows the real unconfigured state, not a more generous default.
+  expect(screen.getByLabelText("Show frequency")).not.toBeChecked();
+  expect(screen.getByLabelText("Show send time")).not.toBeChecked();
+  expect(screen.getByLabelText("Show description")).toBeChecked();
+  await user.click(screen.getByRole("button", { name: "Save toggles" }));
+  await waitFor(() => expect(save).toHaveBeenCalledWith("acme", "weekly", UNCONFIGURED_PRESENTATION));
+});
+
 test("saving a list with no presentation does not save example labels", async () => {
   const { user, save } = await mount();
   await user.click(screen.getByRole("button", { name: "Save toggles" }));
+  await waitFor(() => expect(save).toHaveBeenCalled());
+  expect(save.mock.calls[0]![2]).not.toHaveProperty("frequencyLabel");
+  expect(save.mock.calls[0]![2]).not.toHaveProperty("sendTimeLabel");
+});
+
+test("unchecking a saved toggle saves it off rather than dropping it as unset", async () => {
+  // The booleans are object-keyed, not presence-keyed: an unchecked box is a
+  // real `false` the operator chose, and must round-trip as one.
+  const { user, save } = await mount(TOGGLES);
+  await user.click(screen.getByLabelText("Show frequency"));
+  await user.click(screen.getByRole("button", { name: "Save toggles" }));
   await waitFor(() => expect(save).toHaveBeenCalledWith("acme", "weekly", {
-    showFrequency: true, showSendTime: true, showDescription: true,
-    showReaderCount: false, showFreePaidCount: false,
+    ...TOGGLES, showFrequency: false,
   }));
 });
 

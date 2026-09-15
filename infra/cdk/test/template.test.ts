@@ -29,7 +29,12 @@ function template(
   props: Record<string, unknown> = {},
   context: Record<string, unknown> = {},
 ): Template {
-  const app = new App({ context: { "aws:cdk:bundling-stacks": [], ...context } });
+  const app = new App({
+    // Template assertions inspect CloudFormation resources, never staged
+    // Lambda assets. Disabling staging keeps this suite independent of Docker
+    // and avoids hashing/copying every handler directory during construction.
+    context: { "aws:cdk:bundling-stacks": [], "aws:cdk:disable-asset-staging": true, ...context },
+  });
   const stack = new ControlPlaneStack(app, "test-stack", {
     stage: "dev",
     adminEmails: ["ops@example.com"],
@@ -801,7 +806,7 @@ test("a prod stack refuses cdk destroy; a dev stack does not (#190)", () => {
   // tears down the API, the queues and the schedules — an outage, and not
   // something anyone should reach by running the wrong command in the wrong
   // terminal.
-  const app = new App({ context: { "aws:cdk:bundling-stacks": [] } });
+  const app = new App({ context: { "aws:cdk:bundling-stacks": [], "aws:cdk:disable-asset-staging": true } });
   const base = {
     adminEmails: ["ops@example.com"],
     adminHostedUiDomainPrefix: "addressium-admin",
@@ -1700,8 +1705,14 @@ test("the async import job reads S3 itself, with time to finish (#242)", () => {
     k.startsWith("ImportBucket"),
   );
   assert.ok(buckets, "no import bucket");
-  const rules = (buckets[1].Properties as {
+  const bucketProps = (buckets[1].Properties as {
     LifecycleConfiguration?: { Rules: { ExpirationInDays?: number }[] };
-  }).LifecycleConfiguration?.Rules;
+    CorsConfiguration?: { CorsRules?: { AllowedMethods?: string[] }[] };
+  });
+  const rules = bucketProps.LifecycleConfiguration?.Rules;
   assert.ok(rules?.some((r) => (r.ExpirationInDays ?? 0) > 0), "import files are kept for ever");
+  assert.ok(
+    bucketProps.CorsConfiguration?.CorsRules?.some((r) => r.AllowedMethods?.includes("PUT")),
+    "the browser cannot upload to the presigned import URL",
+  );
 });

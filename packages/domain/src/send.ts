@@ -28,7 +28,7 @@ import type {
   Stores,
 } from "./ports.js";
 import { mergeTagFallbacks } from "./merge-tags.js";
-import { buildLinkMap, plainTextFrom, renderForRecipient, type EmailTemplate } from "./render.js";
+import { applySeriesAdFills, buildLinkMap, plainTextFrom, renderForRecipient, type EmailTemplate } from "./render.js";
 import { completeScheduleRange, deferSend, scheduleActive } from "./schedule-state.js";
 
 /** Alias kept for readability; a campaign send takes a SendDescriptor. */
@@ -56,6 +56,8 @@ export interface SendOptions {
    * descriptor carries a segment — see `segmentRecipients`.
    */
   segments?: SegmentResolver;
+  /** Writes the generic rendered body used by the authenticated click-map view. */
+  archiveBody?: { put(key: string, html: string): Promise<void> };
 }
 
 /**
@@ -577,9 +579,6 @@ export async function sendCampaign(
 ): Promise<SendResult> {
   const list = await stores.lists.get(input.orgId, input.listId);
   if (!list) throw new Error("unknown list");
-  if (templateIsEmpty(input.template)) {
-    throw new Error(`refusing to send empty template for campaign ${input.campaignId}`);
-  }
 
   // Lifecycle gate: a paused or archived one-off never sends (§4.6). Recurring
   // editions carry an edition-stamped id with no schedule record here — they're
@@ -602,14 +601,32 @@ export async function sendCampaign(
         subject: input.subject,
         template: input.template,
         campaignAttributes: input.campaignAttributes,
+        ...(input.seriesId ? { seriesId: input.seriesId } : {}),
       });
     }
     return { sent: 0, suppressed: 0, skipped: true };
   }
 
+  // Series-bound ad fills are resolved after the lifecycle gate so paused or
+  // archived messages do not perform an unnecessary series read. Keep the
+  // descriptor's authored body as the base: a retry should re-read the current
+  // series fill, while the overlay itself remains a pure copy operation.
+  const series = input.seriesId
+    ? await stores.series.get(input.orgId, input.seriesId)
+    : undefined;
+  if (input.seriesId && !series) {
+    throw new Error(`unknown campaign series ${input.seriesId}`);
+  }
+  const template = series
+    ? applySeriesAdFills(input.template, series.adSlotFills)
+    : input.template;
+  if (templateIsEmpty(template)) {
+    throw new Error(`refusing to send empty template for campaign ${input.campaignId}`);
+  }
+
   // Archive the generic body (§4.8) — powers the click overlay. Deterministic
   // put keyed by campaignId, so repeating it across slices is harmless.
-  const linkMap = buildLinkMap(input.template);
+  const linkMap = buildLinkMap(template);
   const archive: EmailArchive = {
     orgId: input.orgId,
     campaignId: input.campaignId,
@@ -617,6 +634,12 @@ export async function sendCampaign(
     linkMap,
   };
   await stores.archive.put(archive);
+  if (opts.archiveBody) {
+    await opts.archiveBody.put(
+      archive.s3Key,
+      renderForRecipient(template, {}, undefined),
+    );
+  }
 
   // Dev orgs gate every recipient against their allowlist (§4.11). One org read
   // per campaign/slice, not per recipient.
@@ -710,7 +733,7 @@ export async function sendCampaign(
       const token = await mintToken(magic, subscriber);
       if (magic && token === undefined) untokenized++;
       const html = renderForRecipient(
-        input.template,
+        template,
         await mergeValues(list, subscriber, opts.unsubscribeLink, fallbacks, input.campaignAttributes),
         token,
       );

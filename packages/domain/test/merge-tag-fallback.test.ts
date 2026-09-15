@@ -99,6 +99,24 @@ async function withFallback(h: Awaited<ReturnType<typeof harness>>, fallback: st
   });
 }
 
+test("a campaign writes a generic archive body with stable click ids", async () => {
+  const h = await harness();
+  await subscriber(h, { first_name: "Jordan" });
+  let archived = "";
+  await sendCampaign(h.stores, h.sender, h.magic, h.clock, {
+    orgId: ORG,
+    campaignId: "archive-c1",
+    listId: LIST,
+    subject: "x",
+    template: { html: '<p>Hi {{first_name}}</p><a href="https://example.com/story">Read</a>' },
+  }, {
+    archiveBody: { put: async (_key, html) => { archived = html; } },
+  });
+  assert.match(archived, /data-linkid="l0"/);
+  assert.match(archived, /Hi <\/p>/); // archive is generic, never a recipient preview
+  assert.doesNotMatch(archived, /Jordan/);
+});
+
 test("a configured fallback renders when the attribute is ABSENT", async () => {
   const h = await harness();
   await withFallback(h, "there");

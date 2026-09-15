@@ -32,9 +32,16 @@ export class KmsJwksProvider {
     this.client = client ?? new KMSClient({});
   }
 
-  async jwks(keyArn: string, kid: string): Promise<{ keys: Jwk[] }> {
-    const res = await this.client.send(new GetPublicKeyCommand({ KeyId: keyArn }));
-    if (!res.PublicKey) throw new Error("KMS returned no public key");
-    return { keys: [spkiDerToJwk(res.PublicKey, kid)] };
+  async jwks(keyArn: string, kid: string): Promise<{ keys: Jwk[] }>;
+  async jwks(keys: Array<{ kmsKeyArn: string; kid: string }>): Promise<{ keys: Jwk[] }>;
+  async jwks(keyOrKeys: string | Array<{ kmsKeyArn: string; kid: string }>, kid?: string): Promise<{ keys: Jwk[] }> {
+    const keys = typeof keyOrKeys === "string" ? [{ kmsKeyArn: keyOrKeys, kid: kid! }] : keyOrKeys;
+    return {
+      keys: await Promise.all(keys.map(async (key) => {
+        const res = await this.client.send(new GetPublicKeyCommand({ KeyId: key.kmsKeyArn }));
+        if (!res.PublicKey) throw new Error("KMS returned no public key");
+        return spkiDerToJwk(res.PublicKey, key.kid);
+      })),
+    };
   }
 }

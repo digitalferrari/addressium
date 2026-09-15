@@ -11,6 +11,7 @@ import {
   KmsMagicLinkSigner,
   OpenSearchQueryClient,
   SesEmailSender,
+  S3ArchiveWriter,
   SqsSendQueue,
   getSecret,
 } from "@addressium/adapters-aws";
@@ -39,6 +40,7 @@ let _stores: DynamoStores | undefined;
 const stores = () => (_stores ??= new DynamoStores(env("TABLE_NAME")));
 let _queue: SqsSendQueue | undefined;
 const queue = () => (_queue ??= new SqsSendQueue(env("SEND_QUEUE_URL")));
+const archiveBody = process.env.ARCHIVE_BUCKET ? new S3ArchiveWriter(process.env.ARCHIVE_BUCKET) : undefined;
 /**
  * Resolves a segment-targeted campaign to its members (#203, #246).
  *
@@ -200,6 +202,7 @@ export async function handler(event: SqsEvent) {
         // Required whenever a descriptor names a segment; `sendCampaign` throws
         // rather than falling back to the whole list if it is missing (#203).
         segments: segments(),
+        archiveBody,
       }),
     );
    } catch (e) {

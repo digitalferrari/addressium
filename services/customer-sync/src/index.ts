@@ -1,15 +1,4 @@
-import { DynamoStores, getSecret } from "@addressium/adapters-aws";
-
-interface CustomerSyncEvent {
-  eventId: string;
-  type: "subscribed" | "unsubscribed";
-  orgId: string;
-  subscriberId: string;
-  externalId: string;
-  email: string;
-  listId: string;
-  occurredAt: string;
-}
+import { DynamoStores, getSecret, type CustomerSyncEvent } from "@addressium/adapters-aws";
 
 interface SqsRecord { messageId?: string; body?: string }
 interface SqsEvent { Records?: SqsRecord[] }

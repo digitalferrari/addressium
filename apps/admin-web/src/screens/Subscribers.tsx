@@ -8,7 +8,7 @@
 import { useEffect, useState } from "react";
 import { useAsync } from "../useAsync.js";
 import { can, type Grant } from "../rbac.js";
-import { api, type SubscriberDetail, type SuppressionCheckResult, type SuppressionImportReport } from "../api.js";
+import { api, type SubscriberDetail, type SubscriberTimeline, type SuppressionCheckResult, type SuppressionImportReport } from "../api.js";
 
 export function Subscribers({ org, grant }: { org: string; grant: Grant | null }) {
   const [q, setQ] = useState("");
@@ -220,6 +220,9 @@ export function Subscribers({ org, grant }: { org: string; grant: Grant | null }
 function SubscriberPanel({ org, sub, onChanged }: { org: string; sub: string; onChanged: () => void }) {
   const [detail, setDetail] = useState<SubscriberDetail | null>(null);
   const [rows, setRows] = useState<Array<{ k: string; v: string }>>([]);
+  const [timeline, setTimeline] = useState<SubscriberTimeline | null>(null);
+  const [timelineLoading, setTimelineLoading] = useState(false);
+  const [timelineMsg, setTimelineMsg] = useState("");
   const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState(false);
   /** Local + live (SES) suppression status for this one address (#247). */
@@ -230,6 +233,8 @@ function SubscriberPanel({ org, sub, onChanged }: { org: string; sub: string; on
   const load = (d: SubscriberDetail) => {
     setDetail(d);
     setRows(Object.entries(d.attributes).map(([k, v]) => ({ k, v })));
+    setTimeline(null);
+    setTimelineMsg("");
   };
 
   useEffect(() => {
@@ -302,6 +307,13 @@ function SubscriberPanel({ org, sub, onChanged }: { org: string; sub: string; on
     finally { setBusy(false); }
   };
 
+  const loadTimeline = async () => {
+    setTimelineLoading(true); setTimelineMsg("");
+    try { setTimeline(await api.subscriberTimeline(org, sub)); }
+    catch (e) { setTimelineMsg(String(e)); }
+    finally { setTimelineLoading(false); }
+  };
+
   if (!detail) {
     return <div className="card muted">{msg ? <span className="err">{msg}</span> : "Loading subscriber…"}</div>;
   }
@@ -315,6 +327,9 @@ function SubscriberPanel({ org, sub, onChanged }: { org: string; sub: string; on
           {detail.lastEngagedAt ? ` · last engaged ${new Date(detail.lastEngagedAt).toLocaleDateString()}` : ""}
         </span>
       </div>
+      <p className="muted" style={{ margin: "4px 0 0" }}>
+        External customer ID: {detail.externalId ?? "not linked"}
+      </p>
       {detail.suppressed && (
         // The single most useful line on this panel: every opt-in below is moot
         // while this is true, and an operator who cannot see it reads the next
@@ -391,6 +406,33 @@ function SubscriberPanel({ org, sub, onChanged }: { org: string; sub: string; on
             {busy ? "Saving…" : "Save attributes"}
           </button>
         </div>
+      </div>
+
+      <div style={{ marginTop: 16 }}>
+        <div className="row" style={{ justifyContent: "space-between" }}>
+          <div>
+            <strong>Engagement timeline</strong>{" "}
+            <span className="muted">opens, clicks and delivery events recorded for this subscriber</span>
+          </div>
+          <button className="btn ghost" disabled={timelineLoading} onClick={() => void loadTimeline()}>
+            {timelineLoading ? "Loading…" : timeline ? "Refresh" : "Load timeline"}
+          </button>
+        </div>
+        {timelineMsg && <p className="err" style={{ margin: "6px 0 0" }}>{timelineMsg}</p>}
+        {timeline && (timeline.events.length === 0 ? <p className="muted">No engagement events recorded.</p> : (
+          <table style={{ marginTop: 8 }}>
+            <thead><tr><th>When</th><th>Event</th><th>Campaign</th><th>Link</th></tr></thead>
+            <tbody>{timeline.events.map((event, i) => (
+              <tr key={`${event.campaignId}-${event.at}-${event.type}-${i}`}>
+                <td>{new Date(event.at).toLocaleString()}</td>
+                <td className="t-strong">{event.type}</td>
+                <td>{event.subject} <span className="muted">({event.campaignId})</span></td>
+                <td>{event.linkId ?? "—"}</td>
+              </tr>
+            ))}</tbody>
+          </table>
+        ))}
+        {timeline?.hasMore && <p className="muted">Showing the 100 most recent events.</p>}
       </div>
 
       <div style={{ marginTop: 16 }}>

@@ -80,6 +80,10 @@ function mount(opts: {
   vi.spyOn(api, "report").mockImplementation(
     report instanceof Error ? () => Promise.reject(report) : () => Promise.resolve(report) as never,
   );
+  vi.spyOn(api, "analyticsTrends").mockResolvedValue({
+    orgId: "acme", from: "2026-06-22", through: "2026-07-21", days: 30, points: [],
+    summary: { subscriberCount: 1200, current: { emailsSent: 1000, openRate: 0.31, clickRate: 0.12 }, previous: { emailsSent: 900, openRate: 0.25, clickRate: 0.1 } },
+  });
   render(<Dashboard org="acme" onGoToSetup={() => {}} />);
 }
 
@@ -200,13 +204,10 @@ test("the setup nag shows only while required steps are outstanding", async () =
   expect(screen.queryByText(/Finish setting up this organization/)).not.toBeInTheDocument();
 });
 
-test("no 30-day aggregate or delta is claimed anywhere", async () => {
-  // The prototype flags its own rolling-30-day KPI strip `Not yet built`
-  // (demo/index.html:525) and nothing on the API aggregates across campaigns or
-  // over a window. A "▲ 3.1% vs last mo." here would be invented.
+test("the real 30-day trend is shown without invented KPI deltas", async () => {
   mount();
   await screen.findAllByText(/The Morning Ledger/);
   expect(screen.queryByText(/vs last mo/i)).not.toBeInTheDocument();
   expect(screen.queryByText(/Avg\. open rate/i)).not.toBeInTheDocument();
-  expect(screen.getByText(/not a 30-day aggregate/)).toBeInTheDocument();
+  expect(screen.getByText(/30-day trends/)).toBeInTheDocument();
 });

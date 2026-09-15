@@ -52,6 +52,15 @@ button:disabled { cursor: not-allowed; opacity: .5; }
 .action-card .action-icon { width: 48px; height: 48px; margin: 0 auto 18px; font-size: 20px; }
 .action-card .title { font-size: 22px; }
 .action-card a { display: inline-block; margin-top: 14px; font-size: 13px; text-decoration: none; }
+.preference-card { text-align: left; }
+.preference-card > .action-icon, .preference-card > .title { text-align: center; }
+.preference-request { display: flex; gap: 8px; margin-top: 18px; }
+.preference-list { margin: 18px 0; border-top: 1px solid var(--line); }
+.preference-row { display: flex; gap: 12px; padding: 14px 0; border-bottom: 1px solid var(--line); cursor: pointer; }
+.preference-row input { flex: none; width: 17px; height: 17px; margin: 2px 0 0; accent-color: var(--brand-primary); }
+.preference-row span { display: grid; gap: 3px; }
+.preference-row small { color: var(--ink-2); font-size: 12px; line-height: 1.4; }
+.preference-editor > button { display: block; margin: 0 auto; }
 footer { margin-top: 44px; color: var(--ink-3); font-size: 11px; text-align: center; }
 .err { color: #c3372f; font-size: 13px; }
 @media (max-width: 700px) {
@@ -62,6 +71,7 @@ footer { margin-top: 44px; color: var(--ink-3); font-size: 11px; text-align: cen
   .hero > p:last-child { font-size: 15px; }
   .list-grid { grid-template-columns: 1fr; }
   .list-card { min-height: 0; }
+  .preference-request { flex-direction: column; }
 }
 @media (prefers-reduced-motion: no-preference) {
   .hero, .list-card, .subscribe-panel, .action-card { animation: fade-up 260ms cubic-bezier(.2,.7,.2,1) both; }

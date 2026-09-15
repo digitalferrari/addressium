@@ -1,9 +1,9 @@
 /**
  * Identity & pools (`demo/index.html`, `data-screen="identity"`).
  *
- * Read-only by construction, not by choice: every value here is written once by
- * `POST /orgs` at provisioning time and there is no org-update route to change
- * any of it. The screen therefore renders VALUES, not disabled inputs — a greyed
+ * Most values here are read-only: provisioning writes them, while the signing
+ * key has an explicit rotation action that retains old public keys. The screen
+ * therefore renders VALUES, not disabled inputs — a greyed
  * text box invites an operator to look for the Save button that will never
  * exist, and the prototype's `readonly` inputs are a mockup convention rather
  * than a design for a console that has no write path.
@@ -169,11 +169,29 @@ const GRID2: React.CSSProperties = {
 };
 
 export function Identity({ org }: { org: string }) {
+  const [refresh, setRefresh] = useState(0);
+  const [rotateBusy, setRotateBusy] = useState(false);
+  const [rotateMessage, setRotateMessage] = useState("");
   const { data, error, loading } = useAsync(
     () => (org ? api.orgIdentity(org) : Promise.resolve(null)),
-    [org],
+    [org, refresh],
   );
   const pool = adminPoolConfig();
+
+  const rotate = async () => {
+    if (!window.confirm("Rotate this organization's magic-link signing key? Existing links will continue to verify.")) return;
+    setRotateBusy(true);
+    setRotateMessage("");
+    try {
+      const result = await api.rotateMagicLinkKey(org);
+      setRotateMessage(`Key rotated. ${result.keyCount} public keys remain available for verification.`);
+      setRefresh((value) => value + 1);
+    } catch (e) {
+      setRotateMessage(String(e));
+    } finally {
+      setRotateBusy(false);
+    }
+  };
 
   return (
     <div>
@@ -181,7 +199,8 @@ export function Identity({ org }: { org: string }) {
       <p className="muted" style={{ marginTop: -6, maxWidth: 760 }}>
         Magic-link signing, plus the optional Cognito pool this organization can{" "}
         <b>link</b>. Held on the organization record. Written at provisioning time and{" "}
-        <b>read-only here</b> — no route updates an organization.
+        <b>mostly read-only here</b> — the only update is deliberate magic-link
+        signing-key rotation; pool, domain and issuer configuration remain fixed.
       </p>
 
       {loading && <div className="card muted">Loading…</div>}
@@ -266,9 +285,17 @@ export function Identity({ org }: { org: string }) {
                 </div>
                 <Note tone="info">
                   The <b>JWKS endpoint is scoped to this organization</b>: it publishes this
-                  org's public signing key. Verifiers must also check the expected issuer,
+                  org's current and retained public signing keys. Verifiers must also check the expected issuer,
                   audience and token expiry.
                 </Note>
+                <div className="row" style={{ alignItems: "center" }}>
+                  <button className="btn" disabled={rotateBusy} onClick={() => void rotate()}>
+                    {rotateBusy ? "Rotating…" : "Rotate signing key"}
+                  </button>
+                  <span className="muted">{data.magicLink.keyCount} public key{data.magicLink.keyCount === 1 ? "" : "s"} published</span>
+                  {data.magicLink.rotatedAt && <span className="muted">Last rotated {new Date(data.magicLink.rotatedAt).toLocaleString()}</span>}
+                </div>
+                {rotateMessage && <p className={rotateMessage.startsWith("Key rotated") ? "muted" : "err"}>{rotateMessage}</p>}
               </>
             ) : (
               /*
@@ -287,14 +314,10 @@ export function Identity({ org }: { org: string }) {
               </Note>
             )}
 
-            <Note tone="warn">
-              <b>There is no key-rotation route.</b> Rotating this organization's magic-link signing
-              key — new key, new <code>kid</code>, republished JWKS — is <b>not built</b>: no route,
-              no handler, and nothing in this console. The one rotation that ships is the
-              confirm-token HMAC keyring, on a yearly Secrets Manager schedule with no console
-              surface at all. Everything on this screen is read-only: the pool link, the domain and
-              the identity config are written once by <code>POST /orgs</code> at provisioning time,
-              and there is no org-update route to change them afterwards.
+            <Note tone="info">
+              Key rotation creates a new KMS key, makes it current for new tokens, and retains
+              previous public keys in JWKS so links already in readers' inboxes continue to work.
+              The private keys never leave KMS. The linked pool, domain and issuer remain unchanged.
             </Note>
           </div>
         </>

@@ -9,7 +9,7 @@
  *  - ad slots are inserted verbatim and never tokenized/tracked,
  *  - a stable link-id is assigned per editorial link for the click map.
  */
-import type { EmailArchive } from "@addressium/core";
+import type { AdSlotFill, EmailArchive } from "@addressium/core";
 
 export type Block =
   | { kind: "text"; html: string } // may contain {{merge}} placeholders
@@ -26,6 +26,44 @@ export interface EmailTemplate {
    * click map. Mutually exclusive with `blocks`.
    */
   html?: string;
+}
+
+/**
+ * Overlay the fills configured on a recurring series onto its structured
+ * template. The authored block remains the fallback when a slot has no series
+ * fill, which keeps campaign-level creative usable while a series is only
+ * partially configured. The input is copied; stored templates are shared by
+ * retries and must not be mutated by one send.
+ *
+ * Raw HTML/MJML uses the documented `{{slot_name}}` marker. Only slots that
+ * have a series fill are replaced; the normal merge pass later clears any
+ * remaining unresolved marker, matching the existing behavior for unknown
+ * merge tags. Ad HTML is inserted before merge escaping so it remains markup.
+ */
+export function applySeriesAdFills(
+  template: EmailTemplate,
+  fills: readonly AdSlotFill[],
+): EmailTemplate {
+  const bySlot = new Map(fills.map((fill) => [fill.slot, fill.html]));
+  if (template.html != null) {
+    let html = template.html;
+    for (const [slot, fill] of bySlot) {
+      // Slot ids are validated at the API boundary, but escape them anyway so
+      // this helper remains safe when called with a store fixture directly.
+      const escaped = slot.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      html = html.replace(new RegExp(`\\{\\{\\s*${escaped}\\s*\\}\\}`, "g"), () => fill);
+    }
+    return { ...template, html };
+  }
+  if (!template.blocks || fills.length === 0) return template;
+  return {
+    ...template,
+    blocks: template.blocks.map((block) =>
+      block.kind === "ad" && bySlot.has(block.slot)
+        ? { ...block, html: bySlot.get(block.slot)! }
+        : block,
+    ),
+  };
 }
 
 export function escapeHtml(s: string): string {

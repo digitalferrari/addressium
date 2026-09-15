@@ -25,7 +25,7 @@ export async function unsubscribeFromList(
   return updated;
 }
 
-export async function unsubscribeAll(
+export async function unsubscribeAllWithChanges(
   stores: Stores,
   clock: Clock,
   input: { orgId: string; subscriberId: string; email: string },
@@ -35,12 +35,15 @@ export async function unsubscribeAll(
    * self-clearable, so the person can re-opt-in later (#58).
    */
   source: Extract<SuppressionSource, "unsubscribe" | "inactive"> = "unsubscribe",
-): Promise<number> {
+): Promise<{ count: number; changed: Subscription[] }> {
   const subs = await stores.subscriptions.listBySubscriber(input.orgId, input.subscriberId);
   const now = clock.now().toISOString();
+  const changed: Subscription[] = [];
   for (const s of subs) {
     if (s.status !== "unsubscribed") {
-      await stores.subscriptions.put({ ...s, status: "unsubscribed", updatedAt: now });
+      const updated = { ...s, status: "unsubscribed" as const, updatedAt: now };
+      await stores.subscriptions.put(updated);
+      changed.push(updated);
     }
   }
   // Unsubscribes are per-org in the hybrid suppression model (§4.13).
@@ -51,5 +54,15 @@ export async function unsubscribeAll(
     scope: "org",
     addedAt: now,
   });
-  return subs.length;
+  return { count: changed.length, changed };
+}
+
+/** Backward-compatible count-only form used by non-delivery workflows. */
+export async function unsubscribeAll(
+  stores: Stores,
+  clock: Clock,
+  input: { orgId: string; subscriberId: string; email: string },
+  source: Extract<SuppressionSource, "unsubscribe" | "inactive"> = "unsubscribe",
+): Promise<number> {
+  return (await unsubscribeAllWithChanges(stores, clock, input, source)).count;
 }

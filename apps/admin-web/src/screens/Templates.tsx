@@ -99,13 +99,13 @@ export function Templates({ org }: { org: string }) {
           </div>
         ) : (
           <>
-            <label style={{ marginTop: 12 }}>{mode === "mjml" ? "MJML source" : "HTML source"} — {"{{merge}}"} tags allowed</label>
+            <label style={{ marginTop: 12 }}>{mode === "mjml" ? "MJML source" : "HTML source"} — {"{{merge}}"} tags and {"{{ad_top}}"} series slot markers allowed</label>
             <textarea value={source} onChange={(e) => { setSource(e.target.value); setPreview(null); }} rows={12}
-              placeholder={mode === "mjml" ? "<mjml>…</mjml>" : "<h1>Hello {{first_name}}</h1>\n<a href=\"https://…\">Read more</a>"}
+              placeholder={mode === "mjml" ? "<mjml>…</mjml>" : "<h1>Hello {{first_name}}</h1>\n<div>{{ad_top}}</div>"}
               style={{ width: "100%", fontFamily: "monospace" }} />
           </>
         )}
-        <label style={{ marginTop: 12 }}>Ad slot names <span className="muted">(comma-separated, e.g. ad_top, ad_footer)</span><input value={adSlots} onChange={(e) => setAdSlots(e.target.value)} placeholder="ad_top, ad_footer" style={{ width: "100%" }} /></label>
+        <label style={{ marginTop: 12 }}>Ad slot names <span className="muted">(comma-separated; place as {"{{ad_top}}"} in raw HTML/MJML, or use an ad block in Compose)</span><input value={adSlots} onChange={(e) => setAdSlots(e.target.value)} placeholder="ad_top, ad_footer" style={{ width: "100%" }} /></label>
         {(mode === "mjml" || mode === "visual") && (
           <div style={{ marginTop: 8 }}>
             <button className="btn ghost" onClick={compile} disabled={!source.trim()}>Compile &amp; preview</button>

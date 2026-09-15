@@ -172,6 +172,14 @@ export interface Organization {
     issuer: string;
     /** Token audience (`aud`) — the org's main-site domain. */
     audience: string;
+    /**
+     * Current key first, followed by retained verification keys. Optional for
+     * records written before rotation existed; those records use the current
+     * `kmsKeyArn`/`kid` pair as a one-key ring.
+     */
+    keys?: Array<{ kmsKeyArn: string; kid: string }>;
+    /** When the current signing key was last rotated. */
+    rotatedAt?: string;
   };
   sesConfigSet: string;
   /**
@@ -341,6 +349,8 @@ export interface Subscriber {
    * re-engagement / sunset automation (§4.22).
    */
   lastEngagedAt?: string;
+  /** Most recent provider-recorded open, used only by OpenSearch recency segments. */
+  lastOpenedAt?: string;
   /** Win-back automation enrollment state, present only while enrolled (§4.22). */
   reengagement?: ReengagementState;
   /**
@@ -613,6 +623,11 @@ export interface Feed {
   /** feed field -> merge tag name */
   fieldMap: Record<string, string>;
   pullIntervalMins: number;
+  /** Results from the most recent recurring launch that fetched this feed. */
+  lastPulledAt?: string;
+  lastItemCount?: number;
+  lastStatus?: "ok" | "error";
+  lastError?: string;
 }
 
 // ---- drip automations (§4.6) ----
@@ -831,4 +846,77 @@ export interface AuditEntry {
   action: string;
   target?: string;
   at: string;
+}
+
+// ---- API keys (#280, #266) ----
+
+/**
+ * What a machine credential is permitted to do.
+ *
+ * DELIBERATELY NOT `Capability` from `@addressium/rbac`. That union contains
+ * `apikeys:manage` and `team:manage`, so a key carrying it could mint further
+ * keys or grant a human a role — a credential that can escalate itself is not a
+ * least-privilege credential. These are a separate, smaller, closed set that an
+ * integration plausibly needs, and each one names a read or write an integration
+ * actually performs rather than a console screen.
+ *
+ * Scopes are RECORDED at issuance and checked by `authenticateApiKey`. No route
+ * in this build authenticates with an API key — the operator API is future work
+ * (#266) — so today the check runs only where a caller verifies a key
+ * explicitly. The console says so rather than implying an enforcement that no
+ * HTTP surface performs yet.
+ */
+export type ApiKeyScope =
+  | "subscribers:read"
+  | "subscribers:write"
+  | "entitlement:write"
+  | "campaigns:read"
+  | "suppression:write";
+
+export const API_KEY_SCOPES: readonly ApiKeyScope[] = [
+  "subscribers:read",
+  "subscribers:write",
+  "entitlement:write",
+  "campaigns:read",
+  "suppression:write",
+] as const;
+
+/**
+ * An issued machine credential, as STORED. The plaintext key is not here and
+ * cannot be recovered from here — that is the entire point of the design.
+ *
+ * `keyHash` is a SHA-256 hex digest of the plaintext. A password KDF (bcrypt,
+ * argon2) would be the wrong tool twice over: the secret is 256 bits of CSPRNG
+ * output rather than a human-chosen password, so there is no dictionary to
+ * stretch against, and a deliberately-slow salted KDF cannot be looked up by
+ * digest — verification would degrade into scanning every key in the table.
+ *
+ * `displayPrefix` exists because a hash cannot be rendered. The console's Key
+ * column has to show SOMETHING an operator can match against the value they
+ * pasted into their integration, so the issuer captures the first few characters
+ * at creation. It is stored plainly and on purpose: those characters are public
+ * knowledge the moment the key is used, and they are far too few to narrow a
+ * 256-bit search.
+ *
+ * `lastUsedAt` is written by exactly one function, `authenticateApiKey`. Nothing
+ * else — not listing, not the console opening the screen — may set it, or the
+ * column becomes a record of an operator's browsing rather than of the key's
+ * use.
+ */
+export interface ApiKey {
+  orgId: OrgId;
+  keyId: string;
+  name: string;
+  scopes: ApiKeyScope[];
+  /** SHA-256 hex of the plaintext key. Never the key itself. */
+  keyHash: string;
+  /** Leading characters of the plaintext, for display only (e.g. `ak_7Fh2Qa`). */
+  displayPrefix: string;
+  createdAt: string;
+  /** The admin-pool `sub` of the operator who issued it, when the caller is known. */
+  createdBy?: string;
+  /** Set on revoke. A revoked key is kept, not deleted — see `ApiKeyStore`. */
+  revokedAt?: string;
+  /** Set ONLY by `authenticateApiKey`. Absent means genuinely never used. */
+  lastUsedAt?: string;
 }

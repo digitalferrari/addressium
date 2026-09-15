@@ -23,6 +23,7 @@ import { TransactionCanceledException } from "@aws-sdk/client-dynamodb";
 import { VERSION_ITEM } from "@addressium/core";
 import type {
   AlertConfig,
+  ApiKey,
   HotCounters,
   Campaign,
   CampaignSeries,
@@ -49,6 +50,7 @@ import type {
 } from "@addressium/core";
 import type {
   AlertConfigStore,
+  ApiKeyStore,
   ArchiveStore,
   CampaignSeriesStore,
   FeedStore,
@@ -461,6 +463,23 @@ export class DynamoStores implements Stores {
         if ((e as { name?: string }).name !== "ConditionalCheckFailedException") throw e;
       }
     },
+    markOpened: async (orgId, sub, at) => {
+      try {
+        await this.doc.send(
+          new UpdateCommand({
+            TableName: this.tableName,
+            Key: { pk: org(orgId), sk: `SUBSCRIBER#${sub}` },
+            UpdateExpression: "SET #d.#l = :at",
+            ConditionExpression:
+              "attribute_exists(pk) AND (attribute_not_exists(#d.#l) OR #d.#l < :at)",
+            ExpressionAttributeNames: { "#d": "data", "#l": "lastOpenedAt" },
+            ExpressionAttributeValues: { ":at": at },
+          }),
+        );
+      } catch (e) {
+        if ((e as { name?: string }).name !== "ConditionalCheckFailedException") throw e;
+      }
+    },
   };
 
   subscriptions: SubscriptionStore = {
@@ -579,6 +598,93 @@ export class DynamoStores implements Stores {
           Key: { pk: org(orgId), sk: `MERGETAG#${name}` },
         }),
       );
+    },
+  };
+
+  /**
+   * Issued API keys (#280). TWO items per key, and the second one is the point.
+   *
+   * The registry item is the usual org-partitioned shape — `ORG#<org>` /
+   * `APIKEY#<keyId>` — so `list` is one prefix query like every other registry
+   * here. But verification arrives with a key and NOTHING else: no org, no
+   * keyId, because a caller presenting a credential is exactly the party that
+   * has not yet been placed in an org. So `put` also writes an org-independent
+   * lookup item, `APIKEYHASH#<digest>` in both key positions, whose `data` is a
+   * pointer back to `(orgId, keyId)` — never the key record itself, so there is
+   * one copy of the truth and a revoke cannot leave a stale duplicate behind.
+   *
+   * A GSI on the digest would express the same thing, and was not used: it would
+   * add an index to the table in CDK and require a matching change to every
+   * table definition that stands in for it (the dynalite fixture in the
+   * integration suite), for a lookup that is already exact-match on a hash — the
+   * one access pattern a primary key serves best.
+   *
+   * The digest is the whole sort key rather than a suffix of the org partition,
+   * and it is a SHA-256 hex string, so it cannot collide with another entity's
+   * prefix and carries nothing an operator typed.
+   *
+   * `delete` removes both halves. Revocation does NOT go through it — a revoked
+   * key keeps its row and its lookup so `authenticateApiKey` can find it and
+   * refuse it by `revokedAt`, which is what makes revocation auditable rather
+   * than a record simply vanishing.
+   *
+   * The two puts are not transactional, and the ORDER is the safety argument: a
+   * failure between them leaves a key that LISTS but never verifies. That is the
+   * fail-safe direction — an operator sees a credential that does not work and
+   * revokes it — where the reverse would leave a key that authenticates and
+   * appears nowhere. A revoke rewrites both, so a half-failed revoke leaves the
+   * lookup still resolving a key the registry shows as cut off; `findByHash`
+   * reads through the pointer to the registry row, so the registry stays the one
+   * source of truth for `revokedAt` and the stale half cannot grant access.
+   */
+  apiKeys: ApiKeyStore = {
+    get: (orgId, keyId) => this.get<ApiKey>(org(orgId), `APIKEY#${keyId}`),
+    findByHash: async (keyHash) => {
+      const ptr = await this.get<{ orgId: string; keyId: string }>(
+        `APIKEYHASH#${keyHash}`,
+        `APIKEYHASH#${keyHash}`,
+      );
+      if (!ptr) return undefined;
+      return this.apiKeys.get(ptr.orgId, ptr.keyId);
+    },
+    put: async (k) => {
+      await this.put({ pk: org(k.orgId), sk: `APIKEY#${k.keyId}`, data: k });
+      await this.put({
+        pk: `APIKEYHASH#${k.keyHash}`,
+        sk: `APIKEYHASH#${k.keyHash}`,
+        data: { orgId: k.orgId, keyId: k.keyId },
+      });
+    },
+    list: (orgId) =>
+      this.queryAll<ApiKey>({
+        TableName: this.tableName,
+        KeyConditionExpression: "pk = :pk AND begins_with(sk, :s)",
+        ExpressionAttributeValues: { ":pk": org(orgId), ":s": "APIKEY#" },
+      }),
+    delete: async (orgId, keyId) => {
+      // Read first: the lookup item is addressed by the DIGEST, which only the
+      // record knows. Deleting the registry row without it would orphan a
+      // pointer that still resolves — `findByHash` would then return undefined
+      // via a dangling `get`, which is correct by luck rather than by design,
+      // and the orphan would outlive the key forever.
+      const existing = await this.apiKeys.get(orgId, keyId);
+      await this.doc.send(
+        new DeleteCommand({
+          TableName: this.tableName,
+          Key: { pk: org(orgId), sk: `APIKEY#${keyId}` },
+        }),
+      );
+      if (existing) {
+        await this.doc.send(
+          new DeleteCommand({
+            TableName: this.tableName,
+            Key: {
+              pk: `APIKEYHASH#${existing.keyHash}`,
+              sk: `APIKEYHASH#${existing.keyHash}`,
+            },
+          }),
+        );
+      }
     },
   };
 

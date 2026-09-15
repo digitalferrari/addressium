@@ -87,11 +87,11 @@ every org in a deployment is operated by the same owner.
   (GrapesJS→MJML), MJML source, and raw-HTML blasts — one responsive pipeline;
   the compliance footer is a reserved merge value the seed templates carry
 - **Merge tags & ad tags** (§4.14): per-recipient merge variables, plus **ad
-  blocks** inserted verbatim and never tracked. Named ad-slot *fills* (bound at
-  the series/template level) are modeled but nothing consumes them yet
+  blocks** inserted verbatim and never tracked. Named ad-slot *fills* are bound
+  at the series/template level and applied by the send renderer
 - **Campaign types** (§4.16): one-off vs recurring series (daily / weekly /
-  biweekly) with per-edition idempotency. Aggregate reporting across a series'
-  editions is designed but not built
+  biweekly) with per-edition idempotency and aggregate reporting across a
+  series' editions
 - **Deliverability alerts to SNS** (§4.18) and
   **GDPR/CCPA export & erasure + audit log** (§4.19)
 - **Engagement analytics & reporting**: sends, deliveries, opens,
@@ -151,7 +151,7 @@ every org in a deployment is operated by the same owner.
 | Opt-in | Double opt-in default (per-list configurable) | Deliverability + consent provenance |
 | Templating | One MJML render pipeline, 3 authoring modes | Robust responsive email; visual, source and raw-HTML entry points |
 | Migration | CSV + Pinpoint-export importer (§4.7) | Adoption hook for the "Pinpoint is ending" moment |
-| Email archive | Archive record + link map per campaign | Powers the click table; no recipient PII or tokens at rest; the rendered body itself is not yet written (§4.8) |
+| Email archive | Archive record + link map and generic body per campaign | Powers the click table; no recipient PII or tokens at rest |
 | Subscriber identity | addressium's own subscriber record | Works with Cognito, Auth0, custom JWT or no accounts at all; a pool is an optional link, never a dependency |
 | Cognito linkage | Optional, read-only, joined on `externalId` | Coupling to a pool would make the product only work for Cognito shops; the pool is the org's, not ours |
 | Magic-link token | Asymmetric JWT + JWKS | Verified **client-side** on a cached page — a shared secret would leak and be forgeable; asymmetric ships only the public key |
@@ -169,8 +169,8 @@ every org in a deployment is operated by the same owner.
 | Access control | RBAC, 4 roles, org-scoped, server-enforced | Sales read-only, Editor no delete/close, destructive = admin-only |
 | Suppression scope | Hybrid default (bounces/complaints global, unsubscribes per-org) | Protect shared reputation; keep unsubscribes brand-specific |
 | Template authoring | 3 modes: GrapesJS visual · MJML · raw HTML | Right tool per team; one MJML render pipeline; footer is a reserved merge value the seed templates carry |
-| Ad tags | Ad blocks inserted verbatim, never tracked | Named-slot fills are modeled but not consumed yet (§4.14) |
-| Campaign model | One-off vs recurring series, per-edition idempotency | Aggregate series reporting is designed but not built (§4.16) |
+| Ad tags | Ad blocks and named series fills inserted verbatim, never tracked | Structured blocks or declared `{{ad_slot}}` markers (§4.14) |
+| Campaign model | One-off vs recurring series, per-edition idempotency | Aggregate series reporting across editions (§4.16) |
 | Alerts | Deliverability rules → operator SNS topic | Fan out to email/SMS/Slack/PagerDuty/Lambda; auto-halt thresholds |
 | Privacy | GDPR/CCPA export + erase-to-tombstone; immutable audit log | Compliance built in, not bolted on |
 | IaC / language | AWS CDK, TypeScript monorepo | One language across infra, backend, and frontend |
@@ -222,8 +222,7 @@ core path depends on either (§4.23, §5, §7).
 - **Subscriber plane** (unauthenticated, **token-based**): signed confirm and
   unsubscribe links let a subscriber act on their own record with no account and
   no login. Signed **preference** links let them manage list memberships the
-  same way (§4.10, #74) — the token-scoped API is built; the preference page
-  in the subscriber SPA is still pending.
+  same way (§4.10, #74) — the token-scoped API and SPA page are built.
 - **Admin plane** (Cognito-authenticated via a **separate admin pool**, staff):
   list/subscriber/segment/campaign/template/automation management, analytics, and
   settings. Every request carries a **role + organization scope**, enforced
@@ -252,9 +251,9 @@ role (convenience only — enforcement is server-side, §4.12). Surfaces:
 - **Overview** — a single derived **system health: OK / degraded** badge
   (§9.2), backed by `GET /orgs/{org}/health`. Raw CloudWatch alarms
   deliberately do not surface here — a marketer does not care about Lambda
-  throttles (§9.2). A KPI/analytics dashboard (engagement trends, click map on
-  the archived body) is **not yet built**; today's report screen shows
-  counters, rates and the per-link click table (§4.8)
+  throttles (§9.2). The dashboard shows engagement trends and the report screen
+  shows counters, rates, the per-link click table, and the archived-body click
+  map (§4.8)
 - **Audience** — newsletters (create, open/close signups), subscribers (detail +
   manual unsubscribe/suppress), segments, and suppression (§4.13)
 - **Messaging** — campaigns (compose → audience → review; one-off vs series),
@@ -262,8 +261,9 @@ role (convenience only — enforcement is server-side, §4.12). Surfaces:
 - **Configure** — organizations (silo management + setup, including an **Add
   organization** screen, #226), roles & access, branding, import/export,
   alerts & SNS, privacy & data, team, audit log
-- Console screens for feeds, merge-tag/ad-tag management, and API keys &
-  webhooks are **not built** — those surfaces are config/code-driven today
+- Console screens for feeds, merge-tag/ad-tag management, and customer-record
+  delivery are built; the API page remains informational and broader API-key
+  integrations are deferred
 
 ### 4.2 Public site (`apps/public-web`)
 
@@ -273,10 +273,9 @@ Static pages + minimal JS on S3/CloudFront:
   posts to the public API.
 - **Hosted signup pages** — for operators without their own site.
 
-The **confirmation** and **unsubscribe** pages live in the subscriber SPA
-(`apps/subscriber-web`, §4.10); one CloudFront site serves both apps. The
-signed **preference centre** API is built (#74); its page in the subscriber
-SPA is **not yet built** (§4.10).
+The **confirmation**, **unsubscribe**, and signed **preference centre** pages
+live in the subscriber SPA (`apps/subscriber-web`, §4.10); one CloudFront site
+serves all three flows.
 
 ### 4.3 API (`services/api`)
 
@@ -395,8 +394,8 @@ compensate for a missing trap.
   editorial `<a>` a stable **link-id** and stores an **archive record**
   (link-map + body key) in DynamoDB — this is what the click table is built
   from (see §4.8). Writing the rendered **generic body** itself to the archive
-  S3 bucket is **not yet built**: the record carries the key it *would* live
-  at, and no per-recipient copies are ever stored.
+  S3 bucket stores the generic rendered body at that key; no per-recipient
+  copies are ever stored.
 - **Magic-link tokens are minted per recipient** (see §4.9) and merged into
   that recipient's render. The token rides in the destination URL's
   **fragment** (`#tok=…`), so it stays client-side only (see §8.1). The token is
@@ -675,9 +674,12 @@ landed.
 
 The flow: `POST /orgs/{org}/import/upload-url` mints a short-lived presigned PUT
 and returns the batch id; the console uploads **straight to S3**, so the bytes
-never traverse API Gateway; `POST /orgs/{org}/import/async` marks the batch
-`running` and event-invokes the importer Lambda, answering **202**. The job reads
-the object itself, with fifteen minutes and 1 GB rather than a route's 29 seconds.
+never traverse API Gateway. For large files the console then calls
+`POST /orgs/{org}/import/upload-preview`, which reads that object server-side
+and returns the same mapping preview as the inline path. After operator review,
+`POST /orgs/{org}/import/async` marks the batch `running` and event-invokes the
+importer Lambda, answering **202**. The job reads the object itself, with fifteen
+minutes and 1 GB rather than a route's 29 seconds.
 
 **The batch record is the status endpoint** — an async run outlives the request
 that started it, so there is nowhere else to ask. `GET
@@ -729,20 +731,19 @@ Powers the campaign report screen.
 
 - **Email archive**: a DynamoDB **EmailArchive** record per campaign stores the
   **link-map** (`link-id → { url template, position, label }`) and the S3 key
-  the generic rendered body *would* live at. Writing the body itself to the
-  archive bucket is **not yet built** (§4.4), and no per-recipient copies are
-  ever stored.
+  the generic rendered body lives at. No per-recipient copies are ever stored.
 - **Click table**: the admin SPA renders per-link rows — total clicks, unique
   clicks, CTR — from the link-id aggregation produced by the events processor
   (§4.5). Painting those badges onto the archived body in a sandboxed iframe
-  (the Mailchimp-style click map) depends on the body write above and is
-  equally **not yet built**.
+  (the Mailchimp-style click map) is built by decorating that generic body with
+  real click counts inside a sandboxed iframe.
 - **Reports**: per-campaign counters and deliverability rates (sent →
   delivered → open → click → unsub/complaint) plus the click table. Numbers
   come from the campaign's transactional counters (falling back to the event
   log, §7); deeper ad-hoc cuts come from the **opt-in** Athena tier if an
   operator turns it on (§4.23). List-growth trends, deliverability trends and
-  per-subscriber activity timelines are **not yet built**.
+  per-subscriber activity timelines are available from the dashboard and
+  subscriber-detail surfaces.
 - **Retention**: the archive bucket has no lifecycle rules yet; because
   archived bodies are generic (no baked-in recipient PII or tokens), they will
   be safe to retain for the life of the reporting window once the write lands.
@@ -760,7 +761,9 @@ sign-in / Cognito session-exchange logic on the main site is **out of scope**
   header hard-coded rather than caller-supplied. The private half never leaves
   KMS. addressium publishes the public half at an unauthenticated **JWKS
   endpoint**, `GET /orgs/{org}/.well-known/jwks.json`, so the main website
-  verifies offline with no shared secret and no callback. Asymmetric is
+  verifies offline with no shared secret and no callback. Rotation creates a
+  new KMS key, makes it current for new tokens, and retains prior public keys
+  in the org's JWKS so links already delivered remain verifiable. Asymmetric is
   **mandatory** here because verification happens **client-side on a cached
   page** (§8.1) — a shared secret would be shipped to the browser and become
   forgeable. Per-org keys mean one org's compromised key cannot forge another
@@ -819,12 +822,10 @@ subscriptions, the entitlement, and the `sub` claim in every magic-link token
 - **Self-service is token-based, not login-based.** Signed, tokenized links let a
   subscriber act on their own record with no password. `apps/subscriber-web`
   ships no auth module and sends no `Authorization` header on any call. Built
-  today: the newsletter directory, the subscribe-to-all view, **confirm** and
-  **one-click unsubscribe** — four routes, no more. The **preference centre**
-  API is built (#74): `POST /preferences/request` issues a signed,
-  `manage`-scoped link, and `GET`/`POST /preferences` read and update list
-  memberships behind that token, with enumeration-safe 202s. The preference
-  **page** in the subscriber SPA is **not yet built**.
+  today: the newsletter directory, subscribe-to-all, **confirm**, **one-click
+  unsubscribe**, and the **preference centre**. `POST /preferences/request`
+  issues a signed, `manage`-scoped link, and `GET`/`POST /preferences` read and
+  update list memberships behind that token, with enumeration-safe 202s.
 - **Cognito linkage is optional and link-only.** An org that already runs a
   Cognito pool for its own website can **link** it, so addressium's subscribers
   line up with the site's users. addressium *references* that pool; it does not
@@ -859,6 +860,28 @@ subscriptions, the entitlement, and the `sub` claim in every magic-link token
   every tokenized send reads `externalId` and mints it as `external_sub`
   (§4.9), which the shipped reference verifier requires and resolves against
   the pool (compendium #45).
+
+  **External customer-record sync is a separate boundary.** The addressium
+  subscriber record may carry an optional organization-owned `externalId`,
+  supplied by an import or by the signed identity-sync API. Public signup
+  remains email-only; identity sync is the endpoint for authoritative email
+  changes and deletes. When an external ID is linked after a subscription was
+  already confirmed, the current confirmed/unsubscribed memberships are
+  backfilled through the same queue. Addressium
+  does not store the external customer record in its own table: when a confirmed
+  subscription is created or a subscription is ended, it enqueues an event only
+  if that subscriber has an `externalId` and the organization has enabled
+  customer sync. A FIFO SQS queue preserves per-organization order and retries
+  failed deliveries through a DLQ. The worker re-reads the organization's
+  endpoint, external table name, and Secrets Manager secret, then POSTs a JSON
+  update to that endpoint. The body is `{ tableName, eventId, type, orgId,
+  subscriberId, externalId, email, listId, occurredAt }`; `type` is
+  `subscribed` or `unsubscribed`, and `eventId` is the idempotency key. The
+  external endpoint is responsible for applying the update to the other
+  DynamoDB table; the table name is never hard-coded in addressium. This path
+  currently uses the configured secret as a basic header credential;
+  HMAC signing, rotation, and replay protection are deliberately deferred in
+  #267.
 - **Two session tiers, owned by different systems.** A **lite** session
   (magic-link origin → content read + reg/paywall bypass, no profile) versus a
   **full** session (a real login). The lite half is built and enforced end to
@@ -1053,9 +1076,17 @@ Two distinct replacement systems, declared on the template:
   unsanitized", which understated the posture. (Excluded
   from the click table). Named **ad-slot fills** (`{{ad_top}}`,
   `{{ad_inline_1..3}}`…) bound at the series/template level are modeled in the
-  types (`Template.adSlots`, `CampaignSeries.adSlotFills`) but **nothing
-  consumes them yet**, and there is no merge-tag/ad-tag management screen —
-  **not yet built**.
+  types (`Template.adSlots`, `CampaignSeries.adSlotFills`) and replaced at send
+  time: structured ad blocks are overlaid directly, while raw HTML/MJML uses a
+  declared `{{ad_top}}`-style marker. The Ad tags management screen binds fills
+  to recurring series.
+
+**Article feeds** are operator-configured RSS, Atom, or JSON Feed sources
+attached to recurring campaigns. The launch handler fetches them through the
+SSRF-guarded feeds service, builds an idempotent edition, and records the latest
+pull time, item count, and success/error status on the feed record for the
+console. The campaign schedule, not `pullIntervalMins`, controls when a pull
+occurs; the interval is retained as configuration metadata for the feed.
 
 ### 4.15 Template authoring modes
 
@@ -1107,12 +1138,11 @@ builder with a compile-and-preview), and **Compose** can send any of them.
 
 Every campaign is **one-off** or part of an **ongoing series** (daily / weekly /
 biweekly / recurring). Recurring sends run on **EventBridge Scheduler**, and
-each firing gets a per-firing **edition key**, so an edition is an idempotent
-send of the same shell with fresh feed content (#162). Series-level structure
-is **designed, not built**: a `CampaignSeries` type exists but no code writes
-one, there is no aggregate reporting across editions (edition count, avg
-open/click, trend), no reschedule, and no resend — reporting today is
-per-campaign only (§4.8).
+  each firing gets a per-firing **edition key**, so an edition is an idempotent
+  send of the same shell with fresh feed content (#162). Series-level structure
+  is built: the console writes `CampaignSeries` records, each firing records a
+  durable edition, and reporting aggregates edition count, average engagement,
+  and trends across the series.
 
 ### 4.17 Sandbox / test mode — cut
 
@@ -2153,14 +2183,13 @@ signing secret".
 - **v1 — Core email platform**: multi-org silos + RBAC, lists (open/close),
   signup + double opt-in, subscribers, templates (visual/MJML/raw-HTML),
   merge tags + ad blocks, broadcasts + recurring series (aggregate series
-  reporting is §4.16's not-built half), suppression (hybrid), deliverability
+  reporting is §4.16), suppression (hybrid), deliverability
   (DKIM/DMARC/one-click unsubscribe) + SNS
   alerts, per-campaign reporting + click table, GDPR/CCPA + audit log, CSV +
   Pinpoint importer, bootstrap + gated deploy + per-org provisioning.
 - **v1.x**: materialized-tag segment builder,
   magic-link token service (JWKS + entitlement sync + lite-scope tokens),
-  feeds → campaign auto-build, the preference-centre page in the subscriber SPA
-  (the API is built — §4.10).
+  feeds → campaign auto-build.
 - **Landed since this roadmap was written** — SQS in the event plane (§4.5,
   #218), transactional counters (§7, #221), bulk export/portability (§4.19,
   #224), the real Pinpoint-export reader and the import wizard (§4.7, #216,
@@ -2235,8 +2264,8 @@ signing secret".
   every outstanding double-opt-in and one-click-unsubscribe token, so losing it
   does not merely break new links — it invalidates every link already sitting in
   someone's inbox, including the unsubscribe link the law requires to work.
-- **Webhooks/API for operators**: an outbound webhook + public API so operators
-  can integrate addressium with their own systems.
+- **Webhooks/API for operators**: an outbound customer-record delivery path for
+  subscription changes plus a deferred public API for broader integrations.
 - **Magic-link TTL default**: ship a sensible default (e.g. 7–30 days) with a
   clear knob; revisit once real forwarding/abuse data exists.
 

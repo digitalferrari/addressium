@@ -17,6 +17,7 @@ import {
   sendCampaign,
   unsubscribeFromList,
   unsubscribeAll,
+  unsubscribeAllWithChanges,
   recordBounce,
   recordComplaint,
   type EmailTemplate,
@@ -89,6 +90,15 @@ test("unsubscribe-all flips every subscription and adds org suppression", async 
   });
   assert.ok(n >= 1);
   assert.equal(await h.stores.suppression.isSuppressed(ORG, "jordan@example.com"), true);
+});
+
+test("unsubscribe-all reports only transitions, not lists already unsubscribed", async () => {
+  const h = await harness();
+  const s = await confirmedSubscriber(h, "repeat@example.com");
+  await unsubscribeAll(h.stores, h.clock, { orgId: ORG, subscriberId: s.sub, email: "repeat@example.com" });
+  const result = await unsubscribeAllWithChanges(h.stores, h.clock, { orgId: ORG, subscriberId: s.sub, email: "repeat@example.com" });
+  assert.equal(result.count, 0);
+  assert.deepEqual(result.changed, []);
 });
 
 test("complaint auto-suppresses and the suppression gate drops future sends", async () => {

@@ -1,6 +1,8 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useAsync } from "../useAsync.js";
-import { api, type ColumnMapping, type ImportPreview, type MappedImportReport, type MappingPlan, type NewListDefaults } from "../api.js";
+import { api, type ColumnMapping, type ImportPreview, type ImportUploadTicket, type MappedImportReport, type MappingPlan, type NewListDefaults } from "../api.js";
+
+const INLINE_IMPORT_MAX_BYTES = 2 * 1024 * 1024;
 
 /**
  * On-the-fly CSV field mapper (#216) — the Constant Contact / Mailchimp flow.
@@ -13,18 +15,32 @@ import { api, type ColumnMapping, type ImportPreview, type MappedImportReport, t
 export function ImportMapper({ org }: { org: string }) {
   const lists = useAsync(() => api.lists(org), [org]);
   const [csv, setCsv] = useState("");
+  const [file, setFile] = useState<File | null>(null);
+  const [upload, setUpload] = useState<ImportUploadTicket | null>(null);
   const [fileName, setFileName] = useState("");
   const [basis, setBasis] = useState<"explicit" | "implicit">("implicit");
+  const [status, setStatus] = useState<"pending" | "confirmed">("pending");
   const [preview, setPreview] = useState<ImportPreview | null>(null);
   const [plan, setPlan] = useState<MappingPlan | null>(null);
   const [report, setReport] = useState<MappedImportReport | null>(null);
+  const [historyRefresh, setHistoryRefresh] = useState("");
   const [mappingName, setMappingName] = useState("");
   const [defaults, setDefaults] = useState<NewListDefaults>({ fromAddress: "", complianceFooter: "", physicalAddress: "" });
   const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState(false);
 
   const readFile = (f: File) => {
+    setFile(f);
+    setUpload(null);
+    setPreview(null);
+    setPlan(null);
     setFileName(f.name);
+    if (f.size > INLINE_IMPORT_MAX_BYTES) {
+      // Do not read a migration-sized file into a React string. The async path
+      // uploads it directly to S3, and the server previews it from there.
+      setCsv("");
+      return;
+    }
     const r = new FileReader();
     r.onload = () => setCsv(String(r.result ?? ""));
     r.readAsText(f);
@@ -33,7 +49,14 @@ export function ImportMapper({ org }: { org: string }) {
   const doPreview = async () => {
     setBusy(true); setMsg(""); setReport(null);
     try {
-      const p = await api.importPreview(org, csv, basis);
+      let p: ImportPreview;
+      if (file && file.size > INLINE_IMPORT_MAX_BYTES) {
+        const ticket = upload ?? await api.uploadImportFile(org, file);
+        setUpload(ticket);
+        p = await api.importUploadPreview(org, ticket.batchId, basis);
+      } else {
+        p = await api.importPreview(org, csv, basis);
+      }
       setPreview(p);
       setPlan(p.suggested);
     } catch (e) { setMsg((e as Error).message); } finally { setBusy(false); }
@@ -51,12 +74,29 @@ export function ImportMapper({ org }: { org: string }) {
     if (!plan) return;
     setBusy(true); setMsg("");
     try {
-      const r = await api.importMapped(org, {
-        csv, plan, sourceFile: fileName || undefined, dryRun,
-        ...(createsList ? { newListDefaults: defaults } : {}),
-      });
-      setReport(r);
-      setMsg(dryRun ? "Dry run complete — nothing was written." : "Import complete.");
+      if (upload) {
+        if (dryRun) {
+          setMsg("Dry run is available before upload for small files; this uploaded file is ready to queue.");
+          return;
+        }
+        const r = await api.importAsync(org, {
+          batchId: upload.batchId,
+          plan,
+          sourceFile: fileName || undefined,
+          ...(status ? { status } : {}),
+          ...(createsList ? { newListDefaults: defaults } : {}),
+        });
+        setMsg(`Import queued (${r.batchId}).`);
+        setHistoryRefresh(r.batchId);
+      } else {
+        const r = await api.importMapped(org, {
+          csv, plan, sourceFile: fileName || undefined, dryRun, status,
+          ...(createsList ? { newListDefaults: defaults } : {}),
+        });
+        setReport(r);
+        setHistoryRefresh(r.batchId ?? String(Date.now()));
+        setMsg(dryRun ? "Dry run complete — nothing was written." : "Import complete.");
+      }
     } catch (e) { setMsg((e as Error).message); } finally { setBusy(false); }
   };
 
@@ -73,7 +113,12 @@ export function ImportMapper({ org }: { org: string }) {
       </p>
 
       <div className="card">
-        <input type="file" accept=".csv,text/csv" onChange={(e) => { const f = e.target.files?.[0]; if (f) readFile(f); }} />
+        <input type="file" accept=".csv,.jsonl,.gz,text/csv,application/gzip,application/json" onChange={(e) => { const f = e.target.files?.[0]; if (f) readFile(f); }} />
+        {file && file.size > INLINE_IMPORT_MAX_BYTES && (
+          <div className="muted" style={{ marginTop: 8 }}>
+            This is a large file ({Math.round(file.size / 1024 / 1024)} MB). It will upload directly to secure storage, preview there, and run as a background job.
+          </div>
+        )}
         <label>
           Consent basis for audience columns
           <select value={basis} onChange={(e) => setBasis(e.target.value as "explicit" | "implicit")}>
@@ -81,11 +126,18 @@ export function ImportMapper({ org }: { org: string }) {
             <option value="explicit">Explicit — the file carries double opt-in evidence</option>
           </select>
         </label>
+        <label>
+          Initial subscription status
+          <select value={status} onChange={(e) => setStatus(e.target.value as "pending" | "confirmed")}>
+            <option value="pending">Pending confirmation</option>
+            <option value="confirmed">Confirmed (explicit consent only)</option>
+          </select>
+        </label>
         <div className="muted">
           Implicit can only ever create <strong>pending</strong> subscriptions; the subscriber still
           has to confirm.
         </div>
-        <button className="btn" disabled={!csv || busy} onClick={doPreview}>Preview mapping</button>
+        <button className="btn" disabled={(!csv && !file) || busy} onClick={doPreview}>Preview mapping</button>
       </div>
 
       {preview && plan && (
@@ -205,7 +257,7 @@ export function ImportMapper({ org }: { org: string }) {
             </button>
           </div>
 
-          <button className="btn ghost" disabled={busy} onClick={() => run(true)}>Dry run</button>
+          <button className="btn ghost" disabled={busy || !!upload} onClick={() => run(true)}>Dry run</button>
           <button className="btn" disabled={busy} onClick={() => run(false)} style={{ marginLeft: 8 }}>
             Import
           </button>
@@ -233,7 +285,7 @@ export function ImportMapper({ org }: { org: string }) {
         </div>
       )}
 
-      <ImportHistory org={org} refresh={report?.batchId ?? ""} />
+      <ImportHistory org={org} refresh={historyRefresh} />
     </div>
   );
 }
@@ -248,15 +300,34 @@ export function ImportMapper({ org }: { org: string }) {
  * just to see that the run existed.
  */
 function ImportHistory({ org, refresh }: { org: string; refresh: string }) {
-  const batches = useAsync(() => api.importBatches(org), [org, refresh]);
+  /**
+   * `tick` re-runs the list. A queued job (#242) finishes minutes after the 202,
+   * so a table loaded once shows `running` for ever and an operator cannot tell
+   * a job still working from one that died — the exact question an import raises.
+   */
+  const [tick, setTick] = useState(0);
+  const batches = useAsync(() => api.importBatches(org), [org, refresh, tick]);
   const [openId, setOpenId] = useState("");
+  const anyRunning = (batches.data ?? []).some((b) => b.status === "running");
+
+  // Polls only while something is actually running, and stops the moment
+  // nothing is — an idle history screen makes no requests.
+  useEffect(() => {
+    if (!anyRunning) return;
+    const t = setTimeout(() => setTick((n) => n + 1), 5000);
+    return () => clearTimeout(t);
+  }, [anyRunning, tick]);
+
   const detail = useAsync(
     () => (openId ? api.importBatch(org, openId) : Promise.resolve(null)),
     [org, openId],
   );
 
-  if (batches.loading) return <div className="muted">Loading import history…</div>;
-  if (batches.error) return <div className="error">{batches.error}</div>;
+  // `!batches.data` matters: useAsync drops `data` on every deps change, so
+  // without it each 5-second poll would blank the whole table and redraw it —
+  // a flicker on exactly the screen an operator is watching a job from.
+  if (batches.loading && !batches.data) return <div className="muted">Loading import history…</div>;
+  if (batches.error && !batches.data) return <div className="error">{batches.error}</div>;
   const rows = batches.data ?? [];
   if (rows.length === 0) {
     return <div className="muted" style={{ marginTop: 16 }}>No imports recorded yet.</div>;
@@ -267,13 +338,14 @@ function ImportHistory({ org, refresh }: { org: string; refresh: string }) {
       <h3>Import history</h3>
       <table className="table">
         <thead>
-          <tr><th>Started</th><th>File</th><th>Basis</th><th>Created</th><th>Updated</th><th>Memberships</th><th /></tr>
+          <tr><th>Started</th><th>File</th><th>Status</th><th>Basis</th><th>Created</th><th>Updated</th><th>Memberships</th><th /></tr>
         </thead>
         <tbody>
           {rows.map((b) => (
             <tr key={b.batchId}>
               <td>{new Date(b.startedAt).toLocaleString()}</td>
               <td>{b.sourceFile ?? <span className="muted">—</span>}</td>
+              <td>{b.status ?? "completed"}{b.error && <div className="err">{b.error}</div>}</td>
               {/* Blank means the file mixed bases, not that consent is unknown. */}
               <td>{b.consentBasis ?? <span className="muted">mixed</span>}</td>
               <td>{b.created}</td>

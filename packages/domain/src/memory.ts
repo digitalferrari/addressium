@@ -4,6 +4,7 @@
  */
 import type {
   AlertConfig,
+  ApiKey,
   HotCounters,
   Campaign,
   CampaignSeries,
@@ -54,6 +55,7 @@ import type {
   SendScheduleStore,
   TemplateStore,
   MergeTagStore,
+  ApiKeyStore,
   SendQueue,
   SentMessage,
   Stores,
@@ -186,6 +188,12 @@ export class MemSubscribers implements SubscriberStore {
     const s = this.byId.get(subKey(orgId, sub));
     if (s && (!s.lastEngagedAt || s.lastEngagedAt < at)) {
       this.byId.set(subKey(orgId, sub), { ...s, lastEngagedAt: at });
+    }
+  }
+  async markOpened(orgId: string, sub: string, at: string) {
+    const s = this.byId.get(subKey(orgId, sub));
+    if (s && (!s.lastOpenedAt || s.lastOpenedAt < at)) {
+      this.byId.set(subKey(orgId, sub), { ...s, lastOpenedAt: at });
     }
   }
 }
@@ -531,6 +539,39 @@ export class MemMergeTags implements MergeTagStore {
   }
 }
 
+/**
+ * Issued API keys (#280). Two maps rather than one, mirroring the two Dynamo
+ * items the real adapter writes: `byId` is the org-partitioned registry the
+ * console lists, `byHash` is the org-independent lookup `authenticateApiKey`
+ * needs because a caller presenting a key knows only the key.
+ *
+ * `put` writes BOTH and `delete` removes both. A double that kept only `byId`
+ * would let a test pass while the production adapter left a revoked key
+ * resolvable, which is the exact divergence STORE-PATTERN warns about.
+ */
+export class MemApiKeys implements ApiKeyStore {
+  private byId = new Map<string, ApiKey>();
+  private byHash = new Map<string, ApiKey>();
+  async get(orgId: string, keyId: string) {
+    return this.byId.get(subKey(orgId, keyId));
+  }
+  async findByHash(keyHash: string) {
+    return this.byHash.get(keyHash);
+  }
+  async put(k: ApiKey) {
+    this.byId.set(subKey(k.orgId, k.keyId), k);
+    this.byHash.set(k.keyHash, k);
+  }
+  async list(orgId: string) {
+    return [...this.byId.values()].filter((k) => k.orgId === orgId);
+  }
+  async delete(orgId: string, keyId: string) {
+    const existing = this.byId.get(subKey(orgId, keyId));
+    this.byId.delete(subKey(orgId, keyId));
+    if (existing) this.byHash.delete(existing.keyHash);
+  }
+}
+
 export class MemAlertConfigs implements AlertConfigStore {
   private map = new Map<string, AlertConfig>();
   async get(orgId: string) {
@@ -709,6 +750,7 @@ export function memStores(): Stores {
     schedules: new MemSendSchedules(),
     templates: new MemTemplates(),
     mergeTags: new MemMergeTags(),
+    apiKeys: new MemApiKeys(),
     alerts: new MemAlertConfigs(),
     usage: new MemUsage(),
     segments: new MemSegments(),

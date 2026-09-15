@@ -43,7 +43,7 @@ export const docId = (orgId: string, sub: string): string => `${orgId}:${sub}`;
 export function projectSubscriber(
   subscriber: Subscriber,
   confirmedLists: string[],
-  lastOpenAt?: string,
+  lastOpenAt = subscriber.lastOpenedAt,
 ): SubscriberDoc {
   return {
     orgId: subscriber.orgId,
@@ -130,7 +130,7 @@ export function subscriberToIndexOp(
   eventName: "INSERT" | "MODIFY" | "REMOVE",
   subscriber: Subscriber,
   confirmedLists: string[] = [],
-  lastOpenAt?: string,
+  lastOpenAt = subscriber.lastOpenedAt,
 ): IndexOp {
   const index = indexForOrg(subscriber.orgId);
   const id = docId(subscriber.orgId, subscriber.sub);

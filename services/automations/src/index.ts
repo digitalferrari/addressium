@@ -20,6 +20,7 @@ import {
   nextStepIndex,
   planLaunchDescriptor,
   runReengagementSweep,
+  recordSeriesEdition,
   scheduleActive,
   sendToSubscriber,
   type EmailTemplate,
@@ -112,6 +113,30 @@ function normalize(input: RecurringLaunchPayload | SendDescriptor, now: Date): R
   return { descriptor: input, editionKey: editionKeyFrom(undefined, now) };
 }
 
+/** Persist the observable result of a feed pull without making the send depend
+ * on the status write. A failed status write must not turn a successful feed
+ * pull into a duplicate edition on scheduler retry. */
+async function recordFeedRun(
+  feedId: string | undefined,
+  orgId: string,
+  result: { status: "ok" | "error"; itemCount?: number; error?: string },
+): Promise<void> {
+  if (!feedId) return;
+  const feed = await stores().feeds.get(orgId, feedId);
+  if (!feed) return;
+  try {
+    await stores().feeds.put({
+      ...feed,
+      lastPulledAt: clock.now().toISOString(),
+      ...(result.itemCount !== undefined ? { lastItemCount: result.itemCount } : {}),
+      lastStatus: result.status,
+      ...(result.error ? { lastError: result.error.slice(0, 300) } : { lastError: undefined }),
+    });
+  } catch (error) {
+    console.error("feeds: could not record pull result", { orgId, feedId, error: (error as Error).message });
+  }
+}
+
 export async function handler(input: RecurringLaunchPayload | SendDescriptor) {
   const payload = normalize(input, clock.now());
   // Lifecycle gate (§4.6): if the series was paused or archived, skip this
@@ -122,9 +147,19 @@ export async function handler(input: RecurringLaunchPayload | SendDescriptor) {
     return { ok: true, skipped: state?.status ?? "inactive" };
   }
   // Pull + parse the feed for this firing (guarded fetch, pinned IP, size cap).
-  const items = payload.feed
-    ? await fetchFeedItems(payload.feed.url, payload.feed.format)
-    : undefined;
+  let items: Awaited<ReturnType<typeof fetchFeedItems>> | undefined;
+  if (payload.feed) {
+    try {
+      items = await fetchFeedItems(payload.feed.url, payload.feed.format);
+      await recordFeedRun(payload.feed.feedId, payload.descriptor.orgId, { status: "ok", itemCount: items.length });
+    } catch (e) {
+      await recordFeedRun(payload.feed.feedId, payload.descriptor.orgId, {
+        status: "error",
+        error: e instanceof Error ? e.message : "feed pull failed",
+      });
+      throw e;
+    }
+  }
   // A feed that yielded no usable items must NOT become an edition. parseFeed
   // returns [] rather than throwing for a truncated body or an HTML error page
   // served with 200, and [] is truthy — so this used to build an edition with
@@ -134,6 +169,14 @@ export async function handler(input: RecurringLaunchPayload | SendDescriptor) {
     return { ok: true, skipped: "empty-feed", campaignId: payload.descriptor.campaignId };
   }
   const descriptor = planLaunchDescriptor(payload, items);
+  await recordSeriesEdition(stores(), {
+    orgId: descriptor.orgId,
+    seriesId: payload.descriptor.seriesId ?? payload.descriptor.campaignId,
+    campaignId: descriptor.campaignId,
+    subject: descriptor.subject,
+    listId: descriptor.listId,
+    ...(descriptor.segmentId ? { segmentId: descriptor.segmentId } : {}),
+  });
   await queue().enqueue(descriptor);
   return { ok: true, enqueued: descriptor.campaignId };
 }

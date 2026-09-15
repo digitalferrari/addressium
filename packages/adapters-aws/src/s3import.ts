@@ -10,10 +10,33 @@ import { GetObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import type { ImportFileStore } from "@addressium/domain";
 
+/**
+ * A client that will not poison a presigned PUT with a checksum (#252).
+ *
+ * Since v3.729 the SDK computes a CRC32 for every `PutObject` by default and,
+ * when presigning, hoists it into the QUERY STRING as `x-amz-checksum-crc32`.
+ * There is no body at signing time, so the value is the CRC32 of ZERO BYTES
+ * (`AAAAAA==`). The browser then PUTs the real file, S3 checksums what it
+ * actually received, the two disagree, and every upload of a non-empty file
+ * fails with `XAmzContentChecksumMismatch` — a 400 that looks exactly like a
+ * CORS or signature problem and is neither.
+ *
+ * `WHEN_REQUIRED` keeps the checksum for the operations that mandate one and
+ * drops it here, which is the only configuration under which a browser can
+ * complete a presigned PUT: a browser `fetch` cannot be made to send a matching
+ * `x-amz-checksum-*`, because the value depends on bytes it is streaming.
+ *
+ * Integrity is not lost — the presigned URL is still SigV4 over the key, the
+ * bucket and an expiry, the transfer is TLS, and the import job validates what
+ * it parses row by row.
+ */
+const presignSafeClient = (): S3Client =>
+  new S3Client({ requestChecksumCalculation: "WHEN_REQUIRED" });
+
 export class S3ImportFileStore implements ImportFileStore {
   constructor(
     private readonly bucket: string,
-    private readonly s3 = new S3Client({}),
+    private readonly s3 = presignSafeClient(),
     /**
      * Short. A presigned PUT is a bearer credential to write one object in our
      * bucket, so it should outlive the upload and nothing more — long enough for

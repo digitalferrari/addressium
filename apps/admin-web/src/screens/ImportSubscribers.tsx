@@ -32,6 +32,18 @@ export function ImportSubscribers({ org }: { org: string }) {
       <p className="muted" style={{ marginTop: -8 }}>
         Paste CSV to bulk-add subscribers to a list. Run a dry run first to preview counts.
       </p>
+      {/*
+        This screen sends the CSV inside the request, so it is bounded by the
+        API's payload ceiling — a migration-sized file cannot go through here at
+        all. Import (mapper) uploads the file straight to storage and runs it as
+        a background job, so the operator who arrives here with a real export is
+        told where to go rather than discovering it from a failed request (#287).
+      */}
+      <p className="muted" style={{ marginTop: -4 }}>
+        For a file (rather than pasted text), a gzipped or JSON Lines export, or anything
+        larger than a few megabytes, use <strong>Import (mapper)</strong> — it uploads
+        directly to storage and runs as a background job.
+      </p>
       {lists.data && lists.data.length === 0 && (
         <div className="card muted">No newsletters yet — create a list first.</div>
       )}

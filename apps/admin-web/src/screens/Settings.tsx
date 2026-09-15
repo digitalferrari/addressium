@@ -135,7 +135,7 @@ function CustomerSyncTab({ org }: { org: string }) {
   return <div>
     <div className="card">
       <h3>External customer record</h3>
-      <p className="muted">Addressium keeps lists, subscriptions and segments here. When a subscriber confirms or unsubscribes, the customer record system can be updated asynchronously.</p>
+      <p className="muted">Addressium keeps lists, subscriptions and segments here. When a subscriber with an external customer ID confirms or unsubscribes, the customer record system can be updated asynchronously.</p>
       <label>HTTPS endpoint<input value={endpoint} onChange={(e) => setEndpoint(e.target.value)} placeholder="https://customers.example.com/addressium-events" style={{ width: "100%" }} disabled={busy} /></label>
       <label>External table name<input value={tableName} onChange={(e) => setTableName(e.target.value)} placeholder="customers" style={{ width: "100%" }} disabled={busy} /></label>
       <label style={{ display: "flex", gap: 8, alignItems: "center" }}><input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} disabled={busy} /> Enable customer updates</label>
@@ -145,7 +145,7 @@ function CustomerSyncTab({ org }: { org: string }) {
     </div>
     <div className="card" style={{ borderColor: "var(--warn)", background: "var(--warn-soft)" }}>
       <strong>Events in the first delivery slice</strong>
-      <p className="muted">Only confirmed newsletter subscriptions and newsletter unsubscriptions are sent. Delivery is queued so this endpoint cannot block the public signup or unsubscribe path.</p>
+      <p className="muted">Only confirmed newsletter subscriptions and newsletter unsubscriptions for records with an external customer ID are sent. IDs come from imports or the signed identity-sync API; delivery is queued so this endpoint cannot block the public signup or unsubscribe path.</p>
     </div>
   </div>;
 }

@@ -60,6 +60,10 @@ function mockApi(report: CampaignReport) {
     { campaignId: report.campaignId, subject: "The Ledger" },
   ] as never);
   vi.spyOn(api, "report").mockResolvedValue(report as never);
+  vi.spyOn(api, "analyticsTrends").mockResolvedValue({
+    orgId: "acme", from: "2026-06-22", through: "2026-07-21", days: 30, points: [],
+    summary: { subscriberCount: 1200, current: { emailsSent: 1000, openRate: 0.31, clickRate: 0.12 }, previous: { emailsSent: 900, openRate: 0.25, clickRate: 0.1 } },
+  });
 }
 
 async function load(report: CampaignReport) {
@@ -146,10 +150,10 @@ test("counters that point at our own bug are rendered, not hidden when small", a
   expect(screen.getByText("Delivery delays")).toBeTruthy();
 });
 
-test("the click-map tab explains the missing archived body instead of failing", async () => {
+test("the click-map tab explains when an older archive body is unavailable", async () => {
   const user = await load(REPORT);
   await user.click(await screen.findByRole("tab", { name: "Click map" }));
-  expect(screen.getByText(/Not yet built — the overlay, not the numbers/)).toBeTruthy();
+  expect(screen.getByText(/Archive preview unavailable for this campaign/)).toBeTruthy();
 });
 
 test("a grant that does not cover this org gets the refusal, not an empty screen", () => {

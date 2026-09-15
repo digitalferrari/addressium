@@ -33,14 +33,16 @@ export async function recordOpen(
   /** Stable source id so a redelivered notification doesn't double-count (#183). */
   eventId?: string,
 ): Promise<void> {
+  const at = clock.now().toISOString();
   await stores.events.append({
     orgId,
     campaignId,
     subscriberId,
     type: "open",
-    at: clock.now().toISOString(),
+    at,
     eventId,
   });
+  await stores.subscribers.markOpened(orgId, subscriberId, at);
 }
 
 /**

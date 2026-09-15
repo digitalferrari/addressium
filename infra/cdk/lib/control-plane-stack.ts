@@ -19,7 +19,7 @@ import { Stack, type StackProps, RemovalPolicy, Duration, CfnOutput, Lazy, ArnFo
 import type { Construct } from "constructs";
 import { AttributeType, BillingMode, StreamViewType, Table, TableEncryption } from "aws-cdk-lib/aws-dynamodb";
 import { Key } from "aws-cdk-lib/aws-kms";
-import { Bucket, BlockPublicAccess, ObjectLockRetention, StorageClass } from "aws-cdk-lib/aws-s3";
+import { Bucket, BlockPublicAccess, ObjectLockRetention, StorageClass, HttpMethods } from "aws-cdk-lib/aws-s3";
 import { Queue, QueueEncryption } from "aws-cdk-lib/aws-sqs";
 import {
   Mfa,
@@ -379,6 +379,16 @@ export class ControlPlaneStack extends Stack {
     const importBucket = new Bucket(this, "ImportBucket", {
       blockPublicAccess: BlockPublicAccess.BLOCK_ALL,
       enforceSSL: true,
+      // Browser uploads use a bearer presigned PUT. CORS is only the browser
+      // permission layer; the URL remains scoped to one derived object and
+      // expires after 15 minutes.
+      cors: [{
+        allowedOrigins: [props.adminAppUrl ? props.adminAppUrl.replace(/\/+$/, "") : "*"],
+        allowedMethods: [HttpMethods.PUT],
+        allowedHeaders: ["*"],
+        exposedHeaders: ["ETag"],
+        maxAge: 900,
+      }],
       lifecycleRules: [
         {
           id: "expire-imports",
@@ -1698,6 +1708,7 @@ export class ControlPlaneStack extends Stack {
         actions: [
           "kms:CreateKey",
           "kms:CreateAlias",
+          "kms:UpdateAlias",
           "kms:TagResource",
           "ses:CreateConfigurationSet",
           "ses:CreateConfigurationSetEventDestination",
@@ -1738,6 +1749,12 @@ export class ControlPlaneStack extends Stack {
       integration: new HttpLambdaIntegration("ProvisioningInt", provisioningFn),
       authorizer: adminAuth, // handler additionally requires identity:manage
     });
+    api.addRoutes({
+      path: "/orgs/{org}/identity/rotate-key",
+      methods: [HttpMethod.POST],
+      integration: new HttpLambdaIntegration("RotateMagicLinkKeyInt", provisioningFn),
+      authorizer: adminAuth,
+    });
 
     // Public JWKS so publisher sites can verify magic-link tokens (§4.10).
     const tokensFn = fn("TokensFn", svc("services/tokens/src/index.ts"), "handler", apiEnv);
@@ -1759,6 +1776,7 @@ export class ControlPlaneStack extends Stack {
     // is scoped by the caller's own grant, creating requires identity:manage.
     adminRoute("OrgsListFn", "orgsListHandler", HttpMethod.GET, "/orgs");
     adminRoute("OrgMetaFn", "orgMetaHandler", HttpMethod.GET, "/orgs/{org}");
+    adminRoute("SearchFn", "searchHandler", HttpMethod.GET, "/orgs/{org}/search");
     // Read-only identity config for the console's Identity & pools screen. Its
     // own route because the handler gates on identity:manage, not reports:view.
     adminRoute("OrgIdentityFn", "orgIdentityHandler", HttpMethod.GET, "/orgs/{org}/identity");
@@ -1785,6 +1803,15 @@ export class ControlPlaneStack extends Stack {
     adminRoute("MergeTagsGetFn", "mergeTagsHandler", HttpMethod.GET, "/orgs/{org}/merge-tags");
     adminRoute("MergeTagsPostFn", "mergeTagsHandler", HttpMethod.POST, "/merge-tags");
     adminRoute("MergeTagDeleteFn", "mergeTagDeleteHandler", HttpMethod.POST, "/merge-tags/delete");
+    // API keys (#280). All four carry the admin authorizer — `verify` especially:
+    // it turns a plaintext key into a yes/no, which unauthenticated would be an
+    // oracle to grind candidate keys against. No route in this build is
+    // AUTHENTICATED BY an API key; these manage the credentials, and the console
+    // still rides Cognito.
+    adminRoute("ApiKeysGetFn", "apiKeysHandler", HttpMethod.GET, "/orgs/{org}/api-keys");
+    adminRoute("ApiKeysPostFn", "apiKeysHandler", HttpMethod.POST, "/api-keys");
+    adminRoute("ApiKeyRevokeFn", "apiKeyRevokeHandler", HttpMethod.POST, "/api-keys/revoke");
+    adminRoute("ApiKeyVerifyFn", "apiKeyVerifyHandler", HttpMethod.POST, "/api-keys/verify");
     // Recurring campaign series (§4.6): list, read one, create/edit. No delete —
     // editions and series-bound ad fills reference a series by id.
     adminRoute("SeriesGetFn", "seriesHandler", HttpMethod.GET, "/orgs/{org}/series");
@@ -1805,6 +1832,7 @@ export class ControlPlaneStack extends Stack {
     // Operator-side subscriber management (#102): list/search, suppression list,
     // and lift-suppression.
     adminRoute("SubscribersListFn", "subscribersListHandler", HttpMethod.GET, "/orgs/{org}/subscribers");
+    adminRoute("SubscriberTimelineFn", "subscriberTimelineHandler", HttpMethod.GET, "/orgs/{org}/subscribers/{sub}/timeline");
     adminRoute("SubscriberDetailFn", "subscriberDetailHandler", HttpMethod.GET, "/orgs/{org}/subscribers/{sub}");
     adminRoute("SubscriberAttrsFn", "subscriberAttributesHandler", HttpMethod.POST, "/subscribers/attributes");
     adminRoute("SubscriptionStatusFn", "subscriptionStatusHandler", HttpMethod.POST, "/subscribers/subscription");
@@ -1827,6 +1855,7 @@ export class ControlPlaneStack extends Stack {
     adminRoute("ImportSegmentFn", "importSegmentHandler", HttpMethod.POST, "/orgs/{org}/import/segment");
     // Async import (#242): presign an upload, then run it as a job.
     adminRoute("ImportUploadUrlFn", "importUploadUrlHandler", HttpMethod.POST, "/orgs/{org}/import/upload-url");
+    adminRoute("ImportUploadPreviewFn", "importUploadPreviewHandler", HttpMethod.POST, "/orgs/{org}/import/upload-preview");
     adminRoute("ImportAsyncFn", "importAsyncHandler", HttpMethod.POST, "/orgs/{org}/import/async");
     adminRoute("ImportMappingsGetFn", "importMappingsHandler", HttpMethod.GET, "/orgs/{org}/import/mappings");
     adminRoute("ImportMappingsPostFn", "importMappingsHandler", HttpMethod.POST, "/orgs/{org}/import/mappings");
@@ -1880,6 +1909,10 @@ export class ControlPlaneStack extends Stack {
     const reportingEntry = svc("services/reporting/src/index.ts");
     const reportFn = fn("ReportFn", reportingEntry, "handler", apiEnv);
     table.grantReadData(reportFn);
+    const trendsFn = fn("TrendsFn", reportingEntry, "trendsHandler", apiEnv);
+    table.grantReadData(trendsFn);
+    const seriesReportFn = fn("SeriesReportFn", reportingEntry, "seriesReportHandler", apiEnv);
+    table.grantReadData(seriesReportFn);
     const archiveFn = fn("ArchiveFn", reportingEntry, "archiveHandler", { ...apiEnv, ARCHIVE_BUCKET: archiveBucket.bucketName });
     table.grantReadData(archiveFn);
     archiveBucket.grantRead(archiveFn);
@@ -1887,6 +1920,18 @@ export class ControlPlaneStack extends Stack {
       path: "/orgs/{org}/campaigns/{campaign}/report",
       methods: [HttpMethod.GET],
       integration: new HttpLambdaIntegration("ReportInt", reportFn),
+      authorizer: adminAuth,
+    });
+    api.addRoutes({
+      path: "/orgs/{org}/analytics/trends",
+      methods: [HttpMethod.GET],
+      integration: new HttpLambdaIntegration("TrendsInt", trendsFn),
+      authorizer: adminAuth,
+    });
+    api.addRoutes({
+      path: "/orgs/{org}/series/{series}/report",
+      methods: [HttpMethod.GET],
+      integration: new HttpLambdaIntegration("SeriesReportInt", seriesReportFn),
       authorizer: adminAuth,
     });
     api.addRoutes({

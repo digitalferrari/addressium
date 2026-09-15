@@ -110,6 +110,91 @@ test("a record with neither a send time nor a cron still renders a dash", async 
   expect(await screen.findByText("—")).toBeInTheDocument();
 });
 
+/**
+ * A one-off that has already sent (#263).
+ *
+ * The domain records `completed` once the full recipient range goes out, and
+ * `schedulesListHandler` returns the record verbatim — but `api.ts` mirrored
+ * only the three operator-driven states, so the fired send arrived as a status
+ * this screen had no case for and rendered through the "not active" fallbacks.
+ */
+const SENT: SendScheduleState = {
+  ...ONE_OFF,
+  scheduleId: "ledger-2026-07-20",
+  status: "completed",
+  sendAt: "2026-07-20T15:30:00.000Z",
+  completedRanges: [{}],
+};
+
+test("a one-off that has already sent does not read ACTIVE", async () => {
+  mount([SENT]);
+  expect(await screen.findByText("COMPLETED")).toBeInTheDocument();
+  expect(screen.queryByText("ACTIVE")).not.toBeInTheDocument();
+});
+
+test("a completed send is not offered a restart", async () => {
+  // `transitionSchedule` rejects start and pause on a completed schedule, so a
+  // live Start button offers an action the server will refuse — and implies the
+  // send has not gone out yet, which is the whole complaint in #263.
+  mount([SENT]);
+  await screen.findByText("COMPLETED");
+  expect(screen.getByRole("button", { name: "Start" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Pause" })).toBeDisabled();
+  // Archive is the one transition the domain still allows, and it is how a
+  // fired one-off leaves a list an operator scans for what is still pending.
+  expect(screen.getByRole("button", { name: "Archive" })).toBeEnabled();
+});
+
+test("a one-off archived mid-send is not offered a restart either", async () => {
+  // `completeScheduleRange` writes `complete && status !== "archived"`, so an
+  // operator's archive stands and the finished send keeps `archived` with its
+  // ranges full. The domain refuses start/pause on THAT too — gating on the
+  // status string alone would leave Start live and the server would answer
+  // with the InvalidInputError this issue is about.
+  mount([{ ...SENT, scheduleId: "filed-mid-send", status: "archived", completedRanges: [{}] }]);
+  await screen.findByText("ARCHIVED");
+  expect(screen.getByRole("button", { name: "Start" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Pause" })).toBeDisabled();
+});
+
+test("an archived send that never fired can still be restarted", async () => {
+  // The converse: archive is reversible for a send with no completed range, and
+  // the guard above must not turn it into a second terminal state.
+  mount([{ ...ONE_OFF, status: "archived", completedRanges: undefined }]);
+  await screen.findByText("ARCHIVED");
+  expect(screen.getByRole("button", { name: "Start" })).toBeEnabled();
+});
+
+test("a partial range is not treated as sent", async () => {
+  // Only a range covering the whole key space completes a one-off. A slice that
+  // has finished is mid-send, and pausing it is exactly the #179 deferral the
+  // five-minute window exists for.
+  mount([{ ...ONE_OFF, completedRanges: [{ until: "m" }] }]);
+  await screen.findByText("ACTIVE");
+  expect(screen.getByRole("button", { name: "Pause" })).toBeEnabled();
+});
+
+test("completed is visually distinct from archived — they answer different questions", async () => {
+  mount([SENT, { ...SENT, scheduleId: "filed", status: "archived" }]);
+  const completed = await screen.findByText("COMPLETED");
+  const archived = screen.getByText("ARCHIVED");
+  expect(completed).toBeInTheDocument();
+  expect(archived).toBeInTheDocument();
+  // Asserted as "not the same colour" rather than against a hex literal: the
+  // requirement is that an operator can tell "it sent" from "I filed it", not
+  // that the palette never changes.
+  expect(completed.style.background).not.toBe(archived.style.background);
+});
+
+test("an active one-off still gets its normal controls", async () => {
+  // The guard above must not leak onto a send that has not fired: Pause is the
+  // control the five-minute cancel window (§4.6) exists to make usable.
+  mount([ONE_OFF]);
+  await screen.findByText("ACTIVE");
+  expect(screen.getByRole("button", { name: "Pause" })).toBeEnabled();
+  expect(screen.getByRole("button", { name: "Start" })).toBeDisabled();
+});
+
 test("a malformed send time degrades to a dash, not 'Invalid Date'", async () => {
   // `toLocaleString()` on an unparseable date prints "Invalid Date" — a string
   // an operator could read as a real state of the send rather than as a broken

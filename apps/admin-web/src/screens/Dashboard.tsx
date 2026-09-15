@@ -9,6 +9,7 @@ import { useMemo } from "react";
 import { useAsync } from "../useAsync.js";
 import { relativeTime } from "../time.js";
 import { api, type AlertConfig, type AlertRule, type CampaignReport, type CampaignRow, type SetupState } from "../api.js";
+import { TrendsPanel } from "./Analytics.js";
 
 /**
  * A campaign's status rendered as a colour, not just a word (#261).
@@ -73,18 +74,9 @@ async function loadDashboardSending(org: string): Promise<{
  * Dashboard (#261). The landing page of a sending tool used to be a count of
  * lists: it told an operator nothing about sending.
  *
- * What it now shows is bounded by what can be DERIVED from an endpoint that
- * exists. The prototype's `demo/index.html` dashboard has four parts, and it
- * flags two of them `Not yet built` itself: the rolling-30-day KPI strip
- * (`demo/index.html:525` — total subscribers, emails sent 30d, average open and
- * click rates, each with a "vs last month" delta) and the trend chart
- * (`:534`). Neither is built here, and not merely out of deference to the
- * prototype — nothing on the wire can produce those numbers. `GET
- * /orgs/{org}/subscribers` is a PAGE with a cursor and no total, so "total
- * subscribers" has no source; no endpoint aggregates across campaigns or over a
- * window, so a 30-day average and every delta would have to be invented. A
- * fabricated rate on a deliverability screen is worse than an absent one: it is
- * the number someone decides not to investigate a complaint rate over.
+ * What it now shows is bounded by what can be DERIVED from real endpoints. The
+ * rolling subscriber KPI strip still waits on a total-count endpoint, but the
+ * trend area is backed by the reporting service's append-only event aggregation.
  *
  * The two panels the prototype does NOT flag are the two built here, because
  * both are per-campaign counters `campaignReport` already returns and
@@ -106,6 +98,7 @@ export function Dashboard({ org, onGoToSetup, onCompose, onViewCampaigns }: {
   // campaign list, and a campaigns route the caller lacks `reports:view` for
   // must not hide the setup nag that tells them why the org cannot send.
   const alerts = useAsync(() => api.alertConfig(org), [org]);
+  const trends = useAsync(() => api.analyticsTrends(org, 30), [org]);
   const sending = useAsync(() => loadDashboardSending(org), [org]);
 
   const recent = useMemo(
@@ -183,6 +176,7 @@ export function Dashboard({ org, onGoToSetup, onCompose, onViewCampaigns }: {
           </ul>
         )}
       </section>
+      <TrendsPanel trends={trends.data} loading={trends.loading} error={trends.error} />
     </div>
   );
 }
@@ -281,10 +275,9 @@ function DeliverabilityPanel({
             </dd>
           </dl>
           <p className="muted" style={{ marginBottom: 0 }}>
-            Rates are this edition's own counters, not a 30-day aggregate. Averages over
-            a window, audience totals and the trend chart are not built — nothing on the
-            API aggregates across campaigns, so there is no honest number to show.
-            DKIM/SPF/DMARC state and the SES send quota are not readable at all.
+            Rates are this edition's own counters, not the 30-day aggregate shown on the
+            dashboard. Audience totals, DKIM/SPF/DMARC state and the SES send quota are
+            not readable at all.
           </p>
         </>
       )}

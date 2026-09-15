@@ -1,17 +1,18 @@
 /**
  * Subscriber site (#5): newsletter directory (branding-themed, presentation
- * toggles honored) and all-lists view, plus the double opt-in confirm landing
- * and one-click unsubscribe, both reached by signed token. Reads public
- * branding + list views; posts signup to the API. There is no login here — the
- * addressium subscriber record is the identity, and any Cognito pool belongs to
- * the org, not to us (docs/ARCHITECTURE.md §4.10).
+ * toggles honored) and all-lists view, plus the signed preference centre,
+ * double opt-in confirm landing, and one-click unsubscribe. Reads public
+ * branding + list views; posts signup and preference changes to the API. There
+ * is no login here — the addressium subscriber record is the identity, and any
+ * Cognito pool belongs to the org, not to us (docs/ARCHITECTURE.md §4.10).
  */
-import { useEffect, useMemo, useState } from "react";
-import { api, applyBranding, displayError, ORG, type Branding, type PublicList } from "./api.js";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { api, applyBranding, displayError, ORG, type Branding, type PreferenceView, type PublicList } from "./api.js";
 
 type Route =
   | { name: "directory" }
   | { name: "all" }
+  | { name: "preferences"; token?: string }
   | { name: "confirm"; token: string }
   | { name: "unsubscribe"; token: string };
 
@@ -20,6 +21,7 @@ function parseRoute(): Route {
   const path = window.location.pathname;
   if (path.endsWith("/confirm") && p.get("token")) return { name: "confirm", token: p.get("token")! };
   if (path.endsWith("/unsubscribe") && p.get("token")) return { name: "unsubscribe", token: p.get("token")! };
+  if (path.endsWith("/preferences")) return { name: "preferences", ...(p.get("token") ? { token: p.get("token")! } : {}) };
   if (path.endsWith("/all")) return { name: "all" };
   return { name: "directory" };
 }
@@ -38,10 +40,11 @@ export function App() {
           {branding?.logoUrl ? <img src={branding.logoUrl} alt="" /> : <span className="brand-mark">A</span>}
           <span>{branding ? "Newsletters" : "addressium"}</span>
         </a>
-        {(route.name === "directory" || route.name === "all") && (
+        {(route.name === "directory" || route.name === "all" || route.name === "preferences") && (
           <nav aria-label="Newsletter navigation">
             <a className={route.name === "directory" ? "active" : ""} href="/">Browse</a>
             <a className={route.name === "all" ? "active" : ""} href="/all">Subscribe to all</a>
+            <a className={route.name === "preferences" ? "active" : ""} href="/preferences">Manage subscriptions</a>
           </nav>
         )}
       </header>
@@ -60,7 +63,93 @@ export function App() {
       )}
       {route.name === "confirm" && <main className="action-page"><Confirm token={route.token} /></main>}
       {route.name === "unsubscribe" && <main className="action-page"><Unsubscribe token={route.token} /></main>}
+      {route.name === "preferences" && <main className="action-page"><Preferences token={route.token} /></main>}
       <footer>Powered by addressium · You can unsubscribe at any time.</footer>
+    </div>
+  );
+}
+
+export function Preferences({ token }: { token?: string }) {
+  const [view, setView] = useState<PreferenceView | null>(null);
+  const [checked, setChecked] = useState<Record<string, boolean>>({});
+  const [email, setEmail] = useState("");
+  const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (!token) return;
+    setBusy(true);
+    api.preferences(token)
+      .then((next) => {
+        setView(next);
+        setChecked(Object.fromEntries(next.rows.map((row) => [row.listId, row.subscribed])));
+      })
+      .catch((e) => setError(displayError(e)))
+      .finally(() => setBusy(false));
+  }, [token]);
+
+  const request = async (event: FormEvent) => {
+    event.preventDefault();
+    setBusy(true); setError(""); setMessage("");
+    try {
+      const result = await api.requestPreferences(email);
+      setMessage(result.message);
+      setEmail("");
+    } catch (e) { setError(displayError(e)); }
+    finally { setBusy(false); }
+  };
+
+  const save = async () => {
+    if (!token || !view) return;
+    setBusy(true); setError(""); setMessage("");
+    const changes = view.rows
+      .filter((row) => checked[row.listId] !== row.subscribed)
+      .map((row) => ({ listId: row.listId, subscribed: checked[row.listId] === true }));
+    try {
+      const result = await api.updatePreferences(token, changes);
+      setView(result.view);
+      setChecked(Object.fromEntries(result.view.rows.map((row) => [row.listId, row.subscribed])));
+      setMessage(result.rejected.length ? "Some changes could not be applied." : "Your preferences have been saved.");
+    } catch (e) { setError(displayError(e)); }
+    finally { setBusy(false); }
+  };
+
+  if (!token) return (
+    <div className="action-card preference-card">
+      <span className="action-icon">✦</span>
+      <div className="title">Manage your subscriptions</div>
+      <p className="muted">Enter your email and we’ll send a private link to update every newsletter subscription.</p>
+      <form className="preference-request" onSubmit={(e) => void request(e)}>
+        <input type="email" required placeholder="you@example.com" value={email} onChange={(e) => setEmail(e.target.value)} disabled={busy} />
+        <button disabled={busy}>{busy ? "Sending…" : "Email me a link"}</button>
+      </form>
+      {message && <p className="muted">{message}</p>}
+      {error && <p className="err">{error}</p>}
+    </div>
+  );
+
+  if (error && !view) return <div className="action-card preference-card"><div className="title">This link could not be opened</div><p className="err">{error}</p><a href="/preferences">Request a new link</a></div>;
+  if (!view) return <div className="action-card preference-card"><p className="muted">Loading your preferences…</p></div>;
+
+  return (
+    <div className="action-card preference-card preference-editor">
+      <span className="action-icon">✦</span>
+      <div className="title">Your subscriptions</div>
+      <p className="muted">Manage newsletters for <strong>{view.email}</strong>.</p>
+      {view.rows.length === 0 && <p className="muted">There are no newsletters available for this address.</p>}
+      <div className="preference-list">
+        {view.rows.map((row) => (
+          <label className="preference-row" key={row.listId}>
+            <input type="checkbox" checked={checked[row.listId] === true} onChange={(e) => setChecked((current) => ({ ...current, [row.listId]: e.target.checked }))} disabled={busy || row.status === "bounced" || row.status === "complained"} />
+            <span><b>{row.name}</b>{row.description && <small>{row.description}</small>}{(row.status === "bounced" || row.status === "complained") && <small className="err">This address cannot be resubscribed.</small>}</span>
+          </label>
+        ))}
+      </div>
+      <button onClick={() => void save()} disabled={busy}>{busy ? "Saving…" : "Save preferences"}</button>
+      {message && <p className="muted">{message}</p>}
+      {error && <p className="err">{error}</p>}
+      <a href="/">Back to newsletters</a>
     </div>
   );
 }

@@ -55,6 +55,7 @@ test("provision assembles the org record and returns DKIM/SPF/DMARC DNS", async 
   assert.equal(result.org.orgId, "northwind-times");
   assert.equal(result.org.subscriberPoolId, "pool-123");
   assert.equal(result.org.magicLink?.kmsKeyArn, "arn:aws:kms:...:key/abc");
+  assert.deepEqual(result.org.magicLink?.keys, [{ kmsKeyArn: "arn:aws:kms:...:key/abc", kid: "abc" }]);
   assert.equal(result.org.magicLink?.audience, "northwindtimes.example");
   assert.equal(result.org.defaultTimezone, "America/Denver");
   assert.equal(result.org.ipMode, "shared");

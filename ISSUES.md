@@ -165,12 +165,36 @@ textarea. Moving a real subscriber base in, on migration day, therefore hits a
 (`accept=".csv,text/csv"`, read as text) where the prototype and the async path
 both take the gzipped JSON Lines a Pinpoint export job produces.
 **Where:** `services/api/src/index.ts:1596-1606,1701,1728,2243-2244` · `apps/admin-web/src/App.tsx:1443-1448,1493,1780-1783`
-**Status:** deferred — larger than it reads. The console cannot PUT to the
-presigned URL at all until `ImportBucket` carries a CORS rule allowing PUT from
-the console origin, and it has none (`infra/cdk/lib/control-plane-stack.ts:379`
-sets `blockPublicAccess`, `enforceSSL` and lifecycle rules only). That makes
-this an infra + console change whose central step cannot be verified locally,
-on top of presign → PUT → async → poll and the gzipped-JSONL accept change.
+**Status:** fixed — Import mapper now accepts CSV, JSONL and gzip files. Small
+files keep the inline preview/import flow; larger files upload directly to the
+private import bucket, use the server-side upload-preview route to build the
+same mapping UI, and queue the confirmed plan through the existing async job.
+The import bucket now has browser PUT CORS, and import history shows running,
+completed and failed job states. Dry runs remain intentionally inline-only;
+large files must be previewed and then queued.
+
+CORS was not the last blocker. With the rule in place every non-empty upload
+still failed a 400 that reads exactly like a CORS or signature fault: since
+`@aws-sdk/client-s3` v3.729 `PutObjectCommand` computes a CRC32 by default, and
+the presigner hoists it into the query string. At signing time there is no body,
+so the signed value is the CRC32 of ZERO BYTES (`x-amz-checksum-crc32=AAAAAA==`).
+S3 then checksums the real file the browser uploaded, the two disagree, and the
+PUT is rejected — and a browser cannot fix it from its side, because `fetch`
+cannot compute a matching checksum for a body it is streaming. `S3ImportFileStore`
+now signs with `requestChecksumCalculation: "WHEN_REQUIRED"`, and
+`packages/integration-tests/test/s3import-presign.test.ts` asserts the signed URL
+carries no `x-amz-checksum-*` and signs only `host`, so an SDK upgrade that
+re-enables the default goes red before it reaches an operator mid-migration.
+
+Import history now polls while a batch is `running` — a queued job finishes
+minutes after the 202, and a table loaded once showed `running` for ever, which
+cannot be told apart from a job that died.
+
+**Known looseness:** the bucket's CORS `allowedOrigins` falls back to `"*"` when
+`adminAppUrl` is unset, which no CDK entrypoint currently supplies. The presigned
+URL is the actual credential (it is scoped to one derived key and expires in 15
+minutes), so this widens no access — but it is looser than the API's own CORS,
+which resolves the real admin-site origin lazily at synth.
 
 ### #253 — The report drops four counters the API already returns
 **Screen:** Campaign report · **Kind:** bug · **Severity:** high
@@ -227,13 +251,12 @@ campaign, and the alert thresholds `GET /orgs/{org}/alerts` already returns.
 Filed low because nothing is wrong on this screen; it is just that the landing
 page of a sending tool tells an operator nothing about sending.
 **Where:** `apps/admin-web/src/App.tsx:226-249` · `demo/index.html:517-572`
-**Status:** fixed — the Dashboard now shows a recent-campaigns list and a
+**Status:** fixed — the Dashboard now shows a recent-campaigns list, a
 deliverability panel for the latest sent edition, its rates drawn against the
-org's own halt thresholds (`null` alert config renders "no thresholds", not 0%).
-The rolling-30-day KPI strip is NOT built: the prototype flags it `Not yet
-built` itself (`demo/index.html:525`, a second pill this entry missed), and
-nothing on the API aggregates across campaigns or returns a subscriber total, so
-every card in it and every "vs last month" delta would have been invented.
+org's own halt thresholds (`null` alert config renders "no thresholds", not 0%),
+and a real 30-day event trend. The trend endpoint also supplies the live
+subscriber total and prior-period comparison, so the KPI strip no longer
+depends on fabricated dashboard data.
 
 ### #263 — A one-off that has already sent still reads ACTIVE
 **Screen:** Schedules · **Kind:** bug · **Severity:** medium
@@ -267,8 +290,21 @@ already models start/pause/archive; the gap is that nothing calls it on success.
 
 **Where:** `packages/core/src/entities.ts` (`ScheduleStatus`),
 `packages/domain/src/schedule-state.ts` (`scheduleActive`, `transitionSchedule`),
-`packages/domain/src/send.ts` (post-send path), `apps/admin-web/src/App.tsx`
-(`Schedules` badge + Start/Pause/Archive gating)
+`packages/domain/src/send.ts` (post-send path),
+`apps/admin-web/src/screens/Schedules.tsx` and `screens/Campaigns.tsx`
+(badge + Start/Pause/Archive gating), `apps/admin-web/src/api.ts`
+(`SendScheduleState` mirror, `scheduleHasSent`)
+**Status:** fixed — the domain records completion once the full recipient range
+finishes and refuses to restart or pause a schedule that has sent. The console
+mirrors that: `"completed"` was missing from `api.ts`'s own copy of the status
+union, so a fired one-off arrived as a state neither screen had a case for and
+fell through to the ACTIVE branches. It now gets its own badge on Schedules and
+Campaigns, with Start and Pause disabled. The gate is `scheduleHasSent`, which
+reads the completed range rather than the status alone — `completeScheduleRange`
+preserves an operator's `archived` over `completed`, so a one-off archived
+mid-send finishes with full ranges under the old status and would otherwise
+still offer a restart the server refuses. Not done: completed rows are still
+listed inline with active ones rather than grouped apart.
 
 ### #254 — There is no campaign list, only a dropdown
 **Screen:** Campaign report (prototype: Campaigns) · **Kind:** missing-feature · **Severity:** medium
@@ -281,6 +317,8 @@ did it do" without picking campaigns one at a time from a dropdown and pressing
 Load — which is the first question anyone opens a campaign tool to ask. The
 prototype's Campaigns table is exactly these fields.
 **Where:** `services/api/src/index.ts:857-874` · `apps/admin-web/src/api.ts:206-215` · `apps/admin-web/src/App.tsx:308-315`
+**Status:** fixed — Campaigns now has a real list with status, type, audience,
+send time, and delivery metrics backed by the campaigns and report routes.
 
 ### #255 — Manual drip enrolment has a route and no screen
 **Screen:** Drip sequences · **Kind:** missing-feature · **Severity:** medium
@@ -294,6 +332,9 @@ from the console entirely. The prototype marks this specific screen `Not yet
 built` and says the route works (`demo/index.html:754-756`); it is filed here
 because the gap strands a feature the console itself lets you create.
 **Where:** `services/api/src/index.ts:990,2224` · `apps/admin-web/src/App.tsx:1988-2004` (trigger selector) · `apps/admin-web/src/api.ts` (no client method)
+**Status:** fixed — Automations now has a manual-only enrollment card that searches
+real subscribers, displays the step-0 consent gate, and confirms the real send
+before calling `POST /drip-sequences/enroll`.
 
 ### #256 — The segment editor is a raw JSON textarea
 **Screen:** Segments · **Kind:** ux-gap · **Severity:** medium
@@ -309,6 +350,11 @@ fails at the server with a message the screen shows as a raw error string. This
 is the screen that decides who receives mail; a typo here is a mis-targeted
 campaign.
 **Where:** `apps/admin-web/src/App.tsx:1305-1314`
+**Status:** fixed — Segments now opens with a structured condition builder for
+lists, entitlements, attributes and supported engagement recency. It mirrors
+the selected deployment's resolver capabilities, validates each row inline,
+and keeps Advanced JSON as an explicit escape hatch for predicates outside the
+safe builder subset.
 
 ### #257 — Ad blocks can be sent but not authored
 **Screen:** Compose & schedule, Templates · **Kind:** missing-feature · **Severity:** medium
@@ -321,9 +367,18 @@ type and populated by nothing. So the ad path exists end to end in the backend
 and is unreachable from the console, which for a publisher-facing product means
 the revenue-carrying block is the one you cannot place.
 **Where:** `apps/admin-web/src/api.ts:166-169,128` · `packages/domain/src/render.ts:17` · `apps/admin-web/src/App.tsx:529,557-558,726-727`
-**Status:** fixed — Templates now declare named ad slots, Compose can author `ad`
-blocks, and the Ad tags screen binds LiveIntent fills to recurring series using
-the existing series API. The renderer's verbatim/untracked behavior is unchanged.
+**Status:** fixed — the per-campaign path is closed end to end: Templates
+declare named ad slots, Compose authors `ad` blocks, the schedule boundary
+hard-sanitizes them and the renderer inserts them verbatim and untracked, as
+before. So the revenue-carrying block can now be placed on a campaign.
+
+The SERIES path is also wired: the send path resolves `SendDescriptor.seriesId`
+and overlays matching `CampaignSeries.adSlotFills` onto structured
+`Block{kind:"ad"}` bodies or replaces declared `{{ad_top}}`-style markers in
+raw HTML/MJML bodies. Unfilled structured slots retain their authored fallback;
+unfilled raw markers follow the existing unresolved-merge behavior. The
+operation is immutable, ad HTML bypasses merge escaping, and both paths are
+covered by end-to-end domain tests.
 
 ### #258 — Templates and Compose hold separate copies of the same body
 **Screen:** Compose & schedule · **Kind:** ux-gap · **Severity:** medium
@@ -337,6 +392,10 @@ selection on the campaign (`demo/index.html:682`). Either behaviour is
 defensible; the silent divergence between them is not, because the operator's
 model is "I fixed the template" and the sends disagree.
 **Where:** `apps/admin-web/src/App.tsx:661-668,682-695,580-597`
+**Status:** fixed — Compose labels saved templates as copies and tells the
+operator that later template edits do not update the current draft or a
+scheduled recurring send. Scheduling stores the current body snapshot
+explicitly.
 
 ### #259 — Nothing on the console reads the SES sending identity
 **Screen:** Setup (prototype: Settings → Domains) · **Kind:** missing-feature · **Severity:** medium
@@ -352,6 +411,9 @@ sandbox" — the two things that decide whether the org can send at all — and 
 new org that cannot send because nobody published the DKIM records is named in
 the code as the common failure.
 **Where:** `apps/admin-web/src/App.tsx:2291-2318,251-286` · `apps/admin-web/src/api.ts:611`
+**Status:** fixed — Settings reads live SES domain verification, sandbox,
+enforcement and quota state through `/orgs/{org}/sending-identity`, with unknown
+provider failures kept distinct from a failed domain.
 
 ---
 
@@ -371,6 +433,10 @@ what the console can do — but 21 flat links is past the point where an operato
 can find a screen they have not used before, and the prototype's five-group
 structure exists for that reason.
 **Where:** `apps/admin-web/src/App.tsx:117-208` · `demo/index.html:464-512`
+**Status:** fixed in the honest scope — the console now has grouped navigation,
+an org identity block and switcher, environment context, breadcrumbs, and a
+topbar. Search and notifications remain visibly unavailable because there is
+no backend search index or notification feed to power them.
 
 ### #262 — Presentation saves defaults over unset fields
 **Screen:** Presentation · **Kind:** bug · **Severity:** low
@@ -386,6 +452,18 @@ because they opened the screen to change a checkbox. The screen's own warning �
 accurate but does not distinguish a shown value the operator chose from one the
 constant supplied.
 **Where:** `apps/admin-web/src/App.tsx:2128-2148,2179-2180`
+**Status:** fixed in two parts. The labels were fixed first: presentation
+editing preserves absent labels instead of materializing the default "Daily"
+value when an unrelated field is saved. The five booleans were still wrong
+(GitHub #286) — the editor prefilled `showFrequency`/`showSendTime` as `true`
+while `publicListView` renders an absent `presentation` with both `false`, so
+opening the screen on a never-configured list and pressing Save published two
+fields the operator never chose. The editor's unconfigured state now mirrors
+`UNCONFIGURED_PRESENTATION` in `packages/domain/src/admin.ts` exactly, making
+Save-without-touching-anything a no-op. The two halves keep deliberately
+opposite presence semantics: the booleans are required, so presence is keyed on
+the `presentation` object itself; the labels are optional, so they stay keyed
+per field.
 
 ---
 
@@ -397,6 +475,18 @@ is deliberately deferred. When it is built, keys should be org-scoped, shown
 only once, stored hashed, revocable and least-privilege rather than becoming a
 second authentication path with unclear ownership.
 **Decision:** deferred while feeds, ad tags and customer-record delivery land.
+**Resolved by #280.** Keys are org-scoped (`ORG#<org>` / `APIKEY#<keyId>`),
+shown once at issuance and never again, stored as a SHA-256 digest, revoked by
+a `revokedAt` stamp that keeps the row, and scoped by a closed `ApiKeyScope`
+enum that deliberately excludes the console's own `apikeys:manage` and
+`team:manage` so a key cannot mint keys or grant roles. It is NOT a second
+authentication path: no route in the build is authenticated by an API key, and
+all four management routes ride the existing Cognito authorizer under
+`apikeys:manage`. `lastUsedAt` is written by `authenticateApiKey` alone, whose
+only entry point is the admin-gated `POST /api-keys/verify` — so an unused key
+reads "Never" as a fact rather than as an unfilled column. Outbound
+customer-record delivery is built separately; strong webhook signing remains
+deferred under #267.
 
 ### #267 — Outbound webhook authentication is deferred
 **Screen:** API & webhooks · **Kind:** security-gap · **Severity:** high
@@ -404,10 +494,12 @@ second authentication path with unclear ownership.
 Customer-record delivery notifies a separate system when a visitor subscribes
 to or unsubscribes from a newsletter. The first delivery slice uses the
 organization-configured endpoint and secret as a basic credential, and delivery
-is queued. Before treating this as a general public webhook contract, add HMAC
-signing, secret rotation and replay protection.
-**Decision:** defer strong webhook authentication until the delivery contract is
-proven; do not advertise the current simple secret header as a finished webhook
+is queued through a FIFO queue with retries and a DLQ. Before treating this as a
+general public webhook contract, add HMAC signing, secret rotation and replay
+protection.
+**Decision:** outbound customer-record delivery is built for the current
+subscribe/unsubscribe contract. Strong webhook authentication remains deferred;
+do not advertise the current simple secret header as a finished webhook
 security model.
 
 ## Not filed, and why
@@ -431,15 +523,23 @@ screen is a cross-org chargeback table where the shipped one is per-period for a
 single org; `api.usage(org)` cannot produce the cross-org view, which makes it a
 backend gap rather than a console one.
 
-- Every surface the prototype tags `Not yet built` — Analytics trends, the click
-  map overlay, API keys, series-level reporting, engagement-recency segments,
-  per-subscriber timelines. These are declared design intent that the code has
-  deliberately not implemented, and the prototype says so in place. The
-  re-engagement policy editor is now implemented: it persists the per-org
-  policy, validates the selected send list, and feeds the existing weekly sweep.
-- **Identity & pools** — the prototype's own copy says every field on it is
-  read-only and that no org-update route exists. A screen that can only display
-  provisioning output is a fair thing to defer.
+- The API-key management page remains the one prototype surface tagged
+  `Not yet built`. It is deliberately deferred per the product decision to skip
+  the API page for now. Per-subscriber timelines are now backed by the stored
+  engagement events and exposed from subscriber detail. These are declared
+  design intent that the code has deliberately not implemented, and the
+  prototype says so in place. Analytics trends now use the append-only event log,
+  and engagement-recency segments are implemented for
+  OpenSearch deployments (with the GSI deployment refusing them explicitly). The
+  re-engagement policy editor, click-map overlay, and series-level reporting are
+  now implemented: the first persists the per-org
+  policy and feeds the existing weekly sweep; the second writes a generic archive
+  body and decorates it from the real click map; the third records durable edition
+  rows and aggregates their stored counters.
+- **Identity & pools** — provisioning fields remain read-only, but magic-link
+  signing-key rotation is now an explicit org-scoped action. It creates a new
+  KMS key, retains prior public keys in JWKS, and records the rotation in the
+  audit log; pool, domain, issuer and audience configuration remain immutable.
 - **No "send test"** — absent in both, and argued for in the prototype
   (`demo/index.html:700`): the five-minute lead window and the dev-org allowlist
   are the answer instead. See #250 for the half of that answer the console

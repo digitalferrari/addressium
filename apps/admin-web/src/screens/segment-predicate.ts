@@ -18,17 +18,12 @@
  *   entitlement eq free|paid
  *   <attribute> eq|neq|exists <value>
  *
- * NOT offered. Each was checked against the engine rather than assumed:
+ * Still not offered on the GSI deployment. Each was checked against the engine rather than assumed:
  *
  *   last_open_at before|after — engagement recency. `gsiEngineLimitation`
  *     rejects it on the v1 GSI engine outright (GSI_NO_ENGAGEMENT). The
- *     OpenSearch engine's `buildQuery` CAN range over `last_open_at`, so the
- *     obvious reading is "works once the mirror is on" — but
- *     services/segment-indexer/src/index.ts calls `subscriberToIndexOp(eventName,
- *     subscriber, confirmed)` and passes no `lastOpenAt`, so the field is absent
- *     from every mirrored document and the range would match NOBODY. Unresolvable
- *     on either engine today; a builder row for it would be a dead control that
- *     produces an empty send rather than an error.
+ *     OpenSearch engine can range over it; the subscriber projection now carries
+ *     the provider-recorded last-open timestamp into the mirror.
  *
  *   status eq <subscription status> — dead on both engines, in opposite ways.
  *     On the GSI engine the base set is `subscriptions.listConfirmed(...)`, so
@@ -69,7 +64,7 @@ export const MAX_CONDITIONS = 50;
  * `kind` is the builder's own vocabulary, not the wire format — it picks which
  * editor the row renders. `toCondition` is what turns it into the schema shape.
  */
-export type RowKind = "list" | "entitlement" | "attribute";
+export type RowKind = "list" | "entitlement" | "attribute" | "last_open_at";
 
 export interface Row {
   /** Stable across re-renders so React keys never reuse a deleted row's state. */
@@ -78,7 +73,7 @@ export interface Row {
   /** Attribute name; only meaningful when `kind === "attribute"`. */
   field: string;
   /** Only `attribute` rows choose an operator; the rest are fixed by `kind`. */
-  op: "eq" | "neq" | "exists";
+  op: "eq" | "neq" | "exists" | "before" | "after";
   value: string;
 }
 
@@ -93,7 +88,8 @@ export const newRow = (kind: RowKind = "attribute"): Row => ({
 
 export interface Condition {
   field: string;
-  op: "in" | "eq" | "neq" | "exists";
+  /** The wire schema also supports date comparisons for engagement fields. */
+  op: "in" | "eq" | "neq" | "exists" | "before" | "after";
   value?: string;
 }
 
@@ -117,6 +113,10 @@ export function toCondition(row: Row): Condition | null {
       if (row.op === "exists") return { field, op: "exists" };
       return row.value ? { field, op: row.op, value: row.value } : null;
     }
+    case "last_open_at": {
+      const value = row.value ? toDateWire(row.value) : null;
+      return value ? { field: "last_open_at", op: row.op, value } : null;
+    }
   }
 }
 
@@ -128,8 +128,12 @@ export function toCondition(row: Row): Condition | null {
  * anything the server would reject — the server stays the boundary.
  */
 export function rowProblem(row: Row): string | null {
-  if (row.kind !== "attribute") {
+  if (row.kind !== "attribute" && row.kind !== "last_open_at") {
     return row.value ? null : "choose a value";
+  }
+  if (row.kind === "last_open_at") {
+    if (row.op !== "before" && row.op !== "after") return "choose before or after";
+    return row.value && Number.isFinite(Date.parse(row.value)) ? null : "choose a valid date";
   }
   const field = row.field.trim();
   if (!field) return "name the attribute";
@@ -158,13 +162,13 @@ export function rowProblem(row: Row): string | null {
  * only some deployments accept — moves the discovery of that to a 400 at save,
  * for a control the product presented as working.
  */
-export function predicateProblem(rows: Row[]): string | null {
+export function predicateProblem(rows: Row[], requireList = true): string | null {
   if (rows.length === 0) return "Add at least one condition.";
   if (rows.length > MAX_CONDITIONS) {
     return `A segment may have at most ${MAX_CONDITIONS} conditions.`;
   }
   if (rows.some((r) => rowProblem(r))) return "Finish every condition above.";
-  if (!rows.some((r) => r.kind === "list")) {
+  if (requireList && !rows.some((r) => r.kind === "list")) {
     return "Add a “Subscribed to list” condition — the shipped v1 engine resolves a rule by ranging over one list.";
   }
   return null;
@@ -190,11 +194,9 @@ export function toPredicate(rows: Row[]): RulePredicate {
  * Read a stored predicate back into builder rows, or null if the builder cannot
  * represent it faithfully.
  *
- * Null is the important return. A predicate carrying `last_open_at`, a `before`
- * or `after` operator, or anything else outside the structured subset must open
- * in the RAW editor — rendering it as builder rows would drop the parts the
- * builder has no control for, and saving would then silently rewrite the
- * operator's segment into a different audience.
+ * Null is the important return for predicates outside the structured subset.
+ * Recency is part of the structured subset when the OpenSearch deployment is
+ * active; the screen still falls back to RAW for it on GSI deployments.
  */
 export function fromPredicate(predicate: unknown): { rows: Row[] } | null {
   if (!predicate || typeof predicate !== "object") return null;
@@ -219,6 +221,9 @@ export function fromPredicate(predicate: unknown): { rows: Row[] } | null {
       // The builder has no `status` control (dead on both engines), so a stored
       // status condition is not representable and belongs in the raw editor.
       return null;
+    } else if (c.field === "last_open_at") {
+      if ((c.op !== "before" && c.op !== "after") || typeof c.value !== "string") return null;
+      rows.push({ ...newRow("last_open_at"), op: c.op, value: toDateInput(c.value) });
     } else {
       // Any attribute condition — but only the three operators the builder can
       // express. `before`/`after` fall through to the raw editor.
@@ -228,4 +233,15 @@ export function fromPredicate(predicate: unknown): { rows: Row[] } | null {
     }
   }
   return { rows };
+}
+
+/** `datetime-local` cannot display an ISO suffix; keep the wire value UTC. */
+export function toDateInput(value: string): string {
+  const parsed = new Date(value);
+  return Number.isFinite(parsed.getTime()) ? parsed.toISOString().slice(0, 16) : value;
+}
+
+export function toDateWire(value: string): string | null {
+  const parsed = new Date(value);
+  return Number.isFinite(parsed.getTime()) ? parsed.toISOString() : null;
 }
