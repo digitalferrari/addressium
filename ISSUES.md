@@ -49,9 +49,10 @@ cannot tell whether it was due five minutes ago or next Tuesday — which is
 exactly the decision the pause window exists to support. Fixing it spans the
 entity type, the write path, the API projection and the UI.
 **Where:** `packages/core/src/entities.ts:442-452` · `apps/admin-web/src/api.ts:195-204` · `apps/admin-web/src/App.tsx:832`
-**Status:** deferred — the fix has to add a field to `SendScheduleState` and
-populate it in the campaign-schedule write path, which is under concurrent
-change. Not started rather than half-started.
+**Status:** fixed — `SendScheduleState.sendAt` is written by `markScheduleActive`
+from the same instant `recordScheduledCampaign` stamps, and the column (now
+headed `When`) renders it as local time plus "in 4 minutes"; cleared on
+conversion to recurring, preserved across pause/resume.
 
 ### #249 — Switching body mode in Compose silently discards the body
 **Screen:** Compose & schedule · **Kind:** bug · **Severity:** high

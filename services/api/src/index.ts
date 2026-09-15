@@ -517,6 +517,10 @@ export async function scheduleCampaignHandler(
       case "at": {
         const requested = body.when.type === "at" ? new Date(body.when.at) : undefined;
         const at = effectiveOneOffTime(clock.now(), requested);
+        // Resolved once for both records below, so the Campaign row and the
+        // lifecycle row cannot end up stamped with different zones for the same
+        // instant — two lookups could straddle a change to the org default.
+        const timezone = await orgTimezone(body.orgId);
         await (injected?.scheduler ?? scheduler()).scheduleOneOff({ name: oneOffName, at, descriptor });
         // The Campaign record, WITHOUT which this send has no counters (#221).
         // The compose screen posts only to this route, so this is the only place
@@ -533,12 +537,18 @@ export async function scheduleCampaignHandler(
           listId: body.listId,
           segmentId: body.segmentId,
           sendAt: at.toISOString(),
-          timezone: await orgTimezone(body.orgId),
+          timezone,
         });
+        // The same instant onto the LIFECYCLE record (#248). The Schedules view
+        // lists these rows, not campaigns, and it is the screen an operator
+        // reaches for to hit Pause inside the five-minute window — so the time
+        // being raced has to be on this record too, not only on the campaign.
         await markScheduleActive(stores(), clock, {
           orgId: body.orgId,
           scheduleId: body.campaignId,
           kind: "one_off",
+          sendAt: at.toISOString(),
+          timezone,
         });
         return json(202, { status: "scheduled", at: at.toISOString(), scheduleId: body.campaignId });
       }

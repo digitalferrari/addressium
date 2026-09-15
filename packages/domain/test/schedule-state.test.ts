@@ -87,6 +87,51 @@ test("markScheduleActive records active and preserves createdAt on resume", asyn
   assert.equal(resumed.cron, "cron(0 6 * * ? *)"); // carried forward
 });
 
+test("a one-off records its send time, and a pause/resume does not lose it (#248)", async () => {
+  const h = await harness();
+  const at = "2026-07-21T15:30:00.000Z";
+  const first = await markScheduleActive(h.stores, h.clock, {
+    orgId: ORG, scheduleId: "c1", kind: "one_off", sendAt: at, timezone: "America/Denver",
+  });
+  assert.equal(first.sendAt, at);
+
+  // Resume passes `{orgId, scheduleId, kind}` and nothing more. A one-off that
+  // forgot its send time here would render "—" on the Schedules screen — the
+  // screen an operator is on precisely because they mean to cancel it.
+  await transitionSchedule(h.stores, h.clock, { orgId: ORG, scheduleId: "c1", action: "pause" });
+  const resumed = await markScheduleActive(h.stores, h.clock, {
+    orgId: ORG, scheduleId: "c1", kind: "one_off",
+  });
+  assert.equal(resumed.sendAt, at);
+  assert.equal(resumed.timezone, "America/Denver");
+  assert.equal((await h.stores.schedules.get(ORG, "c1"))?.sendAt, at);
+});
+
+test("converting a one-off to recurring clears the stale send time (#248)", async () => {
+  const h = await harness();
+  await markScheduleActive(h.stores, h.clock, {
+    orgId: ORG, scheduleId: "c2", kind: "one_off", sendAt: "2026-07-21T15:30:00.000Z",
+  });
+  // A recurring series has no single send time; its cron is the answer. Left in
+  // place, the old instant would keep being rendered as a deadline that has
+  // nothing to do with when the series actually fires.
+  const series = await markScheduleActive(h.stores, h.clock, {
+    orgId: ORG, scheduleId: "c2", kind: "recurring", cron: "cron(0 6 * * ? *)", timezone: "UTC",
+  });
+  assert.equal(series.sendAt, undefined);
+  assert.equal((await h.stores.schedules.get(ORG, "c2"))?.sendAt, undefined);
+  assert.equal(series.cron, "cron(0 6 * * ? *)");
+});
+
+test("a recurring schedule never acquires a send time, even if one is passed", async () => {
+  const h = await harness();
+  const s = await markScheduleActive(h.stores, h.clock, {
+    orgId: ORG, scheduleId: "daily2", kind: "recurring", cron: "cron(0 6 * * ? *)",
+    sendAt: "2026-07-21T15:30:00.000Z",
+  });
+  assert.equal(s.sendAt, undefined);
+});
+
 test("transitionSchedule throws for an unknown schedule", async () => {
   const h = await harness();
   await assert.rejects(

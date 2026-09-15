@@ -444,9 +444,30 @@ export interface SendScheduleState {
   scheduleId: string;
   kind: ScheduleKind;
   status: ScheduleStatus;
-  /** Cron + zone for recurring series (informational; drives the admin view). */
+  /** Cron for a recurring series (informational; drives the admin view). */
   cron?: string;
+  /**
+   * Zone the cron above is interpreted in. Also stamped on a one-off for parity
+   * with `campaign.schedule.timezone` — the console renders a one-off's
+   * `sendAt` in the viewer's own zone, not this one (see `scheduleWhen`).
+   */
   timezone?: string;
+  /**
+   * When a ONE-OFF send fires, ISO-8601 (#248).
+   *
+   * Every one-off is placed at least five minutes out (`effectiveOneOffTime`,
+   * §4.6) so it stays cancellable until it fires — and the Schedules view is
+   * where an operator goes to cancel it. Without this field that view rendered
+   * `Cadence: —` for every one-off, so the deadline being raced was the one
+   * number not on screen. The value existed at creation and was handed to
+   * EventBridge; it was simply never written down here.
+   *
+   * Absent on a recurring series, which has no single send time — its `cron`
+   * above is the answer instead. Mirrors `campaign.schedule.sendAt`, which
+   * `recordScheduledCampaign` writes from the same computed instant; the two
+   * are expected to agree.
+   */
+  sendAt?: string;
   createdAt: string;
   updatedAt: string;
   /**

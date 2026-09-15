@@ -177,6 +177,14 @@ test('"Send now" writes the campaign record the counters are keyed on', async ()
   const state = await stores.schedules.get(ORG, "counters-check");
   assert.equal(state?.kind, "one_off");
   assert.equal(state?.status, "active");
+  // ...carrying the SAME instant as the campaign row and the EventBridge
+  // schedule (#248). The Schedules view lists these lifecycle records, not
+  // campaigns, and it is the screen the Pause button lives on — so the time the
+  // five-minute window (§4.6) is counting down has to be here, not only on the
+  // campaign. Without it the row read "Cadence: —".
+  assert.equal(state?.sendAt, scheduler.oneOff[0]!.at.toISOString());
+  assert.equal(state?.sendAt, campaign.schedule?.sendAt, "the two records must agree");
+  assert.equal(state?.timezone, "America/Denver");
 });
 
 test("the scheduled campaign appears in the console's report picker", async () => {
@@ -231,6 +239,9 @@ test("a recurring series is recorded with no single send time", async () => {
   const state = await stores.schedules.get(ORG, "daily");
   assert.equal(state?.kind, "recurring");
   assert.equal(state?.cron, "cron(0 13 * * ? *)");
+  // No `sendAt` on a series, for the same reason the campaign has no
+  // `schedule`: there is no single instant to point at (#248).
+  assert.equal(state?.sendAt, undefined);
 });
 
 test("re-scheduling a campaign that has already sent does not wipe its counters", async () => {

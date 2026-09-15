@@ -56,11 +56,25 @@ export function scheduleActive(state: SendScheduleState | undefined): boolean {
 /**
  * Record (or refresh) a schedule as active — called when a send is scheduled or
  * a paused one is resumed. Preserves `createdAt` across updates.
+ *
+ * `sendAt` is the one-off's firing time (#248), carried here so the Schedules
+ * view can show the deadline the five-minute cancel window (§4.6) exists to
+ * give an operator. Like `cron`/`timezone` it falls back to the existing value,
+ * because RESUME calls this with `{orgId, scheduleId, kind}` and nothing else —
+ * a resumed one-off must not forget when it sends.
  */
 export async function markScheduleActive(
   stores: Stores,
   clock: Clock,
-  input: { orgId: string; scheduleId: string; kind: ScheduleKind; cron?: string; timezone?: string },
+  input: {
+    orgId: string;
+    scheduleId: string;
+    kind: ScheduleKind;
+    cron?: string;
+    timezone?: string;
+    /** One-off firing time, ISO-8601. Absent for a recurring series. */
+    sendAt?: string;
+  },
 ): Promise<SendScheduleState> {
   const now = clock.now().toISOString();
   const existing = await stores.schedules.get(input.orgId, input.scheduleId);
@@ -71,9 +85,18 @@ export async function markScheduleActive(
     status: "active",
     cron: input.cron ?? existing?.cron,
     timezone: input.timezone ?? existing?.timezone,
+    sendAt: input.sendAt ?? existing?.sendAt,
     createdAt: existing?.createdAt ?? now,
     updatedAt: now,
   };
+  // Keyed on `kind`, NOT on `!input.sendAt` — the same clear
+  // `recordScheduledCampaign` does for `campaign.schedule`, but it cannot use
+  // that function's test. A campaign re-scheduled from one-off to recurring
+  // would otherwise keep advertising a `sendAt` it will never send at, since
+  // the fallback above spread the stale one back in. Presence-keyed here would
+  // be worse than wrong: resume passes no `sendAt` at all, so every
+  // pause/resume cycle would erase a live one-off's time.
+  if (input.kind === "recurring") delete state.sendAt;
   await stores.schedules.put(state);
   return state;
 }

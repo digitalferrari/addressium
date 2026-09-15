@@ -819,7 +819,55 @@ export function Compose({ org, onScheduled }: { org: string; onScheduled: () => 
   );
 }
 
-function Schedules({ org, grant }: { org: string; grant: Grant | null }) {
+/**
+ * How far off `iso` is, in words — "in 4 min", "3 min ago" (#248).
+ *
+ * Every one-off sits at least five minutes out (§4.6) so it stays cancellable,
+ * and this is the screen that cancel lives on. An absolute timestamp alone
+ * makes the operator do clock arithmetic in the window they are racing; the
+ * relative form is the part that is actually actionable, so the row shows both.
+ *
+ * Rendered, not ticking: this is computed at paint, so a row left open drifts.
+ * It is re-rendered on every lifecycle action and on every load of the screen,
+ * which are the moments the number is being read. A timer to keep it live would
+ * buy accuracy no operator is looking at in between.
+ */
+function relativeTime(iso: string, now: number = Date.now()): string {
+  const deltaMs = new Date(iso).getTime() - now;
+  if (Number.isNaN(deltaMs)) return "";
+  const fmt = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });
+  const mins = Math.round(deltaMs / 60000);
+  if (Math.abs(mins) < 60) return fmt.format(mins, "minute");
+  const hours = Math.round(deltaMs / 3600000);
+  if (Math.abs(hours) < 24) return fmt.format(hours, "hour");
+  return fmt.format(Math.round(deltaMs / 86400000), "day");
+}
+
+/**
+ * When a row fires: a one-off's send time, a series' cron (#248).
+ *
+ * The cell used to read `{r.cron ? … : "—"}`, so every one-off showed "—" —
+ * the one kind of row whose timing is urgent was the one with no timing on it.
+ */
+function scheduleWhen(r: SendScheduleState, now?: number): string {
+  if (r.sendAt) {
+    const at = new Date(r.sendAt);
+    // Deliberately the BROWSER's zone, not `r.timezone` — the operator deciding
+    // whether to hit Pause is reading their own clock, and converting into the
+    // org's sending zone would hand them a number they then have to convert
+    // back. `r.timezone` is stored for parity with `campaign.schedule` (the two
+    // records are written from one instant and one zone); nothing renders it
+    // here, and the relative form below is what makes the ambiguity harmless.
+    // A malformed stored value must not reach the operator as "Invalid Date".
+    if (Number.isNaN(at.getTime())) return "—";
+    const relative = relativeTime(r.sendAt, now);
+    return `${at.toLocaleString()}${relative ? ` (${relative})` : ""}`;
+  }
+  if (r.cron) return `${r.cron}${r.timezone ? ` (${r.timezone})` : ""}`;
+  return "—";
+}
+
+export function Schedules({ org, grant }: { org: string; grant: Grant | null }) {
   const [rows, setRows] = useState<SendScheduleState[] | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState("");
@@ -875,14 +923,18 @@ function Schedules({ org, grant }: { org: string; grant: Grant | null }) {
         <div className="card">
           <table>
             <thead>
-              <tr><th>Schedule</th><th>Kind</th><th>Cadence</th><th>Status</th><th>Actions</th></tr>
+              {/* "When", not "Cadence" (#248): the column now holds a one-off's
+                  send time as well as a series' cadence, and only one of those
+                  is a cadence. It is also the header the design prototype
+                  uses for the same column. */}
+              <tr><th>Schedule</th><th>Kind</th><th>When</th><th>Status</th><th>Actions</th></tr>
             </thead>
             <tbody>
               {rows.map((r) => (
                 <tr key={r.scheduleId}>
                   <td className="t-strong">{r.scheduleId}</td>
                   <td>{r.kind === "recurring" ? "series" : "one-off"}</td>
-                  <td className="muted">{r.cron ? `${r.cron}${r.timezone ? ` (${r.timezone})` : ""}` : "—"}</td>
+                  <td className="muted">{scheduleWhen(r)}</td>
                   <td>{badge(r.status)}</td>
                   <td>
                     {canManage ? (
