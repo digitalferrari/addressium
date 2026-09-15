@@ -1,5 +1,5 @@
 /**
- * The live SES sending-identity readout (#285, ISSUES.md #259).
+ * The live SES sending-identity readout (GitHub #285).
  *
  * The defect this feature exists to prevent is a subscriber being refused by
  * SES with no way for an operator to see why. The defect the TESTS exist to

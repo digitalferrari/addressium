@@ -1,6 +1,6 @@
 /**
  * The SESv2 → domain translation for the sending-identity readout (#285,
- * ISSUES.md #259).
+ * GitHub #285).
  *
  * `readSendingIdentity` is tested against a fake port and `SendingIdentity.tsx`
  * against a mocked client — but both of those fakes hand over an ALREADY-CORRECT

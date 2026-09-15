@@ -1,5 +1,5 @@
 /**
- * Ad tags (#279 / ISSUES.md #257) — author the LiveIntent HTML that fills a
+ * Ad tags (GitHub #279) — author the LiveIntent HTML that fills a
  * template's declared ad slots, stored on the recurring series so one fill
  * applies to every edition (`AdSlotFill.binding.kind === "series"`).
  *

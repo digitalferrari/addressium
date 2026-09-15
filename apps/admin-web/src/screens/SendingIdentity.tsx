@@ -1,6 +1,6 @@
 /**
  * "Can this organization actually send?" — the live SES readout (#285,
- * ISSUES.md #259).
+ * GitHub #285).
  *
  * Everything else on the Setup screen is derived from our own table, so the
  * checklist's "sending domain" step means only `org.domains.length > 0`. The

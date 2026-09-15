@@ -1,5 +1,5 @@
 /**
- * Can this org actually send? (#285, ISSUES.md #259)
+ * Can this org actually send? (GitHub #285)
  *
  * Everything else in the console reads from our own table, so it can only ever
  * answer "a domain is on the org record". Whether SES will accept a message to

@@ -1,5 +1,5 @@
 /**
- * The live SES sending-identity card (#285, ISSUES.md #259).
+ * The live SES sending-identity card (GitHub #285).
  *
  * The domain tests assert the report's SHAPE. What these assert is the thing a
  * shape cannot: that the screen never turns a failed check into a claim about

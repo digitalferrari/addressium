@@ -1,6 +1,6 @@
 /**
  * Amazon SES v2 implementation of the `SesIdentityReader` port (#285,
- * ISSUES.md #259) — the live read that answers "can this org actually send?".
+ * GitHub #285) — the live read that answers "can this org actually send?".
  *
  * Strictly read-only, by construction and not by convention: the only two
  * commands this file imports are `GetEmailIdentity` and `GetAccount`, so the
