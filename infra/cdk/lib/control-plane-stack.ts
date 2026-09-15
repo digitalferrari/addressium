@@ -889,6 +889,7 @@ export class ControlPlaneStack extends Stack {
     const apiEntry = svc("services/api/src/index.ts");
     const apiEnv = {
       CONFIRM_SECRET_ARN: confirmSecret.secretArn,
+      ARCHIVE_BUCKET: archiveBucket.bucketName,
       WEBHOOK_SECRET_ARN: webhookSecret.secretArn,
       AUDIT_BUCKET: auditBucket.bucketName, // WORM audit sink (#29)
       EXPORT_BUCKET: exportBucket.bucketName, // bulk export staging (#224)
@@ -1480,10 +1481,37 @@ export class ControlPlaneStack extends Stack {
     customerSyncQueue.grantSendMessages(adminApiFn);
     // Customer-sync configuration stores the endpoint's secret in Secrets
     // Manager; only the reference is written to the organization record.
+    //
+    // Split in two because CreateSecret cannot be scoped by resource — the ARN
+    // does not exist yet when the call is made, so `resources` has nothing to
+    // match and IAM requires "*". The name is constrained instead, with the
+    // same `addressium/*` prefix `orgSecretsScoped()` uses for reads.
+    //
+    // The write actions ARE scoped to that prefix. Granting PutSecretValue on
+    // "*" would have let this function overwrite every secret in the account,
+    // including the stack's own confirmation-token and webhook signing keys —
+    // and overwriting the confirm signer silently invalidates every
+    // outstanding double opt-in link. `saveCustomerSyncSecret` only ever
+    // touches `addressium/{orgId}/customer-sync` (services/api/src/index.ts),
+    // so nothing outside the prefix was ever used.
     adminApiFn.addToRolePolicy(
       new PolicyStatement({
-        actions: ["secretsmanager:CreateSecret", "secretsmanager:PutSecretValue", "secretsmanager:TagResource"],
+        actions: ["secretsmanager:CreateSecret"],
         resources: ["*"],
+        conditions: { StringLike: { "secretsmanager:Name": "addressium/*" } },
+      }),
+    );
+    adminApiFn.addToRolePolicy(
+      new PolicyStatement({
+        actions: ["secretsmanager:PutSecretValue", "secretsmanager:TagResource"],
+        resources: [
+          Stack.of(this).formatArn({
+            service: "secretsmanager",
+            resource: "secret",
+            resourceName: "addressium/*",
+            arnFormat: ArnFormat.COLON_RESOURCE_NAME,
+          }),
+        ],
       }),
     );
     // Three suppression-list actions, two different risk shapes (#240, #247).
@@ -1852,10 +1880,19 @@ export class ControlPlaneStack extends Stack {
     const reportingEntry = svc("services/reporting/src/index.ts");
     const reportFn = fn("ReportFn", reportingEntry, "handler", apiEnv);
     table.grantReadData(reportFn);
+    const archiveFn = fn("ArchiveFn", reportingEntry, "archiveHandler", { ...apiEnv, ARCHIVE_BUCKET: archiveBucket.bucketName });
+    table.grantReadData(archiveFn);
+    archiveBucket.grantRead(archiveFn);
     api.addRoutes({
       path: "/orgs/{org}/campaigns/{campaign}/report",
       methods: [HttpMethod.GET],
       integration: new HttpLambdaIntegration("ReportInt", reportFn),
+      authorizer: adminAuth,
+    });
+    api.addRoutes({
+      path: "/orgs/{org}/campaigns/{campaign}/archive",
+      methods: [HttpMethod.GET],
+      integration: new HttpLambdaIntegration("ArchiveInt", archiveFn),
       authorizer: adminAuth,
     });
     // Usage & cost (§11) — surfaced on the admin Usage screen.
