@@ -5,9 +5,10 @@ import { api, type AdminList, type ListPresentation } from "./api.js";
 import { PresentationEditor } from "./screens/PresentationEditor.js";
 // The real constant `publicListView` renders for a list with no `presentation`,
 // imported rather than restated so the editor's local mirror cannot drift from
-// it silently. Note this resolves to `@addressium/domain`'s BUILT output, so it
-// catches drift on a full `npm test` (which builds first) rather than the
-// instant the domain source is edited.
+// it silently. Note this resolves to `@addressium/domain`'s BUILT output, and
+// root `npm test` does not run admin-web's vitest — so it catches drift on an
+// admin-web test run that follows a domain build, not the instant the domain
+// source is edited.
 import { UNCONFIGURED_PRESENTATION } from "@addressium/domain";
 
 const TOGGLES: ListPresentation = {
