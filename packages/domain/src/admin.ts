@@ -143,6 +143,99 @@ export async function saveCampaignDraft(
 }
 
 /**
+ * Record the Campaign for a send being scheduled through `POST
+ * /campaigns/schedule` (#221).
+ *
+ * The schedule route created the EventBridge schedule and the lifecycle record
+ * (`markScheduleActive`) and stopped there — it never wrote a Campaign item. The
+ * console's "Compose & schedule" screen is a SELF-CONTAINED form: it posts the
+ * subject, audience and body straight to that route and never calls `POST
+ * /campaigns` first. So a one-off scheduled with "Send now" had no
+ * `CAMPAIGNREC#<id>` row at all, and everything keyed on one silently did
+ * nothing:
+ *
+ *   - `appendEvent`'s counter Update is guarded by `attribute_exists(pk)` (it
+ *     must never resurrect a campaign), so EVERY sent/delivered/open took the
+ *     record-less fallback: event kept, counter skipped. The events were on
+ *     disk; the counters never moved.
+ *   - `buildCampaignReport` prefers the STORED counters, so the report screen
+ *     read a campaign that was not there and showed nothing.
+ *   - `campaignsListHandler` projects `campaigns.list`, so the report picker
+ *     never listed the send either.
+ *
+ * The fix belongs HERE and not in the sender. `appendEvent`'s record-less
+ * fallback and its `attribute_exists` guard are both deliberate: recurring-series
+ * editions (`<base>-<editionKey>`, feed.ts), drip sub-campaigns and
+ * re-engagement steps legitimately send under ids with no Campaign item, and
+ * `HaltStore` exists precisely so those never appear as phantom rows in
+ * `campaigns.list` (ports.ts). A sender-side upsert, or relaxing the guard,
+ * would manufacture exactly those rows. This route is the ONE path a human uses
+ * to author a send — feed/drip/re-engagement build their descriptors and enqueue
+ * directly, never through it — so writing the record here gives the operator's
+ * own campaigns counters without resurrecting anybody else's.
+ *
+ * Re-scheduling an existing campaign PRESERVES its counters and its authored
+ * draft fields. Rebuilding the record from the schedule payload alone would zero
+ * the counters of a campaign being resent, turning a reschedule into a report
+ * wipe — the same class of bug as #201, where an edit dropped the schedule.
+ */
+export async function recordScheduledCampaign(
+  stores: Stores,
+  input: {
+    orgId: string;
+    campaignId: string;
+    subject: string;
+    listId: string;
+    segmentId?: string;
+    /** One-off send time. Absent for a recurring series parent. */
+    sendAt?: string;
+    timezone: string;
+  },
+): Promise<Campaign> {
+  const existing = await stores.campaigns.get(input.orgId, input.campaignId);
+  const campaign: Campaign = {
+    ...existing,
+    orgId: input.orgId,
+    campaignId: input.campaignId,
+    // `scheduleCampaignSchema` has no `type` field, and both of its values would
+    // be a lie for a recurring parent: its EDITIONS are the `series_edition`s,
+    // and they are the record-less ids above. A draft that already declared
+    // itself keeps what it declared.
+    type: existing?.type ?? "one_off",
+    subject: input.subject,
+    // The schedule payload carries an INLINE body, not a saved template id, so
+    // there is no real id to record. Preserve a draft's if it had one rather
+    // than fabricating a reference to a template that does not exist — nothing
+    // on the send or report path reads this field. (It is `idSchema` on
+    // `saveCampaignSchema`, so a record created here cannot be round-tripped
+    // through `POST /campaigns` unedited; no console path does, and inventing an
+    // id that resolves to nothing would be the worse of the two.)
+    templateId: existing?.templateId ?? "",
+    audience: { listId: input.listId, ...(input.segmentId ? { segmentId: input.segmentId } : {}) },
+    // Counters are the whole point of the row: never reset them on a reschedule.
+    counters: existing?.counters ?? ZERO_COUNTERS,
+    // A HALT SURVIVES RESCHEDULING. For a campaign that HAS a record, this field
+    // is the entire halt: `checkDeliverability` writes `status: "halted"` here
+    // and, having a row to flip, writes no `HaltStore` marker (alerts.ts) — and
+    // `sendCampaign`'s gate reads exactly this (send.ts). So flipping it back to
+    // "scheduled" unconditionally would let an operator clear a bounce/complaint
+    // halt by re-sending from the compose screen, which is the one thing the halt
+    // exists to prevent and would do it silently. Lifting a halt is a deliberate
+    // act that belongs on its own control, not a side effect of pressing Send.
+    status: existing?.status === "halted" ? "halted" : "scheduled",
+    ...(input.sendAt ? { schedule: { sendAt: input.sendAt, timezone: input.timezone } } : {}),
+  };
+  // CLEARED, not merely left unset: `...existing` spread a previous one-off's
+  // `schedule` back in, so a campaign re-scheduled from one-off to recurring
+  // kept advertising a `sendAt` it will never send at — which is the column
+  // `campaignsListHandler` puts in front of the operator. A recurring series has
+  // no single send time; its cron lives on the lifecycle record.
+  if (!input.sendAt) delete campaign.schedule;
+  await stores.campaigns.put(campaign);
+  return campaign;
+}
+
+/**
  * Save a reusable template (create or edit, §4.15). The stored version bumps on
  * each edit so the archive can pin a specific version. Raw HTML is sanitized at
  * the API boundary before this is called (adapters-aws `sanitizeEmailHtml`);

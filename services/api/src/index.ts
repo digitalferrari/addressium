@@ -56,6 +56,8 @@ import {
   type PinpointSegmentResponse,
   isHoneypotTripped,
   markScheduleActive,
+  recordScheduledCampaign,
+  type CampaignScheduler,
   startImportJob,
   scheduleName,
   transitionSchedule,
@@ -451,8 +453,31 @@ export async function subscriberAccountHandler(event: SubscriberAccountRequest):
   );
 }
 
-/** POST /campaigns/schedule — send now, at a time, or recurring (§4.6, §4.16). */
-export async function scheduleCampaignHandler(event: HttpEvent): Promise<HttpResult> {
+/**
+ * The zone a send is displayed in: org `defaultTimezone` ?? deployment default
+ * (§4.21). Factored out of the recurring branch when the one-off branch started
+ * stamping `Campaign.schedule`, which carries a zone too — one resolution rule,
+ * so a one-off and a series in the same org can never disagree about what
+ * "13:00" means.
+ */
+async function orgTimezone(orgId: string): Promise<string> {
+  const orgRec = await stores().organizations.get(orgId);
+  return orgRec?.defaultTimezone ?? process.env.DEFAULT_TIMEZONE ?? "UTC";
+}
+
+/**
+ * POST /campaigns/schedule — send now, at a time, or recurring (§4.6, §4.16).
+ *
+ * `injected.scheduler` is the test seam, the same shape `dripEnrollHandler` uses
+ * for its starter: EventBridge Scheduler has no local emulator, so without it
+ * nothing could drive this route end to end — which is how it shipped writing an
+ * EventBridge schedule and a lifecycle record but no Campaign record at all
+ * (#221). Production passes nothing and gets the real client.
+ */
+export async function scheduleCampaignHandler(
+  event: HttpEvent,
+  injected?: { scheduler?: CampaignScheduler },
+): Promise<HttpResult> {
   try {
     const body = schemas.scheduleCampaignSchema.parse(JSON.parse(event.body ?? "{}"));
     requireGrant(event, "campaigns:schedule", body.orgId); // admin-only (§4.12)
@@ -492,7 +517,24 @@ export async function scheduleCampaignHandler(event: HttpEvent): Promise<HttpRes
       case "at": {
         const requested = body.when.type === "at" ? new Date(body.when.at) : undefined;
         const at = effectiveOneOffTime(clock.now(), requested);
-        await scheduler().scheduleOneOff({ name: oneOffName, at, descriptor });
+        await (injected?.scheduler ?? scheduler()).scheduleOneOff({ name: oneOffName, at, descriptor });
+        // The Campaign record, WITHOUT which this send has no counters (#221).
+        // The compose screen posts only to this route, so this is the only place
+        // a one-off's `CAMPAIGNREC#<id>` can come from; see
+        // `recordScheduledCampaign` for why it is not the sender's job. The
+        // EventBridge schedule above is already live at this point; what makes
+        // the ordering safe is the 5-minute floor `effectiveOneOffTime` puts on
+        // every one-off (§4.6), so the row is in place long before the send can
+        // fire.
+        await recordScheduledCampaign(stores(), {
+          orgId: body.orgId,
+          campaignId: body.campaignId,
+          subject: body.subject,
+          listId: body.listId,
+          segmentId: body.segmentId,
+          sendAt: at.toISOString(),
+          timezone: await orgTimezone(body.orgId),
+        });
         await markScheduleActive(stores(), clock, {
           orgId: body.orgId,
           scheduleId: body.campaignId,
@@ -502,12 +544,12 @@ export async function scheduleCampaignHandler(event: HttpEvent): Promise<HttpRes
       }
       case "recurring": {
         // Zone: per-campaign override ?? org defaultTimezone (§4.21).
-        let timezone = body.when.timezone;
-        if (!timezone) {
-          const orgRec = await stores().organizations.get(body.orgId);
-          timezone = orgRec?.defaultTimezone ?? process.env.DEFAULT_TIMEZONE ?? "UTC";
-        }
-        await scheduler().scheduleRecurring({
+        // `||`, not `??`: `timezone` is `z.string().optional()` with no
+        // `.min(1)`, so `""` is a valid payload — and `??` would pass that empty
+        // string through to `ScheduleExpressionTimezone` verbatim instead of
+        // falling back, which is what the old `if (!timezone)` did.
+        const timezone = body.when.timezone || (await orgTimezone(body.orgId));
+        await (injected?.scheduler ?? scheduler()).scheduleRecurring({
           name: scheduleName("series", body.orgId, body.campaignId),
           cron: body.when.cron,
           timezone,
@@ -519,6 +561,23 @@ export async function scheduleCampaignHandler(event: HttpEvent): Promise<HttpRes
           // this firing's scheduled time, and it is stable across retries of
           // that firing, so idempotency still holds.
           payload: { descriptor, editionKey: "<aws.scheduler.scheduled-time>" },
+        });
+        // The series PARENT gets a record too, with no `schedule.sendAt` — a
+        // recurring series has no single send time, and its cron already lives on
+        // the lifecycle record the Schedules view reads. It is deliberately NOT
+        // given counters from its editions: each edition sends under its own
+        // `<base>-<editionKey>` id, which by design has no Campaign item
+        // (feed.ts, and the `campaignMissing` branch in dynamo.ts), so the parent
+        // stays at zero and the per-edition numbers come from the event log.
+        // Recording it anyway is what puts the series in `campaigns.list`, so the
+        // console's report picker can offer it at all.
+        await recordScheduledCampaign(stores(), {
+          orgId: body.orgId,
+          campaignId: body.campaignId,
+          subject: body.subject,
+          listId: body.listId,
+          segmentId: body.segmentId,
+          timezone,
         });
         await markScheduleActive(stores(), clock, {
           orgId: body.orgId,
