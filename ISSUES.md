@@ -173,8 +173,10 @@ The import bucket now has browser PUT CORS, and import history shows running,
 completed and failed job states. Dry runs remain intentionally inline-only;
 large files must be previewed and then queued.
 
-CORS was not the last blocker. With the rule in place every non-empty upload
-still failed a 400 that reads exactly like a CORS or signature fault: since
+CORS was not the last blocker. The rule above is verified present in the
+synthesized template (`AllowedMethods: ["PUT"]`, `ExpirationInDays: 7`), and with
+it in place every non-empty upload still failed a 400 that reads exactly like a
+CORS or signature fault: since
 `@aws-sdk/client-s3` v3.729 `PutObjectCommand` computes a CRC32 by default, and
 the presigner hoists it into the query string. At signing time there is no body,
 so the signed value is the CRC32 of ZERO BYTES (`x-amz-checksum-crc32=AAAAAA==`).

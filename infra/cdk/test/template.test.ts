@@ -15,11 +15,21 @@
  */
 import assert from "node:assert/strict";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
+import { dirname, resolve } from "node:path";
 import { App, Stack } from "aws-cdk-lib";
 import { Match, Template } from "aws-cdk-lib/assertions";
 import { ControlPlaneStack, STAGES, parseStage } from "../lib/control-plane-stack.js";
 import { HTML_BODY_ROUTES, makeCloudFrontWebAcl, makeRegionalWebAcl } from "../lib/waf.js";
 import { entitiesExportPrefix } from "@addressium/domain";
+
+// The root test command launches Node from the repository root, while esbuild
+// is intentionally installed in this workspace. CDK discovers local bundling
+// through PATH; without this, it cannot see the already-installed binary and
+// falls back to Docker for every Lambda asset. Template tests only need the
+// local bundle path and must remain runnable without a Docker daemon.
+const cdkBin = resolve(dirname(fileURLToPath(import.meta.url)), "../../node_modules/.bin");
+process.env.PATH = `${cdkBin}:${process.env.PATH ?? ""}`;
 
 /**
  * `props` become stack props; `context` becomes app context, which is where the
@@ -335,11 +345,11 @@ test("no role can write a secret, and no AI route exists (#227)", () => {
   // own confirmation-token and webhook signing secrets, and rotating those
   // silently invalidates every outstanding opt-in link and inbound webhook.
   //
-  // ONE deliberate exception since #234: the ConfirmSecret rotation function.
-  // It is allowed to write because it APPENDS a key to the keyring rather than
-  // replacing one — it structurally cannot cause the harm this test guards
-  // against, and its `testSecret` step refuses to promote a version that stops
-  // verifying the outgoing key's tokens. Every other policy still gets zero.
+  // Two deliberate exceptions: the ConfirmSecret rotation function, and the
+  // admin customer-sync configuration route. Rotation appends a key rather
+  // than replacing one; customer-sync creates/updates only the per-org sink
+  // secret under the `addressium/*` namespace. Every other policy still gets
+  // zero secret writes.
   const t = template();
   for (const [id, policy] of Object.entries(t.findResources("AWS::IAM::Policy"))) {
     const doc = (policy.Properties as { PolicyDocument: { Statement: Record<string, unknown>[] } })
@@ -359,6 +369,25 @@ test("no role can write a secret, and no AI route exists (#227)", () => {
         "secretsmanager:*",
       ];
       const writes = actionsOf(st).filter((a) => WRITES.includes(a));
+      if (id.startsWith("AdminApiFn")) {
+        const allowed = ["secretsmanager:CreateSecret", "secretsmanager:PutSecretValue", "secretsmanager:TagResource"];
+        assert.deepEqual(
+          writes.filter((a) => !allowed.includes(a)),
+          [],
+          `${id} has an unexpected secret write: ${writes.join(", ")}`,
+        );
+        if (writes.includes("secretsmanager:CreateSecret")) {
+          assert.deepEqual(
+            st.Condition,
+            { StringLike: { "secretsmanager:Name": "addressium/*" } },
+            "customer-sync secret creation must stay under addressium/*",
+          );
+        } else if (writes.some((a) => a === "secretsmanager:PutSecretValue" || a === "secretsmanager:TagResource")) {
+          assert.match(JSON.stringify(st.Resource), /addressium\/\*/,
+            "customer-sync secret updates must stay under addressium/*");
+        }
+        continue;
+      }
       if (id.startsWith("ConfirmSecretRotationFn")) {
         // Scoped to ConfirmSecret alone. The rotation function must not be able
         // to touch WebhookSecret, whose rotation has none of these protections.
