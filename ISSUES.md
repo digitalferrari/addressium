@@ -152,6 +152,27 @@ to `number`.
 
 ## Medium
 
+### #261 — The Dashboard is a count of lists
+**Screen:** Dashboard · **Kind:** ux-gap · **Severity:** medium
+
+The shipped Dashboard shows the health badge, the setup nag, and one number:
+how many newsletters the org has. The prototype's dashboard is four metric
+cards with deltas, a deliverability panel for the latest edition, and a recent
+campaigns list — and it marks the trend chart, and only the chart, `Not yet
+built`. The deliverability panel and the recent-campaign rows are not charts:
+they are the counters and rates that `campaignReport` already returns per
+campaign, and the alert thresholds `GET /orgs/{org}/alerts` already returns.
+Filed low because nothing is wrong on this screen; it is just that the landing
+page of a sending tool tells an operator nothing about sending.
+**Where:** `apps/admin-web/src/App.tsx:226-249` · `demo/index.html:517-572`
+**Status:** fixed — the Dashboard now shows a recent-campaigns list and a
+deliverability panel for the latest sent edition, its rates drawn against the
+org's own halt thresholds (`null` alert config renders "no thresholds", not 0%).
+The rolling-30-day KPI strip is NOT built: the prototype flags it `Not yet
+built` itself (`demo/index.html:525`, a second pill this entry missed), and
+nothing on the API aggregates across campaigns or returns a subscriber total, so
+every card in it and every "vs last month" delta would have been invented.
+
 ### #263 — A one-off that has already sent still reads ACTIVE
 **Screen:** Schedules · **Kind:** bug · **Severity:** medium
 
@@ -285,20 +306,6 @@ what the console can do — but 21 flat links is past the point where an operato
 can find a screen they have not used before, and the prototype's five-group
 structure exists for that reason.
 **Where:** `apps/admin-web/src/App.tsx:117-208` · `demo/index.html:464-512`
-
-### #261 — The Dashboard is a count of lists
-**Screen:** Dashboard · **Kind:** ux-gap · **Severity:** low
-
-The shipped Dashboard shows the health badge, the setup nag, and one number:
-how many newsletters the org has. The prototype's dashboard is four metric
-cards with deltas, a deliverability panel for the latest edition, and a recent
-campaigns list — and it marks the trend chart, and only the chart, `Not yet
-built`. The deliverability panel and the recent-campaign rows are not charts:
-they are the counters and rates that `campaignReport` already returns per
-campaign, and the alert thresholds `GET /orgs/{org}/alerts` already returns.
-Filed low because nothing is wrong on this screen; it is just that the landing
-page of a sending tool tells an operator nothing about sending.
-**Where:** `apps/admin-web/src/App.tsx:226-249` · `demo/index.html:517-572`
 
 ### #262 — Presentation saves defaults over unset fields
 **Screen:** Presentation · **Kind:** bug · **Severity:** low
