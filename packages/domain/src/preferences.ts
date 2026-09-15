@@ -28,7 +28,7 @@
  * subscriptions here.
  */
 import type { List, Subscription, SubscriptionStatus } from "@addressium/core";
-import type { Clock, ConfirmationTokenSigner, Stores } from "./ports.js";
+import { InvalidInputError, type Clock, type ConfirmationTokenSigner, type Stores } from "./ports.js";
 
 /**
  * How long a management link is good for.
@@ -99,7 +99,7 @@ export async function preferenceCentre(
   subscriberId: string,
 ): Promise<PreferenceView> {
   const subscriber = await stores.subscribers.get(orgId, subscriberId);
-  if (!subscriber) throw new Error("unknown subscriber");
+  if (!subscriber) throw new InvalidInputError("unknown subscriber");
   const [lists, subs] = await Promise.all([
     stores.lists.list(orgId),
     stores.subscriptions.listBySubscriber(orgId, subscriberId),

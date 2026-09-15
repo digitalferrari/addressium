@@ -7,7 +7,7 @@
  * every subscription and records an org-scoped suppression entry.
  */
 import type { Subscription, SuppressionSource } from "@addressium/core";
-import type { Clock, Stores } from "./ports.js";
+import { InvalidInputError, type Clock, type Stores } from "./ports.js";
 
 export async function unsubscribeFromList(
   stores: Stores,
@@ -15,7 +15,7 @@ export async function unsubscribeFromList(
   input: { orgId: string; subscriberId: string; listId: string },
 ): Promise<Subscription> {
   const sub = await stores.subscriptions.get(input.orgId, input.subscriberId, input.listId);
-  if (!sub) throw new Error("no such subscription");
+  if (!sub) throw new InvalidInputError("no such subscription");
   const updated: Subscription = {
     ...sub,
     status: "unsubscribed",

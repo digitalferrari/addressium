@@ -29,11 +29,14 @@ import {
   schemas,
   APP_VERSION,
   EXPECTED_SCHEMA_VERSION,
+  ZodError,
   type AlertConfig,
   type Subscription,
 } from "@addressium/core";
 import {
   HmacConfirmationSigner,
+  InvalidInputError,
+  InvalidTokenError,
   applyPreferences,
   buildPreferenceLinkEmail,
   preferenceCentre,
@@ -106,6 +109,7 @@ import {
   verifyWebhookSignature,
   type DripStarter,
   type SendDescriptor,
+  type SentMessage,
   type SuppressionChecker,
   type SuppressionListReader,
   type Stores,
@@ -145,10 +149,102 @@ const json = (statusCode: number, obj: unknown): HttpResult => ({
   headers: { "content-type": "application/json" },
   body: JSON.stringify(obj),
 });
-const fail = (e: unknown): HttpResult =>
-  e instanceof ForbiddenError
-    ? json(403, { error: e.message })
-    : json(400, { error: (e as Error).message });
+/** What a caller is told when the failure was ours, not theirs. */
+const GENERIC_FAILURE = "Something went wrong on our end. Please try again.";
+
+/**
+ * What a subscriber is told when their confirm/unsubscribe/manage link does not
+ * verify — one sentence for every cause (#265).
+ *
+ * The causes stay distinguishable in the domain and in the log, because they
+ * matter there: a retired signing key is our doing and a forged signature is
+ * not. To the holder of the link they are the same event with the same remedy,
+ * and the differences — which key id, which scope was expected, whether the
+ * subscription exists — are exactly what must not be published. The two
+ * handlers that can do better than this (unsubscribe, preferences) still catch
+ * `RetiredKeyError`/`TokenExpiredError` by type and answer 410 with their own
+ * copy; this is the floor for everything else, including the confirm page,
+ * which had no such branch and served the raw message.
+ */
+const INVALID_LINK =
+  "That link is invalid or has expired. Please use the most recent email, or sign up again.";
+
+/**
+ * Turn an exception into a response, classifying by TYPE (#265).
+ *
+ * This used to be `403 if ForbiddenError, else 400 with the raw .message`, and
+ * ~40 catch sites funnel through it. So EVERY failure was presented to the
+ * caller as their own mistake, carrying whatever the message happened to hold:
+ * a subscriber typing an address without an `@` was shown the entire serialized
+ * ZodError including the email regex, and a perfectly good signup that our SES
+ * identity could not yet send to was shown a 400 naming our region and echoing
+ * their address back at them. Both are on the PUBLIC subscriber site.
+ *
+ * The branches, in the order they are matched:
+ *
+ * - `ForbiddenError` → 403. Unchanged.
+ * - `ZodError` → 400 with ONE short sentence derived from the first issue. The
+ *   issue array is never serialized: besides being unreadable, a Zod 4 issue can
+ *   carry `input`, which would re-leak the very value we are trying not to echo.
+ * - `InvalidTokenError` → 400 with one fixed sentence for every cause, real
+ *   message logged. Matched BEFORE the line below, which would otherwise publish
+ *   it.
+ * - `InvalidInputError` → 400 with its message, which the domain has marked
+ *   safe to show by choosing that type. See its definition in `ports.ts` for why
+ *   this is a type and not an allowlist of message strings.
+ * - anything else → 500 and a fixed sentence, with the real error logged so it
+ *   still reaches CloudWatch. An unverified identity, a missing env var, an IAM
+ *   denial and a Dynamo throttle all land here, which is where they belong.
+ */
+const fail = (e: unknown): HttpResult => {
+  if (e instanceof ForbiddenError) return json(403, { error: e.message });
+  // `instanceof` plus a name check: the re-export from core keeps a single zod
+  // in the tree, but a hoisting accident that produced two copies would fail
+  // `instanceof` silently and downgrade every validation error to a 500.
+  if (e instanceof ZodError || (e as Error)?.name === "ZodError") {
+    return json(400, { error: zodMessage(e as ZodError) });
+  }
+  // BEFORE the generic InvalidInputError branch, which would otherwise pass the
+  // factual token message straight through — the ordering is the enforcement.
+  if (e instanceof InvalidTokenError) {
+    console.error("invalid token", { name: e.name, error: e.message });
+    return json(400, { error: INVALID_LINK });
+  }
+  if (e instanceof InvalidInputError) return json(400, { error: e.message });
+  console.error("unhandled failure", {
+    name: (e as Error)?.name,
+    error: (e as Error)?.message,
+    stack: (e as Error)?.stack,
+  });
+  return json(500, { error: GENERIC_FAILURE });
+};
+
+/**
+ * One human sentence for a validation failure.
+ *
+ * Path-prefixed by default (`listIds is required`) because on the admin plane
+ * the operator needs to know WHICH field, and a bare "is required" is useless in
+ * a form with twelve of them. The email case is special-cased and unprefixed
+ * because it is the one that reaches the public signup box, where "email is not
+ * valid" is worse copy than the plain instruction.
+ */
+function zodMessage(e: ZodError): string {
+  const issue = e.issues?.[0];
+  if (!issue) return "The request was not valid.";
+  if (issue.code === "invalid_format" && (issue as { format?: string }).format === "email") {
+    return "Enter a valid email address.";
+  }
+  const path = issue.path?.join(".") ?? "";
+  const reason =
+    issue.code === "invalid_type" && (issue as { received?: string }).received === "undefined"
+      ? "is required"
+      : issue.code === "too_small"
+        ? "is too short"
+        : issue.code === "too_big"
+          ? "is too long"
+          : "is not valid";
+  return path ? `${path} ${reason}.` : `The request ${reason}.`;
+}
 
 /** Server-side RBAC: derive the caller's grant from JWT claims and check it. */
 function requireGrant(event: HttpEvent, capability: Capability, orgId: string): void {
@@ -217,8 +313,26 @@ function provenance(event: HttpEvent): { sourceIp?: string; userAgent?: string }
   return { ...(ip ? { sourceIp: ip } : {}), ...(ua ? { userAgent: ua } : {}) };
 }
 
-/** POST /signup — public, double opt-in (§4.2). */
-export async function signupHandler(event: HttpEvent): Promise<HttpResult> {
+/**
+ * A confirmation-email sender. Narrow on purpose — it is the one dependency of
+ * the signup routes worth faking, and `SesEmailSender` satisfies it structurally.
+ */
+export interface ConfirmationSender {
+  send(message: SentMessage): Promise<unknown>;
+}
+
+/**
+ * POST /signup — public, double opt-in (§4.2).
+ *
+ * `injected` exists for tests only, and only for the sender — following
+ * `dripEnrollHandler`'s precedent (#265). A send failure here is the difference
+ * between a subscriber seeing "check your email" and seeing our SES
+ * configuration, and that branch cannot be exercised against real SES.
+ */
+export async function signupHandler(
+  event: HttpEvent,
+  injected?: { sender?: ConfirmationSender },
+): Promise<HttpResult> {
   try {
     const raw = JSON.parse(event.body ?? "{}") as Record<string, unknown>;
 
@@ -245,12 +359,36 @@ export async function signupHandler(event: HttpEvent): Promise<HttpResult> {
     const res = await signup(stores(), await confirmSigner(), clock, raw, provenance(event));
 
     // Send the double opt-in confirmation email (transactional, §4.2).
+    //
+    // Its OWN try/catch (#265). The subscriber and their pending subscription
+    // are already written by the line above, so a send failure here used to be
+    // caught by the handler's outer catch and served as a 400 — a completed
+    // signup presented to the subscriber as their own error, with the SES
+    // failure text (our region, their address echoed back) as the message.
+    //
+    // A 500 rather than the 202 the record would justify, because the 202 says
+    // "check your email" and no email is coming. Retry is safe and is the
+    // self-healing path: `signup()` is idempotent — `findOrCreateSubscriber`
+    // and `pendingSubscription` both find-or-create, so re-submitting the same
+    // address re-stamps `requestedAt` and mints a fresh token rather than
+    // erroring or duplicating.
     const list = await stores().lists.get(res.subscription.orgId, res.subscription.listId);
     if (list) {
-      const org = await stores().organizations.get(res.subscription.orgId);
-      const confirmUrl = `${env("CONFIRM_URL_BASE")}?token=${encodeURIComponent(res.confirmationToken)}`;
-      const ses = new SesEmailSender(org?.sesConfigSet, undefined, org?.sesTransactionalConfigSet);
-      await ses.send(buildConfirmationEmail(list, res.subscriber.email, confirmUrl));
+      try {
+        const org = await stores().organizations.get(res.subscription.orgId);
+        const confirmUrl = `${env("CONFIRM_URL_BASE")}?token=${encodeURIComponent(res.confirmationToken)}`;
+        const ses =
+          injected?.sender ??
+          new SesEmailSender(org?.sesConfigSet, undefined, org?.sesTransactionalConfigSet);
+        await ses.send(buildConfirmationEmail(list, res.subscriber.email, confirmUrl));
+      } catch (e) {
+        console.error("signup: confirmation send failed", {
+          orgId: res.subscription.orgId,
+          listId: res.subscription.listId,
+          error: (e as Error).message,
+        });
+        return json(500, { error: GENERIC_FAILURE });
+      }
     }
     return json(202, { subscriberId: res.subscriber.sub, status: res.subscription.status });
   } catch (e) {
@@ -262,7 +400,10 @@ export async function signupHandler(event: HttpEvent): Promise<HttpResult> {
  * POST /signup/batch — opt into several lists at once (the "All newsletters"
  * page, #61). Unauthenticated like /signup; one double opt-in email covers all.
  */
-export async function signupBatchHandler(event: HttpEvent): Promise<HttpResult> {
+export async function signupBatchHandler(
+  event: HttpEvent,
+  injected?: { sender?: ConfirmationSender },
+): Promise<HttpResult> {
   try {
     const raw = JSON.parse(event.body ?? "{}") as Record<string, unknown>;
 
@@ -281,11 +422,25 @@ export async function signupBatchHandler(event: HttpEvent): Promise<HttpResult> 
     }
 
     const res = await signupMany(stores(), await confirmSigner(), clock, raw, provenance(event));
+    // Its own try/catch, for the reason /signup's carries in full: the
+    // subscriptions are already durable, so a send failure must not be served
+    // as the subscriber's 400. Idempotent on retry, same as /signup (#265).
     if (res.lists.length > 0) {
-      const org = await stores().organizations.get(res.subscriber.orgId);
-      const confirmUrl = `${env("CONFIRM_URL_BASE")}?token=${encodeURIComponent(res.confirmationToken)}`;
-      const ses = new SesEmailSender(org?.sesConfigSet, undefined, org?.sesTransactionalConfigSet);
-      await ses.send(buildBatchConfirmationEmail(res.lists, res.subscriber.email, confirmUrl));
+      try {
+        const org = await stores().organizations.get(res.subscriber.orgId);
+        const confirmUrl = `${env("CONFIRM_URL_BASE")}?token=${encodeURIComponent(res.confirmationToken)}`;
+        const ses =
+          injected?.sender ??
+          new SesEmailSender(org?.sesConfigSet, undefined, org?.sesTransactionalConfigSet);
+        await ses.send(buildBatchConfirmationEmail(res.lists, res.subscriber.email, confirmUrl));
+      } catch (e) {
+        console.error("signup/batch: confirmation send failed", {
+          orgId: res.subscriber.orgId,
+          lists: res.lists.length,
+          error: (e as Error).message,
+        });
+        return json(500, { error: GENERIC_FAILURE });
+      }
     }
     return json(202, { subscriberId: res.subscriber.sub, status: "pending", lists: res.lists.map((l) => l.listId) });
   } catch (e) {

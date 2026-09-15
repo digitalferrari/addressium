@@ -10,6 +10,7 @@
  */
 import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
+import { InvalidInputError } from "./ports.js";
 
 const BLOCKED_V4: RegExp[] = [
   /^0\./, // "this" network
@@ -35,7 +36,12 @@ export interface SafeTarget {
   pinnedAddress: string;
 }
 
-export class SsrfBlockedError extends Error {
+/**
+ * Caller-visible (#265): every one of these is a verdict on a URL the operator
+ * typed — not https, doesn't resolve, resolves somewhere private. The operator
+ * has to be told which, or they cannot fix the feed they just added.
+ */
+export class SsrfBlockedError extends InvalidInputError {
   constructor(message: string) {
     super(message);
     this.name = "SsrfBlockedError";

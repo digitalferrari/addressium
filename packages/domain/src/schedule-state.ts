@@ -11,7 +11,7 @@
  */
 import { createHash } from "node:crypto";
 import type { ScheduleKind, ScheduleStatus, SendScheduleState } from "@addressium/core";
-import type { Clock, SendDescriptor, Stores } from "./ports.js";
+import { InvalidInputError, type Clock, type SendDescriptor, type Stores } from "./ports.js";
 
 /** EventBridge Scheduler caps a schedule name at 64 characters. */
 const SCHEDULE_NAME_MAX = 64;
@@ -108,7 +108,7 @@ export async function transitionSchedule(
   input: { orgId: string; scheduleId: string; action: "start" | "pause" | "archive" },
 ): Promise<SendScheduleState & { resumed?: SendDescriptor }> {
   const existing = await stores.schedules.get(input.orgId, input.scheduleId);
-  if (!existing) throw new Error(`unknown schedule ${input.scheduleId}`);
+  if (!existing) throw new InvalidInputError(`unknown schedule ${input.scheduleId}`);
   const status: ScheduleStatus =
     input.action === "start" ? "active" : input.action === "pause" ? "paused" : "archived";
 

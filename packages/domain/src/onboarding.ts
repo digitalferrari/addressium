@@ -10,7 +10,7 @@
  * surfaces as guidance; everything here is derived from data we own.
  */
 import type { List, Organization } from "@addressium/core";
-import type { Clock, Stores } from "./ports.js";
+import { InvalidInputError, type Clock, type Stores } from "./ports.js";
 
 export type SetupStepId = "sending_domain" | "first_list" | "compliance" | "branding";
 
@@ -55,7 +55,7 @@ export function computeSetupState(org: Organization, lists: List[]): SetupState 
 /** Load the org + its lists and compute the current setup state. */
 export async function evaluateSetup(stores: Stores, orgId: string): Promise<SetupState> {
   const org = await stores.organizations.get(orgId);
-  if (!org) throw new Error("unknown org");
+  if (!org) throw new InvalidInputError("unknown org");
   const lists = await stores.lists.list(orgId);
   return computeSetupState(org, lists);
 }
@@ -71,7 +71,7 @@ export async function refreshSetupComplete(
   _clock?: Clock,
 ): Promise<{ state: SetupState; setupComplete: boolean; changed: boolean }> {
   const org = await stores.organizations.get(orgId);
-  if (!org) throw new Error("unknown org");
+  if (!org) throw new InvalidInputError("unknown org");
   const state = computeSetupState(org, await stores.lists.list(orgId));
   if (state.complete && !org.setupComplete) {
     await stores.organizations.put({ ...org, setupComplete: true });

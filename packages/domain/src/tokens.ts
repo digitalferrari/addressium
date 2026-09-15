@@ -12,7 +12,38 @@ import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 // supported runtime exposes. Same thing by a name that is now standard rather
 // than jose's own (#152).
 import { SignJWT, type CryptoKey } from "jose";
-import type { Clock, ConfirmationTokenSigner, ConfirmClaims, MagicLinkSigner } from "./ports.js";
+import {
+  InvalidInputError,
+  type Clock,
+  type ConfirmationTokenSigner,
+  type ConfirmClaims,
+  type MagicLinkSigner,
+} from "./ports.js";
+
+/**
+ * A confirm/unsubscribe/manage link that did not verify (#265).
+ *
+ * A GROUPING type, not a message. Every subclass and every direct throw keeps
+ * its own factual message — "bad confirmation signature", "token scope
+ * mismatch: expected manage", the retired key's kid — because those distinctions
+ * are real, are load-bearing (the unsubscribe path branches on them to offer a
+ * working alternative), and belong in the log.
+ *
+ * What must NOT happen is that message reaching the subscriber, which is what
+ * the old raw-message-as-400 path did: `verifyScoped` below says its response
+ * "must never say which scope was expected", and nothing enforced it. So the
+ * API's `fail()` matches this ONE type and substitutes a single subscriber-safe
+ * sentence for all of them, logging the real cause. The sentence lives at that
+ * boundary rather than here, following the precedent of the two handlers that
+ * already catch `RetiredKeyError`/`TokenExpiredError` by type to write their own
+ * 410 copy.
+ */
+export class InvalidTokenError extends InvalidInputError {
+  constructor(message: string) {
+    super(message);
+    this.name = "InvalidTokenError";
+  }
+}
 
 export class SystemClock implements Clock {
   now() {
@@ -36,7 +67,7 @@ type ConfirmPayload = ConfirmClaims;
  * this to offer a working alternative rather than saying "invalid link" to
  * somebody trying to exercise a legal right.
  */
-export class RetiredKeyError extends Error {
+export class RetiredKeyError extends InvalidTokenError {
   constructor(readonly kid: string) {
     super(`confirmation token signed by retired key ${kid}`);
     this.name = "RetiredKeyError";
@@ -44,10 +75,22 @@ export class RetiredKeyError extends Error {
 }
 
 /** A token whose `exp` has passed. Also actionable, also not an attack. */
-export class TokenExpiredError extends Error {
+export class TokenExpiredError extends InvalidTokenError {
   constructor() {
     super("confirmation token expired");
     this.name = "TokenExpiredError";
+  }
+}
+
+/**
+ * A `manage` token presented where a `confirm` one belongs, or vice versa
+ * (#265). Factual here, for the log; `fail()` is what keeps the expected scope
+ * out of the response.
+ */
+export class ScopeMismatchError extends InvalidTokenError {
+  constructor(readonly expectedScope: string) {
+    super(`token scope mismatch: expected ${expectedScope}`);
+    this.name = "ScopeMismatchError";
   }
 }
 
@@ -175,16 +218,19 @@ export class HmacConfirmationSigner implements ConfirmationTokenSigner {
     if ((payload.scope ?? "confirm") !== scope) {
       // Named for the reader of a log line, not for the holder of the token:
       // the response this produces must never say which scope was expected.
-      throw new Error(`token scope mismatch: expected ${scope}`);
+      // That is now structural rather than a hope — `InvalidInputError` carries
+      // the subscriber-safe sentence and the expected scope goes to the log
+      // only (#265).
+      throw new ScopeMismatchError(scope);
     }
     return payload;
   }
 
   verify(token: string): ConfirmPayload {
     const parts = token.split(".");
-    if (parts.length !== 3) throw new Error("malformed confirmation token");
+    if (parts.length !== 3) throw new InvalidTokenError("malformed confirmation token");
     const [kid, body, sig] = parts as [string, string, string];
-    if (!kid || !body || !sig) throw new Error("malformed confirmation token");
+    if (!kid || !body || !sig) throw new InvalidTokenError("malformed confirmation token");
 
     const key = this.byKid.get(kid);
     // Named separately from a signature failure — see RetiredKeyError. Checked
@@ -196,7 +242,7 @@ export class HmacConfirmationSigner implements ConfirmationTokenSigner {
     const b = Buffer.from(expected);
     // Timing-safe comparison (docs/SECURITY.md §4.6).
     if (a.length !== b.length || !timingSafeEqual(a, b)) {
-      throw new Error("bad confirmation signature");
+      throw new InvalidTokenError("bad confirmation signature");
     }
     const payload = JSON.parse(Buffer.from(body, "base64url").toString("utf8")) as ConfirmPayload;
     if (payload.exp < Math.floor(Date.now() / 1000)) throw new TokenExpiredError();

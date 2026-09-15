@@ -16,6 +16,7 @@
  * testable; the adapter does no validation of its own.
  */
 import { ROLES, type Capability, type RoleName } from "@addressium/rbac";
+import { InvalidInputError } from "./ports.js";
 
 export interface TeamMember {
   /** Cognito username — stable, unlike the email. */
@@ -43,7 +44,12 @@ export function capabilitiesOf(role: RoleName): Capability[] {
   return [...(ROLES[role] ?? new Set<Capability>())];
 }
 
-export class TeamError extends Error {}
+/**
+ * Every `TeamError` is an operator's own input — an unknown role, a duplicate
+ * organization, a member who isn't one, an address that already is. All of them
+ * name what to change, so they stay caller-visible (#265).
+ */
+export class TeamError extends InvalidInputError {}
 
 /**
  * Validate an access grant before it reaches Cognito.

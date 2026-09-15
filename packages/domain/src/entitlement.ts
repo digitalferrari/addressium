@@ -7,7 +7,7 @@
  * (see webhooks.ts).
  */
 import { schemas, type EntitlementSync, type Subscriber } from "@addressium/core";
-import type { Clock, Stores } from "./ports.js";
+import { InvalidInputError, type Clock, type Stores } from "./ports.js";
 
 /**
  * An entitlement update the billing system already superseded. A distinct error
@@ -15,7 +15,7 @@ import type { Clock, Stores } from "./ports.js";
  * malformed, it just lost a race, and a 400 would send someone to debug their
  * payload.
  */
-export class StaleEntitlementError extends Error {
+export class StaleEntitlementError extends InvalidInputError {
   constructor(
     public readonly received: string,
     public readonly current: string,
@@ -58,7 +58,7 @@ export async function applyEntitlementSync(
   const email = input.subscriberEmail.trim().toLowerCase();
 
   const subscriber = await stores.subscribers.findByEmail(input.orgId, email);
-  if (!subscriber) throw new Error("unknown subscriber");
+  if (!subscriber) throw new InvalidInputError("unknown subscriber");
 
   // Refuse an update the billing system already superseded (#194). The `version`
   // was recorded and never compared, so two webhooks delivered out of order —

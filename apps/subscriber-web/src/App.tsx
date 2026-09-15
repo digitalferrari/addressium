@@ -7,7 +7,7 @@
  * the org, not to us (docs/ARCHITECTURE.md §4.10).
  */
 import { useEffect, useMemo, useState } from "react";
-import { api, applyBranding, ORG, type Branding, type PublicList } from "./api.js";
+import { api, applyBranding, displayError, ORG, type Branding, type PublicList } from "./api.js";
 
 type Route =
   | { name: "directory" }
@@ -73,7 +73,7 @@ function AllNewsletters() {
     api
       .directory()
       .then(setLists)
-      .catch((e) => setErr(String(e)))
+      .catch((e) => setErr(displayError(e)))
       .finally(() => setLoaded(true));
   }, []);
   const toggle = (id: string) =>
@@ -84,7 +84,7 @@ function AllNewsletters() {
       await api.signupMany(email, [...selected]);
       setMsg(`Almost there — check ${email} to confirm your ${selected.size} subscription${selected.size === 1 ? "" : "s"}.`);
       setSelected(new Set()); setEmail("");
-    } catch (e) { setErr(String(e)); }
+    } catch (e) { setErr(displayError(e)); }
   };
   if (err) return <p className="err">{err}</p>;
   if (!ORG) return <p className="muted">Set VITE_ORG_ID to view this org's newsletters.</p>;
@@ -125,7 +125,7 @@ function Directory() {
     api
       .directory()
       .then((ls) => setIds(ls.map((l) => l.listId)))
-      .catch((e) => setErr(String(e)))
+      .catch((e) => setErr(displayError(e)))
       .finally(() => setLoaded(true));
   }, []);
   if (err) return <p className="err">{err}</p>;
@@ -151,7 +151,7 @@ function ListCard({ listId }: { listId: string }) {
   const subscribe = async () => {
     setMsg("");
     try { const r = await api.signup(email, listId); setMsg(r.status === "pending" ? "Check your inbox to confirm." : "Subscribed!"); setEmail(""); }
-    catch (e) { setMsg(String(e)); }
+    catch (e) { setMsg(displayError(e)); }
   };
   if (!list) return null;
   return (
@@ -179,7 +179,7 @@ function Confirm({ token }: { token: string }) {
   const [state, setState] = useState("Confirming…");
   useEffect(() => {
     api.confirm(token).then((r) => setState(r.status === "confirmed" ? "You're subscribed — thank you!" : `Status: ${r.status}`))
-      .catch((e) => setState(String(e)));
+      .catch((e) => setState(displayError(e)));
   }, [token]);
   return <div className="card"><div className="title">Confirm subscription</div><p className="muted">{state}</p></div>;
 }
@@ -188,7 +188,7 @@ function Unsubscribe({ token }: { token: string }) {
   const [state, setState] = useState<"idle" | "done" | "error">("idle");
   const [err, setErr] = useState("");
   const go = async () => {
-    try { await api.unsubscribe(token); setState("done"); } catch (e) { setErr(String(e)); setState("error"); }
+    try { await api.unsubscribe(token); setState("done"); } catch (e) { setErr(displayError(e)); setState("error"); }
   };
   return (
     <div className="card">

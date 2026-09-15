@@ -107,12 +107,47 @@ export interface OrganizationStore {
 }
 
 /**
+ * The request was wrong, and its message is safe to show the caller (#265).
+ *
+ * The API's `fail()` used to turn EVERY exception's raw `.message` into a 400,
+ * which meant an operational failure of ours — an unverified SES identity, a
+ * missing env var, an IAM denial — was served to a subscriber as their mistake,
+ * complete with whatever internals the message carried. Defaulting to 500
+ * instead fixes that, but it would silently bury the genuine user errors this
+ * layer raises with a bare `new Error("unknown list")`, and an operator reading
+ * the admin console needs those sentences.
+ *
+ * So the distinction is carried by TYPE rather than by an allowlist of message
+ * strings in the API layer: an allowlist rots the moment someone rewords a
+ * throw, and it rots silently, in the direction of leaking. The test to apply
+ * at each throw site is: *would I show this sentence to the person who made
+ * this request, and did their request cause it?* Both yes → `InvalidInputError`
+ * (400, message passed through). Anything else stays a bare `Error` → 500 and a
+ * generic sentence, with the real error logged.
+ *
+ * `ForbiddenError` (403) and `ZodError` (400, reworded) are classified ahead of
+ * this by `fail()`; they need no conversion here.
+ */
+export class InvalidInputError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "InvalidInputError";
+  }
+}
+
+/**
  * A conditional write lost a race (#194). The caller re-reads and decides: for
  * erasure that means retrying against the record that actually exists now, and
  * for a template save it means telling the operator their edit was overwritten
  * rather than silently discarding one of the two bodies.
+ *
+ * Caller-visible by inheritance (#265): the whole point of this error is that
+ * the operator is TOLD their edit collided rather than having one of the two
+ * bodies discarded quietly, so it must not fall into the generic 500 branch.
+ * 409 would describe it better than the 400 it gets; that is left alone here
+ * because changing a status code is a separate decision from stopping a leak.
  */
-export class ConcurrentModificationError extends Error {
+export class ConcurrentModificationError extends InvalidInputError {
   constructor(what: string) {
     super(`${what} was modified concurrently`);
     this.name = "ConcurrentModificationError";

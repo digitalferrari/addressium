@@ -236,19 +236,43 @@ test("a signup-triggered, unknown, or malformed sequence is a 400, not a silence
   assert.deepEqual(starter.started, [], "nothing may be started by a rejected request");
 });
 
-test("a starter failure is reported, not swallowed", async () => {
+test("a starter failure is reported, not swallowed — as a 500, and to the log", async () => {
   // The opposite posture to the confirmation path, deliberately: there the
   // confirmation is already durable and enrollment is best-effort, but an operator
   // who clicks "Enroll" is owed an answer.
+  //
+  // This test used to assert a 400 whose BODY contained "AccessDeniedException"
+  // — #265 in miniature, and the expectation was wrong on both halves. A Step
+  // Functions IAM denial is our infrastructure, not the operator's request, so
+  // 400 mislabels who has to fix it; and publishing the SDK's text to the caller
+  // is the leak the issue is about. What the test is actually for — that the
+  // failure is REPORTED rather than swallowed into a cheerful 200 — is
+  // preserved, and is now checked on both sides: the caller gets an honest 5xx,
+  // and the real error still reaches CloudWatch.
   const exploding: DripStarter = {
     start: async () => {
       throw new Error("states.amazonaws.com: AccessDeniedException");
     },
   };
-  const res = await api.dripEnrollHandler(
-    enrollEvent({ orgId: ORG, sequenceId: "onboarding", subscriberId: SUB }),
-    { starter: exploding },
+  const logged: unknown[][] = [];
+  const realError = console.error;
+  console.error = (...args: unknown[]) => void logged.push(args);
+  let res;
+  try {
+    res = await api.dripEnrollHandler(
+      enrollEvent({ orgId: ORG, sequenceId: "onboarding", subscriberId: SUB }),
+      { starter: exploding },
+    );
+  } finally {
+    console.error = realError;
+  }
+  assert.equal(res.statusCode, 500);
+  const body = JSON.parse(res.body).error as string;
+  assert.doesNotMatch(body, /AccessDeniedException/, "the SDK's text must not reach the caller");
+  assert.match(body, /something went wrong/i);
+  assert.match(
+    JSON.stringify(logged),
+    /AccessDeniedException/,
+    "…but it must still reach the log, or the failure is invisible",
   );
-  assert.equal(res.statusCode, 400);
-  assert.match(JSON.parse(res.body).error, /AccessDeniedException/);
 });

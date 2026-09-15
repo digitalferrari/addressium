@@ -22,7 +22,7 @@ import type {
   Template,
 } from "@addressium/core";
 import { schemas } from "@addressium/core";
-import type { Clock, Stores } from "./ports.js";
+import { InvalidInputError, type Clock, type Stores } from "./ports.js";
 import { scopeForSuppressionSource } from "./suppress.js";
 
 /**
@@ -74,9 +74,9 @@ export function fromAddressAllowed(address: string, orgDomains: string[]): boole
  */
 export async function saveList(stores: Stores, input: schemas.CreateListInput): Promise<List> {
   const org = await stores.organizations.get(input.orgId);
-  if (!org) throw new Error(`unknown org ${input.orgId}`);
+  if (!org) throw new InvalidInputError(`unknown org ${input.orgId}`);
   if (!fromAddressAllowed(input.fromAddress, org.domains)) {
-    throw new Error(
+    throw new InvalidInputError(
       `fromAddress ${input.fromAddress} is not on a domain this org owns (${org.domains.join(", ")}). ` +
         `Sending as a domain you have not verified fails DMARC and, where it is another tenant's ` +
         `verified domain, sends as them.`,
@@ -107,7 +107,7 @@ export async function setListVisibility(
   visibility: ListVisibility,
 ): Promise<List> {
   const list = await stores.lists.get(orgId, listId);
-  if (!list) throw new Error("unknown list");
+  if (!list) throw new InvalidInputError("unknown list");
   const updated: List = { ...list, visibility };
   await stores.lists.put(updated);
   return updated;
@@ -299,9 +299,9 @@ export async function listSegmentMembers(
   segmentId: string,
 ): Promise<SegmentMember[]> {
   const segment = await stores.segments.get(orgId, segmentId);
-  if (!segment) throw new Error(`unknown segment ${segmentId}`);
+  if (!segment) throw new InvalidInputError(`unknown segment ${segmentId}`);
   const ids = explicitMemberIds(segment.predicate);
-  if (!ids) throw new Error(`segment ${segmentId} is rule-based — it has no explicit members`);
+  if (!ids) throw new InvalidInputError(`segment ${segmentId} is rule-based — it has no explicit members`);
 
   const members: SegmentMember[] = [];
   for (const id of ids) {
@@ -345,10 +345,10 @@ export async function updateSegmentMembership(
   input: schemas.SegmentMemberInput,
 ): Promise<{ segment: Segment; members: SegmentMember[] }> {
   const segment = await stores.segments.get(input.orgId, input.segmentId);
-  if (!segment) throw new Error(`unknown segment ${input.segmentId}`);
+  if (!segment) throw new InvalidInputError(`unknown segment ${input.segmentId}`);
   const ids = explicitMemberIds(segment.predicate);
   if (!ids) {
-    throw new Error(
+    throw new InvalidInputError(
       `segment ${input.segmentId} is rule-based — its members come from its conditions, not a list`,
     );
   }
@@ -356,7 +356,7 @@ export async function updateSegmentMembership(
   const email = input.email.trim().toLowerCase();
   const subscriber = await stores.subscribers.findByEmail(input.orgId, email);
   if (!subscriber) {
-    throw new Error(
+    throw new InvalidInputError(
       `${email} is not a subscriber in this organization — import or add them first, so their consent provenance is recorded`,
     );
   }
@@ -399,7 +399,7 @@ export async function setBranding(
   branding: Branding,
 ): Promise<Organization> {
   const org = await stores.organizations.get(orgId);
-  if (!org) throw new Error("unknown org");
+  if (!org) throw new InvalidInputError("unknown org");
   const updated: Organization = { ...org, branding };
   await stores.organizations.put(updated);
   return updated;
@@ -413,7 +413,7 @@ export async function setListPresentation(
   presentation: ListPresentation,
 ): Promise<List> {
   const list = await stores.lists.get(orgId, listId);
-  if (!list) throw new Error("unknown list");
+  if (!list) throw new InvalidInputError("unknown list");
   const updated: List = { ...list, presentation };
   await stores.lists.put(updated);
   return updated;

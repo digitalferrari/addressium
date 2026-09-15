@@ -20,7 +20,7 @@
  */
 import { createHash } from "node:crypto";
 import type { DripSequence, DripStep, Subscriber, Subscription } from "@addressium/core";
-import type { DripEnrollment, DripStarter, Stores } from "./ports.js";
+import { InvalidInputError, type DripEnrollment, type DripStarter, type Stores } from "./ports.js";
 
 export type DripAction =
   | { type: "send"; step: DripStep }
@@ -432,17 +432,17 @@ export async function enrollManually(
   input: { orgId: string; sequenceId: string; subscriberId: string; enrollmentId: string },
 ): Promise<DripEnrollment> {
   const sequence = await stores.dripSequences.get(input.orgId, input.sequenceId);
-  if (!sequence) throw new Error(`unknown drip sequence ${input.sequenceId}`);
+  if (!sequence) throw new InvalidInputError(`unknown drip sequence ${input.sequenceId}`);
   if (sequence.trigger.kind !== "manual") {
-    throw new Error(`drip sequence ${input.sequenceId} is ${sequence.trigger.kind}-triggered, not manual`);
+    throw new InvalidInputError(`drip sequence ${input.sequenceId} is ${sequence.trigger.kind}-triggered, not manual`);
   }
   const enrollment = initialEnrollment(sequence, input.subscriberId, input.enrollmentId);
-  if (!enrollment) throw new Error(`drip sequence ${input.sequenceId} has no steps`);
+  if (!enrollment) throw new InvalidInputError(`drip sequence ${input.sequenceId} has no steps`);
   // `initialEnrollment` returned, so step 0 exists.
   const listId = sequence.steps[0]!.listId;
   const subscription = await stores.subscriptions.get(input.orgId, input.subscriberId, listId);
   if (subscription?.status !== "confirmed") {
-    throw new Error(
+    throw new InvalidInputError(
       `subscriber ${input.subscriberId} has no confirmed subscription to ${listId}` +
         `${subscription ? ` (${subscription.status})` : ""}`,
     );

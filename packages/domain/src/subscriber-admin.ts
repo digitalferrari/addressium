@@ -18,7 +18,7 @@
  */
 import type { Subscriber, Subscription, SubscriptionStatus } from "@addressium/core";
 import { schemas } from "@addressium/core";
-import type { Clock, Stores } from "./ports.js";
+import { InvalidInputError, type Clock, type Stores } from "./ports.js";
 
 /** One list, with this subscriber's standing on it. */
 export interface SubscriberListState {
@@ -70,7 +70,7 @@ export async function subscriberDetail(
   sub: string,
 ): Promise<SubscriberDetail> {
   const subscriber = await stores.subscribers.get(orgId, sub);
-  if (!subscriber) throw new Error(`unknown subscriber ${sub}`);
+  if (!subscriber) throw new InvalidInputError(`unknown subscriber ${sub}`);
 
   const [lists, subscriptions, segments] = await Promise.all([
     stores.lists.list(orgId),
@@ -127,7 +127,7 @@ export async function setSubscriberAttributes(
   input: { orgId: string; sub: string; attributes: Record<string, string> },
 ): Promise<SubscriberDetail> {
   const subscriber = await stores.subscribers.get(input.orgId, input.sub);
-  if (!subscriber) throw new Error(`unknown subscriber ${input.sub}`);
+  if (!subscriber) throw new InvalidInputError(`unknown subscriber ${input.sub}`);
   const attributes = schemas.attributesSchema.parse(input.attributes);
 
   const updated: Subscriber = { ...subscriber, attributes };
@@ -165,12 +165,12 @@ export async function setSubscriptionStatus(
   },
 ): Promise<SubscriberDetail> {
   const subscriber = await stores.subscribers.get(input.orgId, input.sub);
-  if (!subscriber) throw new Error(`unknown subscriber ${input.sub}`);
+  if (!subscriber) throw new InvalidInputError(`unknown subscriber ${input.sub}`);
   const list = await stores.lists.get(input.orgId, input.listId);
-  if (!list) throw new Error(`unknown list ${input.listId}`);
+  if (!list) throw new InvalidInputError(`unknown list ${input.listId}`);
 
   if (input.status === "confirmed" && !input.acknowledgeManualConfirmation) {
-    throw new Error(
+    throw new InvalidInputError(
       "manually confirming a subscription bypasses double opt-in — resend the request with acknowledgeManualConfirmation",
     );
   }

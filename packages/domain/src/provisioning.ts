@@ -11,7 +11,7 @@
  */
 import type { Organization, schemas } from "@addressium/core";
 import { schemas as s } from "@addressium/core";
-import type { Stores } from "./ports.js";
+import { InvalidInputError, type Stores } from "./ports.js";
 import { defaultAlertConfig } from "./alerts.js";
 import {
   PRIMARY_TEST_MERGE_TAGS,
@@ -112,7 +112,7 @@ export function slugifyOrgId(name: string): string {
     // Trim leading/trailing dashes. The `(?<!-)` on the trailing branch removes
     // the ambiguity that made `-+$` polynomial on interior dash runs (#js-redos).
     .replace(/^-+|(?<!-)-+$/g, "");
-  if (!slug) throw new Error("cannot derive org id from name");
+  if (!slug) throw new InvalidInputError("cannot derive org id from name");
   return slug;
 }
 

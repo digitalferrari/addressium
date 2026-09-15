@@ -12,7 +12,8 @@
  */
 import { randomUUID } from "node:crypto";
 import { schemas, type Consent, type List, type Subscriber, type Subscription } from "@addressium/core";
-import type { Clock, ConfirmationTokenSigner, Stores } from "./ports.js";
+import { InvalidInputError, type Clock, type ConfirmationTokenSigner, type Stores } from "./ports.js";
+import { InvalidTokenError } from "./tokens.js";
 
 export interface SignupResult {
   subscriber: Subscriber;
@@ -41,7 +42,7 @@ async function clearOrRejectSuppression(stores: Stores, orgId: string, email: st
   const clearable = suppressions.every(
     (s) => (s.source === "unsubscribe" || s.source === "inactive") && s.scope === "org",
   );
-  if (!clearable) throw new Error("address is suppressed");
+  if (!clearable) throw new InvalidInputError("address is suppressed");
   for (const s of suppressions) await stores.suppression.remove(s.orgId, s.email, s.scope);
 }
 
@@ -154,8 +155,8 @@ export async function signup(
   const email = input.email.trim().toLowerCase();
 
   const list = await stores.lists.get(input.orgId, input.listId);
-  if (!list) throw new Error("unknown list");
-  if (list.visibility === "closed") throw new Error("list is closed to signups");
+  if (!list) throw new InvalidInputError("unknown list");
+  if (list.visibility === "closed") throw new InvalidInputError("list is closed to signups");
 
   await clearOrRejectSuppression(stores, input.orgId, email);
   const provenance: RequestContext = { ...ctx, sourceUrl: ctx.sourceUrl ?? input.sourceUrl };
@@ -188,7 +189,7 @@ export async function signupMany(
     const list = await stores.lists.get(input.orgId, listId);
     if (list && list.visibility !== "closed") lists.push(list);
   }
-  if (lists.length === 0) throw new Error("no open lists to subscribe to");
+  if (lists.length === 0) throw new InvalidInputError("no open lists to subscribe to");
 
   await clearOrRejectSuppression(stores, input.orgId, email);
   const provenance: RequestContext = { ...ctx, sourceUrl: ctx.sourceUrl ?? input.sourceUrl };
@@ -215,10 +216,15 @@ export async function confirmOptIn(
   ctx: RequestContext = {},
 ): Promise<Subscription> {
   const { orgId, sub, listId } = signer.verify(token);
-  if (!listId) throw new Error("token has no list");
+  // `InvalidTokenError`, not a bare one (#265): these land on the PUBLIC confirm
+  // page, where what the reader can do is identical in all three cases and the
+  // differences between them are ours. Factual here for the log; `fail()`
+  // substitutes the one subscriber-safe sentence for the whole group.
+  if (!listId) throw new InvalidTokenError("token has no list");
   const subscription = await stores.subscriptions.get(orgId, sub, listId);
-  if (!subscription) throw new Error("no such subscription");
-  if (subscription.status === "unsubscribed") throw new Error("subscription was unsubscribed");
+  if (!subscription) throw new InvalidTokenError("no such subscription");
+  if (subscription.status === "unsubscribed")
+    throw new InvalidTokenError("subscription was unsubscribed");
 
   const now = clock.now().toISOString();
   const confirmed: Subscription = {

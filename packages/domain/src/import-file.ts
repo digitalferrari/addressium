@@ -23,6 +23,7 @@
  * exactly the file this reads.
  */
 import { gunzipSync } from "node:zlib";
+import { InvalidInputError } from "./ports.js";
 
 /** Gzip's magic bytes. A Pinpoint export job's objects are always gzipped. */
 const GZIP_MAGIC = [0x1f, 0x8b];
@@ -79,7 +80,7 @@ export function decodeImportFile(input: Uint8Array | string): string {
     const why = (e as NodeJS.ErrnoException).code === "ERR_BUFFER_TOO_LARGE"
       ? `decompresses to more than ${MAX_DECOMPRESSED_BYTES / 1024 / 1024}MB`
       : "is not a readable gzip archive";
-    throw new Error(`import file ${why}`);
+    throw new InvalidInputError(`import file ${why}`);
   }
 }
 

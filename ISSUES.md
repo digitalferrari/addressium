@@ -110,6 +110,48 @@ a button that 403s. Unmapped reasons are listed with their addresses, not
 counted: "4 skipped" reads as housekeeping, and what it means is "4 addresses we
 will now mail".
 
+### #265 — Every failure is the subscriber's fault, and says so in our words
+**Screen:** Subscribe (public subscriber site) · **Kind:** bug · **Severity:** high
+
+`fail()` was `403 if ForbiddenError, else 400 with the raw .message`, and around
+forty catch sites funnel through it. So every exception in the system was
+presented to the caller as their own mistake, carrying whatever text it
+happened to hold. Two of those land on the PUBLIC site, on the one control a
+subscriber ever touches:
+
+- An address typed without an `@` renders the entire serialized `ZodError` —
+  origin, code, format, and the full email regex — as the page's error text.
+- A *valid* address renders the SES sandbox refusal: an operational state of
+  ours, served as a 400 that blames the reader, naming our sending region and
+  echoing their address back at them.
+
+The second is worse than a bad message, because the signup **succeeded**. In
+`signupHandler` the confirmation send sits inside the same `try` as the
+subscriber persist, so the subscriber and their pending subscription are already
+written when the send throws; the outer catch then turns a completed signup into
+a 400. `signupBatchHandler` has the same shape. And the leak is not only the
+API's: `api.ts` did `throw new Error(await res.text())`, putting the raw body in
+the message, and every catch in `App.tsx` rendered `String(e)` — which is where
+the `Error: ` prefix in both cases comes from.
+
+The same `fail()` also flattened the distinction that matters in the other
+direction: a genuine user error (`unknown list`, `list is closed to signups`)
+and an IAM denial were both 400s with their internals published.
+**Where:** `services/api/src/index.ts:148,221-259,265-294` · `apps/subscriber-web/src/api.ts:14` · `apps/subscriber-web/src/App.tsx` (six `String(e)` sites)
+**Status:** fixed — `fail()` now classifies by TYPE, not by message text:
+`ForbiddenError` 403; `ZodError` 400 reworded to one sentence derived from the
+first issue (never the issue array, which in Zod 4 can carry `input` and would
+re-leak the address); `InvalidTokenError` 400 with a single subscriber-safe
+sentence for every cause; `InvalidInputError` 400 with its own message; anything
+else 500, generic, with the real error logged to CloudWatch. The genuine
+400-class domain errors were converted to `InvalidInputError` rather than
+allowlisted by string — an allowlist rots the moment someone rewords a throw,
+and it rots in the direction of leaking. The confirmation send in both signup
+handlers has its own try/catch and returns the generic 500, never invalidating a
+signup that is already durable; retry is safe because `signup()` is idempotent.
+The subscriber site parses `{error}` and trusts only a message the API addressed
+to a reader.
+
 ### #252 — Large imports are refused by the only import screens that exist
 **Screen:** Import (mapper), Import (simple) · **Kind:** missing-feature · **Severity:** high
 
