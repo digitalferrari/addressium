@@ -152,6 +152,26 @@ to `number`.
 
 ## Medium
 
+### #264 — "Loading newsletters…" is also what "no newsletters" looks like
+**Screen:** Subscriber site (public) · **Kind:** bug · **Severity:** medium
+
+`AllNewsletters` and `Directory` both gated the spinner on `lists.length === 0`
+with no pending flag, and both start from `useState([])`. A request that has
+finished and returned an empty array is therefore indistinguishable from one
+still in flight, so the public page sits on "Loading newsletters…" forever.
+
+This is not only the empty-org case. `GET /orgs/{org}/directory` answers `200 []`
+for an org id that does not exist at all, so a subscriber site built against a
+stale or mistyped `VITE_ORG_ID` shows a permanent false spinner rather than
+anything an operator could diagnose from. Observed on the deployed public site,
+which was still carrying a deleted org's id from an earlier build.
+
+Fixed: an explicit `loaded` flag set in `.finally()` on both call sites, so
+pending shows the spinner and loaded-and-empty says no newsletters are published
+yet. **Status:** fixed
+
+**Where:** `apps/subscriber-web/src/App.tsx` (`AllNewsletters`, `Directory`)
+
 ### #261 — The Dashboard is a count of lists
 **Screen:** Dashboard · **Kind:** ux-gap · **Severity:** medium
 

@@ -58,6 +58,11 @@ export function App() {
  */
 function AllNewsletters() {
   const [lists, setLists] = useState<PublicList[]>([]);
+  // Distinct from `lists.length === 0`. An org with no public newsletters is a
+  // normal state, and conflating it with "still fetching" left the page saying
+  // "Loading newsletters…" forever — including on a stale build pointed at an
+  // org that no longer exists, where the request succeeds and returns [].
+  const [loaded, setLoaded] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [email, setEmail] = useState("");
   const [msg, setMsg] = useState("");
@@ -65,7 +70,11 @@ function AllNewsletters() {
   useEffect(() => {
     // One request. This used to fan out to /lists/{id}/public per list, which
     // made the front page's cost scale with the number of newsletters.
-    api.directory().then(setLists).catch((e) => setErr(String(e)));
+    api
+      .directory()
+      .then(setLists)
+      .catch((e) => setErr(String(e)))
+      .finally(() => setLoaded(true));
   }, []);
   const toggle = (id: string) =>
     setSelected((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
@@ -83,7 +92,10 @@ function AllNewsletters() {
     <div className="card">
       <div className="title">Subscribe to our newsletters</div>
       <p className="muted">Pick the ones you'd like, add your email, and confirm once.</p>
-      {lists.length === 0 && <p className="muted">Loading newsletters…</p>}
+      {!loaded && <p className="muted">Loading newsletters…</p>}
+      {loaded && lists.length === 0 && (
+        <p className="muted">No newsletters are published yet.</p>
+      )}
       {lists.map((l) => (
         <label key={l.listId} className="row" style={{ alignItems: "flex-start", gap: 10, padding: "8px 0" }}>
           <input type="checkbox" checked={selected.has(l.listId)} onChange={() => toggle(l.listId)} />
@@ -107,15 +119,23 @@ function AllNewsletters() {
 
 function Directory() {
   const [ids, setIds] = useState<string[]>([]);
+  const [loaded, setLoaded] = useState(false);
   const [err, setErr] = useState("");
   useEffect(() => {
-    api.directory().then((ls) => setIds(ls.map((l) => l.listId))).catch((e) => setErr(String(e)));
+    api
+      .directory()
+      .then((ls) => setIds(ls.map((l) => l.listId)))
+      .catch((e) => setErr(String(e)))
+      .finally(() => setLoaded(true));
   }, []);
   if (err) return <p className="err">{err}</p>;
   if (!ORG) return <p className="muted">Set VITE_ORG_ID to view this org's newsletters.</p>;
   return (
     <div>
-      {ids.length === 0 && <p className="muted">Loading newsletters…</p>}
+      {!loaded && <p className="muted">Loading newsletters…</p>}
+      {loaded && ids.length === 0 && (
+        <p className="muted">No newsletters are published yet.</p>
+      )}
       {ids.map((id) => <ListCard key={id} listId={id} />)}
     </div>
   );
