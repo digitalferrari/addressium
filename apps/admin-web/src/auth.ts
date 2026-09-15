@@ -6,9 +6,28 @@
 const CFG = {
   domain: import.meta.env.VITE_COGNITO_DOMAIN ?? "",
   clientId: import.meta.env.VITE_COGNITO_CLIENT_ID ?? "",
+  poolId: import.meta.env.VITE_COGNITO_POOL_ID ?? "",
   redirectUri: import.meta.env.VITE_REDIRECT_URI ?? window.location.origin + "/",
   scope: "openid email profile",
 };
+
+/**
+ * The admin pool this console authenticates against, for the Identity & pools
+ * screen to display.
+ *
+ * Read from the SPA's own build config, not from the API: the admin pool is
+ * stack-level and shared across every org, so it is not on any organization
+ * record and no route returns it. A field is `undefined` when its env var was
+ * not set at build time — the screen renders "not configured" rather than an
+ * empty box, because an empty box reads as a provisioning failure.
+ */
+export function adminPoolConfig(): { poolId?: string; clientId?: string; hostedUiDomain?: string } {
+  return {
+    poolId: CFG.poolId || undefined,
+    clientId: CFG.clientId || undefined,
+    hostedUiDomain: CFG.domain || undefined,
+  };
+}
 
 export interface Tokens {
   idToken: string;

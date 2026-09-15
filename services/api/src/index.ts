@@ -16,6 +16,7 @@ import {
   GoogleRecaptchaVerifier,
   SesEmailSender,
   S3ImportFileStore,
+  SesIdentityStatusReader,
   SesSuppressionListReader,
   SfnDripStarter,
   SqsSendQueue,
@@ -88,6 +89,8 @@ import {
   eraseSubscriber,
   publicListDirectory,
   publicListView,
+  readSendingIdentity,
+  type SesIdentityReader,
   recordAudit,
   setBranding,
   setListPresentation,
@@ -101,6 +104,12 @@ import {
   updateSegmentMembership,
   saveDripSequence,
   saveTemplate,
+  saveMergeTag,
+  listMergeTags,
+  deleteMergeTag,
+  saveCampaignSeries,
+  listCampaignSeries,
+  getCampaignSeries,
   setListVisibility,
   signup,
   signupMany,
@@ -294,6 +303,16 @@ const importFiles = () => (_importFiles ??= new S3ImportFileStore(env("IMPORT_BU
  */
 let _suppressionChecker: SesSuppressionListReader | undefined;
 const suppressionChecker = () => (_suppressionChecker ??= new SesSuppressionListReader());
+
+/**
+ * The live SES verification / sandbox read (#285). Lazy and env-free for the
+ * same reason as the suppression checker above — the SDK resolves credentials
+ * and region itself, and there is nothing per-deployment to configure. Read-only
+ * by construction: the class holds `GetEmailIdentity` and `GetAccount` and no
+ * command that creates or changes anything.
+ */
+let _sesIdentityReader: SesIdentityStatusReader | undefined;
+const sesIdentityReader = () => (_sesIdentityReader ??= new SesIdentityStatusReader());
 
 let _dripStarter: SfnDripStarter | undefined;
 const dripStarter = () =>
@@ -942,7 +961,20 @@ export async function listsHandler(event: HttpEvent): Promise<HttpResult> {
   }
 }
 
-/** GET /orgs/{org} — lightweight org metadata (name, environment) for the console header. */
+/**
+ * GET /orgs/{org} — lightweight org metadata (name, environment, sending
+ * domains) for the console header and Settings.
+ *
+ * `primaryDomain` is `domains[0]`, the domain provisioning verified as this
+ * org's SES identity (`provisioning.ts`: `[...new Set([primaryDomain,
+ * siteDomain])]`). It is the one shown under the org name in the console's
+ * identity block, so an operator switching between organizations can tell which
+ * one they are sending as. Safe here in a way it is not on `GET /orgs`: this
+ * route is already scoped to a single org by `requireGrant(…, orgId)`, so the
+ * caller is being told a domain they are already entitled to send from, not
+ * handed every tenant's domains at once. Absent on an org provisioned with no
+ * domain — the console renders the org id instead, never a guess.
+ */
 export async function orgMetaHandler(event: HttpEvent): Promise<HttpResult> {
   try {
     const orgId = event.pathParameters?.org ?? "";
@@ -954,7 +986,133 @@ export async function orgMetaHandler(event: HttpEvent): Promise<HttpResult> {
       name: org.name,
       environment: org.environment ?? "prod",
       setupComplete: org.setupComplete,
+      ...(org.domains?.[0] ? { primaryDomain: org.domains[0] } : {}),
+      // The whole list, on the same reasoning that already admits
+      // `primaryDomain` above: this route is scoped to one org by
+      // `requireGrant(…, orgId)`, and every name here appears in the From
+      // header of every message the org sends — the caller is not being told
+      // anything a recipient of their mail does not already see. Settings →
+      // Domains needs the list, not just the first: provisioning creates an
+      // identity per entry (`[...new Set([primaryDomain, siteDomain])]`), and a
+      // console that shows one of two makes the second look unprovisioned.
+      domains: org.domains ?? [],
+      // Whether this org mints magic-link tokens at all. `magicLink` is present
+      // if and only if the feature is on (entities.ts), and the flag — never the
+      // key ARN or kid — is what Settings needs to say "on for this org" rather
+      // than describing a feature the org does not use.
+      magicLinkEnabled: org.magicLink !== undefined,
     });
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+/**
+ * GET /orgs/{org}/identity — the org's identity configuration, read-only.
+ *
+ * Its own route rather than more fields on `GET /orgs/{org}`, because the two
+ * answer different questions under different capabilities. `orgMetaHandler` is
+ * gated on `reports:view` and its sibling `orgsListHandler` writes down exactly
+ * why that gate is safe: it returns "no SES identity, no domains, no
+ * configuration — a name, an id, and whether setup is finished". A KMS key ARN
+ * and a linked Cognito pool id are configuration, and every analyst in the org
+ * holds `reports:view`. Folding them into the header payload would hand the
+ * infrastructure layout to the one role that exists to read numbers. So this is
+ * `identity:manage`, the capability that provisioned these values in the first
+ * place (`POST /orgs`).
+ *
+ * Read-only on purpose: there is no org-update route. Everything here is written
+ * once at provisioning time, and the console says so rather than rendering
+ * inputs that cannot be saved.
+ *
+ * `magicLink` absent is the documented FEATURE-OFF state (see `Organization` in
+ * `@addressium/core`), not an error and not a half-provisioned org: no linked
+ * pool, no signing key, no JWKS, no token. It is reported as `enabled: false`
+ * with no key block, so the console can say "off" instead of showing empty
+ * fields that read as a broken silo.
+ */
+export async function orgIdentityHandler(event: HttpEvent): Promise<HttpResult> {
+  try {
+    const orgId = event.pathParameters?.org ?? "";
+    requireGrant(event, "identity:manage", orgId);
+    const org = await stores().organizations.get(orgId);
+    if (!org) return json(404, { error: "not found" });
+    // The JWKS path is built from the org id, never stored: it is one shared
+    // route serving every org (`/orgs/{org}/.well-known/jwks.json`), and the
+    // console resolves it against the API base it is already calling. Returning
+    // a fully-qualified URL from here would bake a hostname into the payload.
+    return json(200, {
+      orgId: org.orgId,
+      subscriberPoolId: org.subscriberPoolId,
+      magicLink: org.magicLink
+        ? {
+            enabled: true,
+            kmsKeyArn: org.magicLink.kmsKeyArn,
+            kid: org.magicLink.kid,
+            issuer: org.magicLink.issuer,
+            audience: org.magicLink.audience,
+            jwksPath: `/orgs/${encodeURIComponent(org.orgId)}/.well-known/jwks.json`,
+          }
+        : { enabled: false },
+    });
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+/**
+ * GET /orgs/{org}/sending-identity — can this org actually send? (#285)
+ *
+ * The only route in the console that asks SES rather than our own table. Every
+ * other identity readout answers "a domain is on the org record"; this one
+ * answers the two questions that decide whether a message is accepted: has the
+ * DOMAIN identity verified, and does the ACCOUNT have production access — i.e.
+ * has it left the SES sandbox, where it may only mail addresses it has itself
+ * verified.
+ *
+ * That second question is why this exists. A subscriber typed a valid address,
+ * SES refused it because the account was still in the sandbox, and the refusal
+ * surfaced on the public signup page; from the console there was no way to see
+ * the cause. The readout makes it visible in one place.
+ *
+ * `identity:manage`, matching `orgIdentityHandler` and for the same reason: this
+ * is configuration, not a metric. Quota and enforcement status describe the
+ * whole deployment's SES account, not this org's numbers, and `reports:view` —
+ * which every analyst holds — is the wrong audience for it.
+ *
+ * A live read on every request, deliberately uncached. The single fact this
+ * route exists to deliver is one that CHANGES — a domain verifies, an account
+ * leaves the sandbox — and a cached "still pending" is exactly the answer that
+ * sends an operator to debug DNS that is already correct.
+ *
+ * **Not here: DMARC.** `GetEmailIdentity` reports DKIM and the custom MAIL FROM
+ * (the SPF-alignment leg) and nothing else; `_dmarc` is a TXT record on the
+ * operator's own zone that SES never reads back. Answering for it would mean
+ * resolving DNS from this Lambda — a different capability with a different
+ * failure surface — and it is deliberately not built. A console column for
+ * DMARC would have nothing behind it.
+ *
+ * `injected` is for tests only, following `importSuppressionHandler`: the
+ * degraded branches this route exists to render correctly — a missing SES grant,
+ * a throttle — cannot be exercised against real SES.
+ */
+export async function sendingIdentityHandler(
+  event: HttpEvent,
+  injected?: { reader?: SesIdentityReader },
+): Promise<HttpResult> {
+  try {
+    const orgId = event.pathParameters?.org ?? "";
+    requireGrant(event, "identity:manage", orgId);
+    const org = await stores().organizations.get(orgId);
+    if (!org) return json(404, { error: "not found" });
+    return json(
+      200,
+      await readSendingIdentity(
+        injected?.reader ?? sesIdentityReader(),
+        orgId,
+        org.domains ?? [],
+      ),
+    );
   } catch (e) {
     return fail(e);
   }
@@ -1122,6 +1280,76 @@ export async function templatesHandler(event: HttpEvent): Promise<HttpResult> {
       return t ? json(200, t) : json(404, { error: "not found" });
     }
     return json(200, await stores().templates.list(orgId));
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+/**
+ * GET /orgs/{org}/merge-tags — the registry. POST /merge-tags — register one.
+ * POST /merge-tags/delete — remove an org-defined one.
+ *
+ * The GET returns reserved tags merged with the org's own, reserved first and
+ * flagged, so the console renders precedence that was decided here rather than
+ * re-derived in a component. `saveMergeTag` refuses a reserved name with an
+ * `InvalidInputError`, which `fail()` answers as a 400 carrying that sentence —
+ * the operator needs to read WHICH name and why (#265).
+ */
+export async function mergeTagsHandler(event: HttpEvent): Promise<HttpResult> {
+  try {
+    const method = event.requestContext?.http?.method ?? (event.body ? "POST" : "GET");
+    if (method === "POST") {
+      const input = schemas.saveMergeTagSchema.parse(JSON.parse(event.body ?? "{}"));
+      requireGrant(event, "campaigns:manage", input.orgId);
+      return json(200, await saveMergeTag(stores(), input));
+    }
+    const orgId = event.pathParameters?.org ?? "";
+    requireGrant(event, "reports:view", orgId);
+    return json(200, await listMergeTags(stores(), orgId));
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+/** POST /merge-tags/delete — remove one org-defined merge tag. */
+export async function mergeTagDeleteHandler(event: HttpEvent): Promise<HttpResult> {
+  try {
+    const input = schemas.deleteMergeTagSchema.parse(JSON.parse(event.body ?? "{}"));
+    requireGrant(event, "campaigns:manage", input.orgId);
+    await deleteMergeTag(stores(), input.orgId, input.name);
+    return json(200, { deleted: input.name });
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+/**
+ * GET /orgs/{org}/series — list. GET …/series/{id} — one. POST /series — save.
+ *
+ * Gated exactly like campaigns and templates: `campaigns:manage` to write,
+ * `reports:view` to read. A series IS a campaign construct — it is the parent of
+ * every `series_edition` — and writing one sets the template and the ad HTML
+ * that every future edition will carry, which is the same authority as editing
+ * a campaign. There is deliberately no delete: editions and series-bound ad
+ * fills reference a series by id, so removing the parent would orphan them
+ * (same reasoning as send schedules, which are never deleted either, §4.6).
+ */
+export async function seriesHandler(event: HttpEvent): Promise<HttpResult> {
+  try {
+    const method = event.requestContext?.http?.method ?? (event.body ? "POST" : "GET");
+    if (method === "POST") {
+      const input = schemas.saveCampaignSeriesSchema.parse(JSON.parse(event.body ?? "{}"));
+      requireGrant(event, "campaigns:manage", input.orgId);
+      return json(200, await saveCampaignSeries(stores(), input));
+    }
+    const orgId = event.pathParameters?.org ?? "";
+    requireGrant(event, "reports:view", orgId);
+    const seriesId = event.pathParameters?.id;
+    if (seriesId) {
+      const s = await getCampaignSeries(stores(), orgId, seriesId);
+      return s ? json(200, s) : json(404, { error: "not found" });
+    }
+    return json(200, await listCampaignSeries(stores(), orgId));
   } catch (e) {
     return fail(e);
   }
@@ -2421,6 +2649,8 @@ export async function preferencesHandler(event: HttpEvent): Promise<HttpResult> 
 const ADMIN_ROUTES: Record<string, RouteHandler> = {
   "GET /orgs": orgsListHandler,
   "GET /orgs/{org}": orgMetaHandler,
+  "GET /orgs/{org}/identity": orgIdentityHandler,
+  "GET /orgs/{org}/sending-identity": sendingIdentityHandler,
   "GET /orgs/{org}/setup": setupStateHandler,
   "GET /orgs/{org}/lists": listsHandler,
   "POST /lists": listsHandler,
@@ -2439,6 +2669,12 @@ const ADMIN_ROUTES: Record<string, RouteHandler> = {
   "GET /orgs/{org}/templates": templatesHandler,
   "GET /orgs/{org}/templates/{id}": templatesHandler,
   "POST /templates": templatesHandler,
+  "GET /orgs/{org}/merge-tags": mergeTagsHandler,
+  "POST /merge-tags": mergeTagsHandler,
+  "POST /merge-tags/delete": mergeTagDeleteHandler,
+  "GET /orgs/{org}/series": seriesHandler,
+  "GET /orgs/{org}/series/{id}": seriesHandler,
+  "POST /series": seriesHandler,
   "GET /orgs/{org}/segments": segmentsHandler,
   "POST /segments": segmentsHandler,
   "GET /orgs/{org}/segments/{segment}/members": segmentMembersHandler,

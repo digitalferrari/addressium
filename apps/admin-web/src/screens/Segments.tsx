@@ -2,10 +2,29 @@ import { useEffect, useState } from "react";
 import { useAsync } from "../useAsync.js";
 import { isValidId } from "../ids.js";
 import { api, EMPTY_EXPLICIT, isExplicitPredicate, type SegmentMember } from "../api.js";
+import {
+  ENTITLEMENT_VALUES,
+  MAX_CONDITIONS,
+  fromPredicate,
+  newRow,
+  predicateProblem,
+  rowProblem,
+  toPredicate,
+  type Row,
+  type RowKind,
+} from "./segment-predicate.js";
+
+/** Labels for the condition kinds, in the order the picker offers them. */
+const KIND_LABELS: { kind: RowKind; label: string }[] = [
+  { kind: "list", label: "Subscribed to list" },
+  { kind: "entitlement", label: "Entitlement" },
+  { kind: "attribute", label: "Attribute" },
+];
 
 export function Segments({ org }: { org: string }) {
   const [rev, setRev] = useState(0);
   const segments = useAsync(() => api.segments(org), [org, rev]);
+  const lists = useAsync(() => api.lists(org), [org]);
   const [segmentId, setSegmentId] = useState("");
   const [name, setName] = useState("");
   const [predicate, setPredicate] = useState("");
@@ -13,13 +32,27 @@ export function Segments({ org }: { org: string }) {
   const [busy, setBusy] = useState(false);
   /** Which kind the editor is building — a rule, or a hand-listed cohort (#203). */
   const [kind, setKind] = useState<"rule" | "explicit">("rule");
+  /** Builder state: the structured path. `raw` is the escape hatch (#282). */
+  const [rows, setRows] = useState<Row[]>([newRow("list")]);
+  const [raw, setRaw] = useState(false);
 
   const edit = (s: { segmentId: string; name: string; predicate: unknown }) => {
     setSegmentId(s.segmentId); setName(s.name);
     setKind(isExplicitPredicate(s.predicate) ? "explicit" : "rule");
     setPredicate(JSON.stringify(s.predicate, null, 2)); setMsg("");
+    // A predicate the builder cannot represent faithfully opens RAW rather than
+    // being flattened into rows that would drop the parts it has no control for
+    // — saving that back would silently rewrite the operator's audience.
+    const parsed = isExplicitPredicate(s.predicate) ? null : fromPredicate(s.predicate);
+    if (parsed) { setRows(parsed.rows); setRaw(false); }
+    else { setRaw(!isExplicitPredicate(s.predicate)); }
   };
-  const reset = () => { setSegmentId(""); setName(""); setPredicate(""); setMsg(""); setKind("rule"); };
+  const reset = () => {
+    setSegmentId(""); setName(""); setPredicate(""); setMsg(""); setKind("rule");
+    setRows([newRow("list")]); setRaw(false);
+  };
+
+  const problem = predicateProblem(rows);
 
   const save = async () => {
     setMsg(""); setBusy(true);
@@ -30,9 +63,11 @@ export function Segments({ org }: { org: string }) {
       // and hand-typing an id nobody can read is how you mail the wrong person.
       const current = (segments.data ?? []).find((s) => s.segmentId === segmentId.trim())?.predicate;
       parsed = isExplicitPredicate(current) ? current : EMPTY_EXPLICIT;
-    } else {
+    } else if (raw) {
       try { parsed = JSON.parse(predicate); }
       catch { setMsg("Predicate is not valid JSON."); setBusy(false); return; }
+    } else {
+      parsed = toPredicate(rows);
     }
     try {
       const saved = await api.saveSegment(org, segmentId.trim(), name.trim(), parsed);
@@ -42,14 +77,17 @@ export function Segments({ org }: { org: string }) {
     finally { setBusy(false); }
   };
   const valid =
-    isValidId(segmentId.trim()) && name.trim() && (kind === "explicit" || predicate.trim());
+    isValidId(segmentId.trim()) &&
+    !!name.trim() &&
+    (kind === "explicit" || (raw ? !!predicate.trim() : !problem));
 
   return (
     <div>
       <h1 className="h1">Segments · {org || "—"}</h1>
       <p className="muted" style={{ marginTop: -8 }}>
-        Reusable audience filters that target within a list. The v1 engine requires a base
-        <code> list</code> condition.
+        Reusable audience filters that target within a list. Build the rule from conditions —
+        the shipped v1 engine ranges over one list, so a “Subscribed to list” condition is the
+        base of every <code>ALL</code> rule.
       </p>
       {segments.loading && <div className="card muted">Loading…</div>}
       {segments.error && <p className="err">{segments.error}</p>}
@@ -80,15 +118,35 @@ export function Segments({ org }: { org: string }) {
           <label><input type="radio" checked={kind === "explicit"} onChange={() => setKind("explicit")} disabled={busy} /> Explicit cohort</label>
         </div>
         {kind === "rule" ? (
-          <>
-            <label style={{ marginTop: 12 }}>Predicate (JSON)</label>
-            <textarea value={predicate} onChange={(e) => setPredicate(e.target.value)} rows={10}
-              placeholder={'{"match":"all","conditions":[{"field":"list","op":"in","value":"ledger"}]}'}
-              style={{ width: "100%", fontFamily: "monospace" }} disabled={busy} />
-            <p className="muted" style={{ margin: "6px 0 0" }}>
-              A base <code>list</code> condition is required by the v1 engine.
-            </p>
-          </>
+          raw ? (
+            <>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 12 }}>
+                <label style={{ margin: 0 }} htmlFor="segment-predicate-json">Predicate (JSON)</label>
+                <button className="btn ghost" disabled={busy} onClick={() => setRaw(false)}>
+                  Back to builder
+                </button>
+              </div>
+              <textarea id="segment-predicate-json"
+                value={predicate} onChange={(e) => setPredicate(e.target.value)} rows={10}
+                placeholder={'{"match":"all","conditions":[{"field":"list","op":"in","value":"ledger"}]}'}
+                style={{ width: "100%", fontFamily: "monospace" }} disabled={busy} />
+              <p className="muted" style={{ margin: "6px 0 0" }}>
+                The advanced editor accepts anything the save schema does. The server refuses a
+                predicate this deployment’s engine cannot resolve, and says which.
+              </p>
+            </>
+          ) : (
+            <RuleBuilder
+              rows={rows} setRows={setRows}
+              lists={lists.data ?? null} listsError={lists.error} busy={busy}
+              problem={problem} onRaw={() => {
+                // Seed the raw editor from what the builder currently holds, so
+                // switching is a continuation rather than a blank page.
+                setPredicate(JSON.stringify(toPredicate(rows), null, 2));
+                setRaw(true);
+              }}
+            />
+          )
         ) : (
           <p className="muted" style={{ margin: "8px 0 0" }}>
             A hand-listed cohort — useful for a test send before touching a real list.
@@ -107,6 +165,162 @@ export function Segments({ org }: { org: string }) {
         (segments.data ?? []).some((s) => s.segmentId === segmentId.trim()) && (
           <SegmentMembers org={org} segmentId={segmentId.trim()} />
         )}
+    </div>
+  );
+}
+
+/**
+ * The structured predicate builder (#282 / ISSUES #256).
+ *
+ * It offers exactly the conditions both engines can resolve, and every rule it
+ * builds matches ALL of them. What it leaves out, and why, is documented against
+ * the engine code in `segment-predicate.ts` — engagement recency, subscription
+ * status and `match: "any"` are each unresolvable, dead, or actively dangerous
+ * on the shipped engine. All three remain reachable from the advanced editor,
+ * where the API answers for itself.
+ */
+function RuleBuilder({
+  rows, setRows, lists, listsError, busy, problem, onRaw,
+}: {
+  rows: Row[];
+  setRows: (r: Row[]) => void;
+  lists: { listId: string; name: string }[] | null;
+  listsError?: string;
+  busy: boolean;
+  problem: string | null;
+  onRaw: () => void;
+}) {
+  const update = (id: string, patch: Partial<Row>) =>
+    setRows(rows.map((r) => (r.id === id ? { ...r, ...patch } : r)));
+
+  return (
+    <div style={{ marginTop: 12 }}>
+      <div className="muted">
+        Subscribers matching <strong>all</strong> of these conditions:
+      </div>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 12 }}>
+        {rows.map((row) => {
+          const rp = rowProblem(row);
+          return (
+            <div key={row.id} style={{ display: "flex", gap: 8, alignItems: "flex-start", flexWrap: "wrap" }}>
+              <select
+                value={row.kind}
+                aria-label="Condition type"
+                disabled={busy}
+                style={{ width: "auto" }}
+                onChange={(e) => {
+                  // Changing the kind clears the value: a list id left behind in
+                  // an entitlement row would submit a condition nobody chose.
+                  const kind = e.target.value as RowKind;
+                  update(row.id, { kind, value: "", field: "", op: "eq" });
+                }}
+              >
+                {KIND_LABELS.map((k) => (
+                  <option key={k.kind} value={k.kind}>{k.label}</option>
+                ))}
+              </select>
+
+              {row.kind === "attribute" && (
+                <>
+                  <input
+                    value={row.field}
+                    aria-label="Attribute name"
+                    placeholder="attribute name"
+                    disabled={busy}
+                    style={{ width: 160 }}
+                    onChange={(e) => update(row.id, { field: e.target.value })}
+                  />
+                  <select
+                    value={row.op}
+                    aria-label="Operator"
+                    disabled={busy}
+                    style={{ width: "auto" }}
+                    onChange={(e) =>
+                      update(row.id, { op: e.target.value as Row["op"] })
+                    }
+                  >
+                    <option value="eq">is</option>
+                    <option value="neq">is not</option>
+                    <option value="exists">exists</option>
+                  </select>
+                </>
+              )}
+
+              {row.kind === "list" && (
+                // The picker is the whole point: a list id typed from memory is
+                // how a segment targets a list that does not exist.
+                <select
+                  value={row.value}
+                  aria-label="List"
+                  disabled={busy || !lists}
+                  style={{ width: "auto", minWidth: 180 }}
+                  onChange={(e) => update(row.id, { value: e.target.value })}
+                >
+                  <option value="">{lists ? "choose a list…" : "loading lists…"}</option>
+                  {(lists ?? []).map((l) => (
+                    <option key={l.listId} value={l.listId}>{l.name} ({l.listId})</option>
+                  ))}
+                </select>
+              )}
+
+              {row.kind === "entitlement" && (
+                <select
+                  value={row.value}
+                  aria-label="Entitlement"
+                  disabled={busy}
+                  style={{ width: "auto" }}
+                  onChange={(e) => update(row.id, { value: e.target.value })}
+                >
+                  <option value="">choose…</option>
+                  {ENTITLEMENT_VALUES.map((v) => <option key={v} value={v}>{v}</option>)}
+                </select>
+              )}
+
+              {row.kind === "attribute" && row.op !== "exists" && (
+                <input
+                  value={row.value}
+                  aria-label="Value"
+                  placeholder="value"
+                  disabled={busy}
+                  style={{ width: 160 }}
+                  onChange={(e) => update(row.id, { value: e.target.value })}
+                />
+              )}
+
+              <button
+                className="btn ghost"
+                aria-label="Remove condition"
+                disabled={busy || rows.length === 1}
+                onClick={() => setRows(rows.filter((r) => r.id !== row.id))}
+              >
+                Remove
+              </button>
+              {rp && <span className="err" style={{ alignSelf: "center" }}>{rp}</span>}
+            </div>
+          );
+        })}
+      </div>
+
+      <div style={{ display: "flex", gap: 10, alignItems: "center", marginTop: 10 }}>
+        <button
+          className="btn ghost"
+          disabled={busy || rows.length >= MAX_CONDITIONS}
+          onClick={() => setRows([...rows, newRow()])}
+        >
+          + Add condition
+        </button>
+        <button className="btn ghost" disabled={busy} onClick={onRaw}>
+          Advanced (JSON)
+        </button>
+      </div>
+
+      {listsError && (
+        // Said plainly: without the lists the base condition cannot be chosen,
+        // and an empty picker would otherwise read as "you have no lists".
+        <p className="err" style={{ margin: "8px 0 0" }}>Could not load lists: {listsError}</p>
+      )}
+      {problem && <p className="muted" style={{ margin: "8px 0 0" }}>{problem}</p>}
     </div>
   );
 }

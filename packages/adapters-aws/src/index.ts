@@ -16,6 +16,7 @@ export {
   SesSuppressionListReader,
   type SesSuppressionListReaderConfig,
 } from "./ses-suppression.js";
+export { SesIdentityStatusReader } from "./ses-identity.js";
 export {
   unwrap,
   unwrapRecords,

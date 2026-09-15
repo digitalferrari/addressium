@@ -1,7 +1,8 @@
 /**
  * addressium service: tokens — publishes each org's JWKS (§4.9, §12).
  *
- * GET /{org}/jwks.json → the org's magic-link public key as a JWK set, so the
+ * GET /orgs/{org}/.well-known/jwks.json → the org's magic-link public key as a
+ * JWK set (the route this handler is wired to in the CDK stack), so the
  * operator's main website can verify magic-link tokens offline. Minting itself
  * happens in the sender (per-org KMS key); this only publishes the public half.
  */

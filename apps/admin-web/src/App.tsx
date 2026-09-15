@@ -20,8 +20,11 @@ import { Dashboard, HealthBadge } from "./screens/Dashboard.js";
 import { Setup } from "./screens/Setup.js";
 import { Newsletters } from "./screens/Newsletters.js";
 import { Templates } from "./screens/Templates.js";
+import { MergeTags } from "./screens/MergeTags.js";
 import { Compose } from "./screens/Compose.js";
+import { Campaigns } from "./screens/Campaigns.js";
 import { Report } from "./screens/Report.js";
+import { Analytics } from "./screens/Analytics.js";
 import { Schedules } from "./screens/Schedules.js";
 import { Usage } from "./screens/Usage.js";
 import { CostEstimator } from "./screens/CostEstimator.js";
@@ -37,8 +40,10 @@ import { Team } from "./screens/Team.js";
 import { AuditLogView } from "./screens/AuditLogView.js";
 import { AddOrganization } from "./screens/AddOrganization.js";
 import { Deliverability } from "./screens/Deliverability.js";
-
-type View = "dashboard" | "setup" | "templates" | "compose" | "report" | "usage" | "schedules" | "branding" | "presentation" | "subscribers" | "segments" | "import" | "privacy" | "drips" | "costs" | "deliverability" | "importmap" | "team" | "audit" | "newsletters" | "addorg";
+import { Settings } from "./screens/Settings.js";
+import { Identity } from "./screens/Identity.js";
+import { Sidebar, type View } from "./Sidebar.js";
+import { Topbar } from "./Topbar.js";
 
 export function App() {
   const [ready, setReady] = useState(false);
@@ -114,95 +119,62 @@ function Console() {
   const [org, setOrg] = useState(orgs[0] ?? "");
   const [view, setView] = useState<View>("dashboard");
   const [orgEnv, setOrgEnv] = useState<"prod" | "dev" | null>(null);
+  // Name and sending domain for the sidebar identity block and the breadcrumb
+  // (#260). Cleared alongside `orgEnv` on every switch so the shell never shows
+  // the previous organization's identity against the new one's screens, and
+  // left null on failure so it shows the org id rather than a stale name.
+  const [orgName, setOrgName] = useState<string | null>(null);
+  const [orgDomain, setOrgDomain] = useState<string | null>(null);
+  const [switcherOpen, setSwitcherOpen] = useState(false);
   useEffect(() => {
     setOrgEnv(null);
+    setOrgName(null);
+    setOrgDomain(null);
     if (!org) return;
     let live = true;
-    api.orgMeta(org).then((m) => live && setOrgEnv(m.environment)).catch(() => undefined);
+    api
+      .orgMeta(org)
+      .then((m) => {
+        if (!live) return;
+        setOrgEnv(m.environment);
+        setOrgName(m.name);
+        setOrgDomain(m.primaryDomain ?? null);
+      })
+      .catch(() => undefined);
     return () => {
       live = false;
     };
   }, [org]);
 
-  const NavItem = ({ id, label, cap }: { id: View; label: string; cap?: Parameters<typeof can>[1] }) =>
-    cap && !can(grant, cap, org) ? null : (
-      <button className={view === id ? "active" : ""} onClick={() => setView(id)}>
-        {label}
-      </button>
-    );
-
   return (
     <div className="app">
-      <aside className="sidebar">
-        <div className="brand">addressium</div>
-        <label>Organization</label>
-        {orgs.length > 0 ? (
-          <select value={org} onChange={(e) => setOrg(e.target.value)} style={{ width: "100%" }}>
-            {orgs.map((o) => (
-              <option key={o} value={o}>
-                {o}
-              </option>
-            ))}
-          </select>
-        ) : (
-          <input value={org} onChange={(e) => setOrg(e.target.value)} placeholder="org id" style={{ width: "100%" }} />
-        )}
-        {orgEnv === "dev" && (
-          <div
-            style={{
-              marginTop: 8,
-              padding: "2px 8px",
-              display: "inline-block",
-              borderRadius: 4,
-              fontSize: 11,
-              fontWeight: 700,
-              letterSpacing: 0.5,
-              color: "#7a4d00",
-              background: "#ffe8a3",
-            }}
-            title="Test organization — same workflows as production, excluded from cost rollups"
-          >
-            DEV
-          </div>
-        )}
-        <nav className="nav" style={{ marginTop: 16 }}>
-          <NavItem id="dashboard" label="Dashboard" />
-          <NavItem id="setup" label="Setup" />
-          <NavItem id="newsletters" label="Newsletters" cap="newsletters:close" />
-          <NavItem id="templates" label="Templates" cap="campaigns:manage" />
-          <NavItem id="compose" label="Compose & schedule" cap="campaigns:schedule" />
-          <NavItem id="report" label="Campaign report" cap="reports:view" />
-          <NavItem id="schedules" label="Schedules" cap="campaigns:schedule" />
-          <NavItem id="drips" label="Drip sequences" cap="campaigns:manage" />
-          <NavItem id="segments" label="Segments" cap="segments:manage" />
-          <NavItem id="usage" label="Usage & cost" cap="reports:view" />
-          <NavItem id="costs" label="Cost estimator" cap="reports:view" />
-          <NavItem id="subscribers" label="Subscribers" cap="subscribers:manage" />
-          <NavItem id="importmap" label="Import (mapper)" cap="subscribers:manage" />
-          <NavItem id="import" label="Import (simple)" cap="subscribers:manage" />
-          <NavItem id="privacy" label="Data requests" cap="subscribers:manage" />
-          <NavItem id="branding" label="Branding" cap="branding:manage" />
-          <NavItem id="presentation" label="Presentation" cap="branding:manage" />
-          <NavItem id="team" label="Team & access" cap="team:manage" />
-          <NavItem id="audit" label="Audit log" cap="team:manage" />
-          <NavItem id="addorg" label="Add organization" cap="identity:manage" />
-          <NavItem id="deliverability" label="Deliverability" cap="alerts:manage" />
-        </nav>
-        <div style={{ marginTop: 24 }} className="muted">
-          {claims["custom:role"] ?? "unknown role"}
-        </div>
-        <button className="btn ghost" style={{ marginTop: 8 }} onClick={() => { logout(); location.reload(); }}>
-          Sign out
-        </button>
-      </aside>
+      <Sidebar
+        org={org}
+        orgs={orgs}
+        setOrg={setOrg}
+        orgName={orgName}
+        orgDomain={orgDomain}
+        orgEnv={orgEnv}
+        view={view}
+        setView={setView}
+        grant={grant}
+        role={claims["custom:role"] ?? "unknown role"}
+        switcherOpen={switcherOpen}
+        setSwitcherOpen={setSwitcherOpen}
+        onSignOut={() => { logout(); location.reload(); }}
+      />
       <main className="main">
+        <Topbar orgName={orgName} org={org} view={view} orgEnv={orgEnv} claims={claims} />
         <div className="view" key={view}>
         {view === "dashboard" && (<><HealthBadge org={org} /><Dashboard org={org} onGoToSetup={() => setView("setup")} /></>)}
         {view === "setup" && <Setup org={org} />}
         {view === "newsletters" && <Newsletters org={org} />}
         {view === "templates" && <Templates org={org} />}
+        {view === "mergetags" && <MergeTags org={org} />}
         {view === "compose" && <Compose org={org} onScheduled={() => setView("schedules")} />}
+        {view === "campaigns" && <Campaigns org={org} grant={grant} />}
         {view === "report" && <Report org={org} grant={grant} />}
+        {view === "analytics" && <Analytics org={org} grant={grant} />}
         {view === "schedules" && <Schedules org={org} grant={grant} />}
         {view === "usage" && <Usage org={org} />}
         {view === "costs" && <CostEstimator />}
@@ -211,13 +183,15 @@ function Console() {
         {view === "importmap" && <ImportMapper org={org} />}
         {view === "import" && <ImportSubscribers org={org} />}
         {view === "privacy" && (<><BulkExport org={org} /><Privacy org={org} /></>)}
-        {view === "drips" && <Drips org={org} />}
+        {view === "drips" && <Drips org={org} grant={grant} />}
         {view === "branding" && <BrandingEditor org={org} />}
         {view === "presentation" && <PresentationEditor org={org} />}
         {view === "team" && <Team org={org} />}
         {view === "audit" && <AuditLogView org={org} />}
         {view === "addorg" && <AddOrganization />}
         {view === "deliverability" && <Deliverability org={org} />}
+        {view === "settings" && <Settings org={org} grant={grant} />}
+        {view === "identity" && <Identity org={org} />}
         </div>
       </main>
     </div>

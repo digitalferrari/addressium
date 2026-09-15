@@ -7,6 +7,23 @@ import { clearTokens, getTokens, login } from "./auth.js";
 const BASE = import.meta.env.VITE_API_BASE ?? "";
 
 /**
+ * The API origin this console is talking to, for screens that must SHOW a URL
+ * rather than fetch it (the public JWKS endpoint an org's website consumes).
+ *
+ * Empty when the console is served same-origin as the API, which is why this
+ * resolves against `window.location` instead of concatenating: an operator
+ * copying "/orgs/x/.well-known/jwks.json" into their site's config would be
+ * copying something that only resolves inside this tab.
+ */
+export function absoluteApiUrl(path: string): string {
+  try {
+    return new URL(`${BASE}${path}`, window.location.origin).toString();
+  } catch {
+    return `${BASE}${path}`;
+  }
+}
+
+/**
  * Marks that this tab has already bounced through Cognito for one 401 (#197).
  *
  * Not every 401 means "expired". A disabled operator, a revoked client, or a
@@ -117,7 +134,114 @@ export interface OrgMeta {
   name: string;
   environment: "prod" | "dev";
   setupComplete: boolean;
+  /**
+   * The org's own sending domain — `Organization.domains[0]`, the one SES
+   * verified at provisioning. Optional: an org provisioned without a domain
+   * has none, and the shell shows the org id rather than inventing one.
+   */
+  primaryDomain?: string;
+  /**
+   * Every sending domain on the org record — `domains[0]` is `primaryDomain`.
+   * Provisioning creates an SES identity and a configuration set per entry, so
+   * this is the list Settings → Domains renders. Empty on an org provisioned
+   * with none, which is exactly the setup checklist's failing `sending_domain`
+   * step.
+   */
+  domains?: string[];
+  /** True when this org mints magic-link tokens (it has a signing key). */
+  magicLinkEnabled?: boolean;
   /** Configured AI analytics provider (vendor + model only; key never echoed) — #144. */
+}
+
+/**
+ * Read-only identity configuration for one org (`GET /orgs/{org}/identity`).
+ *
+ * `magicLink.enabled === false` is the documented FEATURE-OFF state, not a
+ * loading or half-provisioned one: the org has no linked subscriber pool, no
+ * KMS signing key, no JWKS and no token, and editorial links render
+ * untokenized. The screen must render that as a deliberate configuration, never
+ * as blank fields.
+ *
+ * `jwksPath` is a PATH, not a URL — the JWKS endpoint is one shared API route
+ * serving every org, so the console resolves it against the API base it already
+ * calls rather than the payload naming a host.
+ */
+export type OrgIdentity = {
+  orgId: string;
+  /** Linked (never created) Cognito pool shared with the org's main site. */
+  subscriberPoolId?: string;
+  magicLink:
+    | { enabled: false }
+    | {
+        enabled: true;
+        kmsKeyArn: string;
+        kid: string;
+        issuer: string;
+        audience: string;
+        jwksPath: string;
+      };
+};
+
+/**
+ * Live SES verification and sandbox state (`GET /orgs/{org}/sending-identity`,
+ * #285) — the only identity readout in the console that asks SES rather than
+ * our own table.
+ *
+ * Read the states, not a boolean. `unknown` means the check could not RUN — a
+ * missing IAM grant, a throttle, SES unreachable — and it is deliberately not
+ * the same as `pending` or `failed`. A screen that renders `unknown` as "not
+ * verified" tells an operator to go edit DNS when the actual problem is an IAM
+ * policy, which is the exact fabrication this route was built to avoid.
+ *
+ * `not_found` is SES having no identity for a domain the org record names:
+ * provisioning half-ran, or the identity was deleted underneath us. Publishing
+ * DNS records will not fix it.
+ *
+ * There is no DMARC field and there will not be one from here. SES reports DKIM
+ * and the custom MAIL FROM (the SPF-alignment leg); `_dmarc` is a TXT record on
+ * the operator's own zone that SES never reads back.
+ */
+export type DomainVerificationState = "verified" | "pending" | "failed" | "not_found" | "unknown";
+
+export interface DomainIdentityStatus {
+  domain: string;
+  state: DomainVerificationState;
+  /** Why the state is `unknown`. Present only then. */
+  reason?: string;
+  /** SES's own spelling: `SUCCESS` / `PENDING` / `FAILED` / `NOT_STARTED` / `TEMPORARY_FAILURE`. */
+  dkimStatus?: string;
+  /** The custom MAIL FROM subdomain (#200), when one is configured. */
+  mailFromDomain?: string;
+  /** Its status in SES's spelling — `PENDING` here means SPF is not aligned yet. */
+  mailFromStatus?: string;
+}
+
+export interface AccountSendingStatus {
+  /** False IS the SES sandbox: only verified addresses may be mailed. */
+  productionAccess?: boolean;
+  /** False means SES has paused sending for the account entirely. */
+  sendingEnabled?: boolean;
+  /** `HEALTHY` / `PROBATION` / `SHUTDOWN`. */
+  enforcementStatus?: string;
+  /** SES reports -1 for an unlimited quota. */
+  max24HourSend?: number;
+  maxSendRate?: number;
+  sentLast24Hours?: number;
+  /** Why none of the above could be read. Present only then; the rest are absent, never 0. */
+  reason?: string;
+}
+
+export interface SendingIdentityReport {
+  orgId: string;
+  account: AccountSendingStatus;
+  domains: DomainIdentityStatus[];
+  /**
+   * Whether SES would accept a message to an arbitrary recipient right now.
+   * Tri-state on purpose: `undefined` means the checks did not complete, and
+   * rendering that as "cannot send" would report an IAM gap as a deliverability
+   * problem.
+   */
+  canSend?: boolean;
 }
 
 export type TemplateMode = "visual" | "mjml" | "raw_html";
@@ -139,6 +263,32 @@ export interface SaveTemplateBody {
   source: string;
   mergeTags?: string[];
   adSlots?: string[];
+}
+
+export type MergeTagSource = "profile" | "feed" | "system" | "token_claim";
+export type MergeTagScope = "per_recipient" | "per_campaign" | "token_claim";
+/**
+ * One row of the merge-tag registry. `reserved` is computed server-side — the
+ * screen must not re-derive it from `source === "system"`, because an org may
+ * legitimately register a `system`-sourced tag that the send path does not
+ * supply, and guessing would mark it uneditable for no reason.
+ */
+export interface MergeTagEntry {
+  orgId: string;
+  name: string;
+  source: MergeTagSource;
+  scope: MergeTagScope;
+  example?: string;
+  fallback?: string;
+  reserved: boolean;
+}
+export interface SaveMergeTagBody {
+  orgId: string;
+  name: string;
+  source: MergeTagSource;
+  scope: MergeTagScope;
+  example?: string;
+  fallback?: string;
 }
 
 /** What POST /lists requires. Mirrors `createListSchema` — CAN-SPAM makes the
@@ -203,6 +353,17 @@ export interface SendScheduleState {
   status: "active" | "paused" | "archived";
   cron?: string;
   timezone?: string;
+  /**
+   * When a ONE-OFF fires, ISO-8601 (#248). Absent on a recurring series, whose
+   * `cron` above is the answer instead.
+   *
+   * This mirror was never updated when #248 added the field to
+   * `SendScheduleState` in `packages/core/src/entities.ts`, so `Schedules.tsx`
+   * — which has read `r.sendAt` since that issue shipped — did not typecheck.
+   * `schedulesListHandler` returns the stored record verbatim, so the server
+   * has always sent it.
+   */
+  sendAt?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -362,6 +523,25 @@ export interface DripSequence {
   steps: DripStepDef[];
 }
 export type SaveDripSequenceBody = Omit<DripSequence, "orgId"> & { orgId: string };
+
+/**
+ * What `POST /drip-sequences/enroll` returns — the execution input the drip
+ * state machine was started with (`DripEnrollment` in `@addressium/domain`,
+ * mirrored here the way `DripSequence` is rather than imported).
+ *
+ * `nextWaitSeconds` is step 0's OWN wait: the machine starts at the Wait, so
+ * this is how long it is before the first mail, not a delay before the sequence
+ * begins. `enrollmentId` is the execution identity — the console shows it back
+ * so an operator has the one handle that exists for a run.
+ */
+export interface DripEnrollment {
+  orgId: string;
+  sequenceId: string;
+  subscriberId: string;
+  nextStepIndex: number;
+  nextWaitSeconds: number;
+  enrollmentId: string;
+}
 
 export interface AlertRule {
   metric: "complaint_rate" | "bounce_rate" | "send_failures" | "reputation";
@@ -560,9 +740,27 @@ export const api = {
   alertConfig: (org: string) => call<AlertConfig | null>("GET", `/orgs/${org}/alerts`),
   saveAlertConfig: (body: AlertConfig) => call<AlertConfig>("POST", `/orgs/alerts`, body),
   orgMeta: (org: string) => call<OrgMeta>("GET", `/orgs/${org}`),
+  orgIdentity: (org: string) => call<OrgIdentity>("GET", `/orgs/${org}/identity`),
+  /**
+   * Live SES verification + sandbox state (#285). Every call is a fresh read of
+   * SES, and deliberately so: this is the one readout whose whole value is that
+   * it changes — a domain verifies, an account leaves the sandbox — so nothing
+   * here memoizes it.
+   */
+  sendingIdentity: (org: string) =>
+    call<SendingIdentityReport>("GET", `/orgs/${org}/sending-identity`),
   campaigns: (org: string) => call<CampaignRow[]>("GET", `/orgs/${org}/campaigns`),
   dripSequences: (org: string) => call<DripSequence[]>("GET", `/orgs/${org}/drip-sequences`),
   saveDripSequence: (body: SaveDripSequenceBody) => call<DripSequence>("POST", `/drip-sequences`, body),
+  /**
+   * Hand-enroll ONE subscriber into a manual sequence (#255/#283) — real sends.
+   *
+   * No `enrollmentId` is sent: absent it the server stamps the instant, so two
+   * deliberate clicks are two enrollments. Deriving a stable key here would
+   * silently swallow a re-enrolment an operator actually meant.
+   */
+  enrollInDrip: (orgId: string, sequenceId: string, subscriberId: string) =>
+    call<DripEnrollment>("POST", `/drip-sequences/enroll`, { orgId, sequenceId, subscriberId }),
   segments: (org: string) => call<Segment[]>("GET", `/orgs/${org}/segments`),
   saveSegment: (orgId: string, segmentId: string, name: string, predicate: unknown) =>
     call<Segment>("POST", `/segments`, { orgId, segmentId, name, predicate }),
@@ -633,6 +831,10 @@ export const api = {
   schedules: (org: string) => call<SendScheduleState[]>("GET", `/orgs/${org}/schedules`),
   templates: (org: string) => call<Template[]>("GET", `/orgs/${org}/templates`),
   saveTemplate: (body: SaveTemplateBody) => call<Template>("POST", `/templates`, body),
+  mergeTags: (org: string) => call<MergeTagEntry[]>("GET", `/orgs/${org}/merge-tags`),
+  saveMergeTag: (body: SaveMergeTagBody) => call<MergeTagEntry>("POST", `/merge-tags`, body),
+  deleteMergeTag: (orgId: string, name: string) =>
+    call<{ deleted: string }>("POST", `/merge-tags/delete`, { orgId, name }),
   scheduleCampaign: (body: ScheduleCampaignBody) => call<ScheduleResult>("POST", `/campaigns/schedule`, body),
   scheduleLifecycle: (orgId: string, scheduleId: string, action: "start" | "pause" | "archive") =>
     call<SendScheduleState>("POST", `/campaigns/lifecycle`, { orgId, scheduleId, action }),

@@ -151,6 +151,50 @@ export const saveCampaignSchema = z.object({
 export type SaveCampaignInput = z.infer<typeof saveCampaignSchema>;
 
 /**
+ * One ad-slot fill as it arrives on a series payload (§4.16).
+ *
+ * `html` is inserted VERBATIM and never tracked (see `AdSlotFill`), so it is
+ * deliberately not sanitized here — an ad tag is a third-party script snippet
+ * whose whole value is being passed through untouched. That is why writing one
+ * needs `campaigns:manage` rather than a weaker grant.
+ *
+ * `binding` is omitted from the wire shape on purpose: a fill saved through a
+ * series route is series-bound by construction, and `saveCampaignSeries` stamps
+ * the binding from the series it is being saved on. Accepting a caller-supplied
+ * binding would let a payload claim a fill belongs to some OTHER series — a
+ * cross-series write disguised as a field.
+ */
+export const adSlotFillSchema = z.object({
+  slot: z.string().min(1).max(64),
+  html: z.string().max(20000),
+  version: z.number().int().nonnegative().default(1),
+});
+export type AdSlotFillInput = z.infer<typeof adSlotFillSchema>;
+
+/**
+ * Create or update a recurring campaign series (§4.6).
+ *
+ * `seriesId` is `idSchema` because it becomes a DynamoDB sort key
+ * (`SERIES#<id>`) and an EventBridge schedule-name segment (`scheduleName`),
+ * exactly the reasoning in #196.
+ *
+ * `adSlotFills` defaults to `[]` rather than being optional so that a caller
+ * who omits it gets "no fills", not `undefined` — `CampaignSeries.adSlotFills`
+ * is a required array and a stored `undefined` would break every reader.
+ * Editing fills is a whole-array replace, which is why the Ad tags screen sends
+ * the full set: a merge would make removing one fill impossible to express.
+ */
+export const saveCampaignSeriesSchema = z.object({
+  orgId: idSchema,
+  seriesId: idSchema,
+  name: z.string().min(1).max(200),
+  cadence,
+  templateId: idSchema,
+  adSlotFills: z.array(adSlotFillSchema).max(20).default([]),
+});
+export type SaveCampaignSeriesInput = z.infer<typeof saveCampaignSeriesSchema>;
+
+/**
  * Email body blocks (mirror `EmailTemplate`/`Block` in @addressium/domain's
  * renderer): text (may hold {{merge}} tags), a tracked editorial link, or an
  * ad slot inserted verbatim. Kept in lockstep with render.ts.
@@ -196,6 +240,44 @@ export const saveTemplateSchema = z.object({
   adSlots: z.array(z.string()).default([]),
 });
 export type SaveTemplateInput = z.infer<typeof saveTemplateSchema>;
+
+export const mergeTagSource = z.enum(["profile", "feed", "system", "token_claim"]);
+export const mergeTagScope = z.enum(["per_recipient", "per_campaign", "token_claim"]);
+
+/**
+ * A merge-tag name as it appears inside `{{…}}`.
+ *
+ * Bounded for the same reason `idSchema` is (#196): the name becomes a DynamoDB
+ * sort key (`MERGETAG#<name>`), so anything that can carry a `#` or whitespace
+ * can shape the key rather than occupy it. Lowercase snake_case also matches
+ * what every template in the repo already writes, so the bound costs an
+ * operator nothing they were actually doing.
+ *
+ * Deliberately NOT where reserved names are refused — a `.refine` here becomes a
+ * ZodError, which `fail()` answers with one generic sentence (#265), and
+ * "unsubscribe_url is reserved" is precisely the sentence the operator needs.
+ * `saveMergeTag` throws `InvalidInputError` instead.
+ */
+export const mergeTagNameSchema = z
+  .string()
+  .min(1)
+  .max(64)
+  .regex(/^[a-z][a-z0-9_]*$/, "merge tag names are lowercase letters, digits and underscores");
+
+/** Register or update one org-defined merge tag (§4.15). */
+export const saveMergeTagSchema = z.object({
+  orgId: idSchema,
+  name: mergeTagNameSchema,
+  source: mergeTagSource,
+  scope: mergeTagScope,
+  example: z.string().max(200).optional(),
+  fallback: z.string().max(200).optional(),
+});
+export type SaveMergeTagInput = z.infer<typeof saveMergeTagSchema>;
+
+/** Remove one org-defined merge tag. Reserved names are refused in the domain, not here. */
+export const deleteMergeTagSchema = z.object({ orgId: idSchema, name: mergeTagNameSchema });
+export type DeleteMergeTagInput = z.infer<typeof deleteMergeTagSchema>;
 
 /** Compose + schedule payload (§4.6): send now, at an instant, or recurring cron. */
 export const scheduleCampaignSchema = z.object({

@@ -532,6 +532,57 @@ export interface MergeTag {
   fallback?: string;
 }
 
+/**
+ * The merge names the SEND PATH supplies, and the single source of truth for
+ * which names an operator may not define.
+ *
+ * These are not documentation. `mergeValues` in `packages/domain/src/send.ts`
+ * builds its reserved half by iterating this array, so a name listed here is a
+ * name the send path actually resolves, and adding one here without teaching
+ * `mergeValues` to resolve it fails a domain test rather than shipping a tag
+ * that renders empty.
+ *
+ * WHY RESERVED AT ALL: merge values start from `subscriber.attributes`, which
+ * is operator-controlled — an imported CSV column called `unsubscribe_url` is a
+ * column like any other. If an attribute could win, a bad import silently
+ * replaces the one link a recipient is legally entitled to with a link of the
+ * importer's choosing. So the reserved values are applied LAST, and the console
+ * refuses to register a user-defined tag under one of these names rather than
+ * accepting it and quietly having no effect.
+ */
+export const RESERVED_MERGE_TAGS: readonly MergeTag[] = [
+  {
+    orgId: "",
+    name: "unsubscribe_url",
+    source: "system",
+    scope: "per_recipient",
+    example: "https://example.com/u/…",
+  },
+  { orgId: "", name: "list_name", source: "system", scope: "per_campaign", example: "The Ledger" },
+  {
+    orgId: "",
+    name: "compliance_footer",
+    source: "system",
+    scope: "per_campaign",
+    example: "Example Times · 123 Example Street…",
+  },
+  {
+    orgId: "",
+    name: "physical_address",
+    source: "system",
+    scope: "per_campaign",
+    example: "123 Example Street, Example City",
+  },
+] as const;
+
+/** The reserved names alone — the lookup `isReservedMergeTag` and the API both want. */
+export const RESERVED_MERGE_TAG_NAMES: readonly string[] = RESERVED_MERGE_TAGS.map((t) => t.name);
+
+/** Whether `name` is supplied by the send path and therefore not the operator's to define. */
+export function isReservedMergeTag(name: string): boolean {
+  return RESERVED_MERGE_TAG_NAMES.includes(name);
+}
+
 export interface AdSlotFill {
   slot: string; // e.g. "ad_top"
   html: string; // LiveIntent HTML, inserted verbatim, never tracked

@@ -22,6 +22,7 @@ import type {
   SendScheduleState,
   Subscriber,
   Template,
+  MergeTag,
   Subscription,
   SuppressionEntry,
   SuppressionScope,
@@ -436,9 +437,26 @@ export interface HaltStore {
   halt(orgId: string, campaignId: string, at: string): Promise<void>;
 }
 
+/**
+ * Recurring campaign series (§4.6) — the parent a `series_edition` campaign
+ * points at, and what an ad slot binds to when it is filled once for every
+ * edition rather than per-send (`AdSlotFill.binding.kind === "series"`).
+ *
+ * `list` exists because the console needs it: an ad-tag fill scoped to "all
+ * editions" has to offer the operator a series to pick, and a store with only
+ * `get` can answer that question exclusively for someone who already knows the
+ * id — which the person choosing from a dropdown, by definition, does not.
+ *
+ * No `delete`. A series is REFERENCED: every edition carries `seriesId`, and
+ * series-bound `AdSlotFill`s name it. Removing the parent would leave editions
+ * pointing at nothing and reporting unable to say what they were editions of —
+ * the same reasoning that makes `SendScheduleStore` deletion-free. Retiring a
+ * series is a lifecycle concern (pause its schedule), not a row removal.
+ */
 export interface CampaignSeriesStore {
   get(orgId: string, seriesId: string): Promise<CampaignSeries | undefined>;
   put(s: CampaignSeries): Promise<void>;
+  list(orgId: string): Promise<CampaignSeries[]>;
 }
 
 /** Send-schedule lifecycle records (§4.6). Never deleted — pause/archive flip status. */
@@ -454,6 +472,24 @@ export interface TemplateStore {
   /** `opts.ifVersion` guards the read-modify-write in `saveTemplate` (#194). */
   put(t: Template, opts?: { ifVersion?: number }): Promise<void>;
   list(orgId: string): Promise<Template[]>;
+}
+
+/**
+ * Org-defined merge tags (§4.15) — the registry behind the console's Merge tags
+ * screen.
+ *
+ * Keyed by `name`, not a generated id: the name IS the identity, because it is
+ * what a template writes inside `{{…}}`. Two tags called `first_name` in one org
+ * is not a thing that can mean anything, so a re-register overwrites.
+ *
+ * Reserved names (`RESERVED_MERGE_TAGS`) are NOT stored here — they are supplied
+ * by the send path and merged in on read. `saveMergeTag` refuses them.
+ */
+export interface MergeTagStore {
+  get(orgId: string, name: string): Promise<MergeTag | undefined>;
+  put(t: MergeTag): Promise<void>;
+  list(orgId: string): Promise<MergeTag[]>;
+  delete(orgId: string, name: string): Promise<void>;
 }
 
 /** Drip/journey sequence definitions (§4.6). */
@@ -728,6 +764,8 @@ export interface Stores {
   series: CampaignSeriesStore;
   schedules: SendScheduleStore;
   templates: TemplateStore;
+  /** Org-defined merge tags (§4.15); reserved names are not stored, they are merged in on read. */
+  mergeTags: MergeTagStore;
   alerts: AlertConfigStore;
   usage: UsageStore;
   segments: SegmentStore;

@@ -37,6 +37,7 @@ import type {
   List,
   Organization,
   Segment,
+  MergeTag,
   SendScheduleState,
   Subscriber,
   Subscription,
@@ -61,6 +62,7 @@ import type {
   ImportBatchStore,
   ImportMappingStore,
   SegmentStore,
+  MergeTagStore,
   SendClaimStore,
   SendScheduleStore,
   Stores,
@@ -545,6 +547,39 @@ export class DynamoStores implements Stores {
       }),
   };
 
+  /**
+   * Org-defined merge tags (§4.15). Same single-table shape as `segments`: one
+   * org partition, one `MERGETAG#` sort-key prefix, so `list` is a single query
+   * rather than a scan.
+   *
+   * The NAME is the sort key, not a generated id — a merge tag's identity is the
+   * word a template writes inside `{{…}}`, so re-registering `first_name`
+   * overwrites rather than creating a second row nobody could tell apart. That
+   * makes the name user input inside a key, which is why `mergeTagNameSchema`
+   * bounds it to `[a-z][a-z0-9_]*` before it ever arrives here.
+   *
+   * The four reserved names are NOT stored (see `RESERVED_MERGE_TAGS`); they are
+   * merged in on read by `listMergeTags`.
+   */
+  mergeTags: MergeTagStore = {
+    get: (orgId, name) => this.get<MergeTag>(org(orgId), `MERGETAG#${name}`),
+    put: (t) => this.put({ pk: org(t.orgId), sk: `MERGETAG#${t.name}`, data: t }),
+    list: (orgId) =>
+      this.queryAll<MergeTag>({
+        TableName: this.tableName,
+        KeyConditionExpression: "pk = :pk AND begins_with(sk, :s)",
+        ExpressionAttributeValues: { ":pk": org(orgId), ":s": "MERGETAG#" },
+      }),
+    delete: async (orgId, name) => {
+      await this.doc.send(
+        new DeleteCommand({
+          TableName: this.tableName,
+          Key: { pk: org(orgId), sk: `MERGETAG#${name}` },
+        }),
+      );
+    },
+  };
+
   segments: SegmentStore = {
     get: (orgId, segmentId) => this.get<Segment>(org(orgId), `SEGMENT#${segmentId}`),
     put: (s) => this.put({ pk: org(s.orgId), sk: `SEGMENT#${s.segmentId}`, data: s }),
@@ -947,6 +982,12 @@ export class DynamoStores implements Stores {
   series: CampaignSeriesStore = {
     get: (orgId, seriesId) => this.get<CampaignSeries>(org(orgId), `SERIES#${seriesId}`),
     put: (s) => this.put({ pk: org(s.orgId), sk: `SERIES#${s.seriesId}`, data: s }),
+    list: (orgId) =>
+      this.queryAll<CampaignSeries>({
+        TableName: this.tableName,
+        KeyConditionExpression: "pk = :pk AND begins_with(sk, :s)",
+        ExpressionAttributeValues: { ":pk": org(orgId), ":s": "SERIES#" },
+      }),
   };
 
   schedules: SendScheduleStore = {

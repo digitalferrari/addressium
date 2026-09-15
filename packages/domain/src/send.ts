@@ -15,6 +15,7 @@ import type {
   Subscriber,
   SuppressionSource,
 } from "@addressium/core";
+import { RESERVED_MERGE_TAGS } from "@addressium/core";
 import type {
   Clock,
   EmailSender,
@@ -26,6 +27,7 @@ import type {
   SendThrottle,
   Stores,
 } from "./ports.js";
+import { mergeTagFallbacks } from "./merge-tags.js";
 import { buildLinkMap, plainTextFrom, renderForRecipient, type EmailTemplate } from "./render.js";
 import { deferSend, scheduleActive } from "./schedule-state.js";
 
@@ -272,22 +274,62 @@ export function recipientAllowedForDev(
  *
  * Reserved names win over a subscriber attribute of the same name. An imported
  * CSV column called `unsubscribe_url` must not be able to replace the real one.
+ *
+ * PRECEDENCE, lowest to highest: configured fallbacks, then the subscriber's own
+ * non-empty attributes, then the reserved values. `fallbacks` comes from
+ * `mergeTagFallbacks`, read once per send by the caller rather than per
+ * recipient.
+ *
+ * "WHEN EMPTY" MEANS ABSENT **OR** BLANK, and that is deliberate — the console
+ * labels the field "fallback when empty", and the ordinary way an attribute
+ * comes up empty is a CSV import with a blank cell, which yields `""` and not a
+ * missing key. Filtering only `undefined` would leave exactly the common case
+ * rendering blank while the operator saw a fallback configured. Do not
+ * "simplify" the blank filter below back to a plain spread.
  */
 async function mergeValues(
   list: List,
   subscriber: Subscriber,
   builder: UnsubscribeLinkBuilder | undefined,
+  fallbacks: Record<string, string>,
 ): Promise<Record<string, string>> {
   const unsubscribeUrl = builder
     ? await builder.build({ orgId: list.orgId, subscriberId: subscriber.sub, listId: list.listId })
     : `mailto:${list.fromAddress}?subject=unsubscribe`;
-  return {
-    ...subscriber.attributes,
-    unsubscribe_url: unsubscribeUrl,
-    list_name: list.name,
-    compliance_footer: list.complianceFooter,
-    physical_address: list.physicalAddress,
-  };
+  // Resolved per reserved NAME rather than written out as object keys, so
+  // `RESERVED_MERGE_TAGS` is the one list and the merge-tag registry the console
+  // shows cannot drift from what actually resolves here. A name added to the
+  // constant with no case below throws — loudly, in a domain test — instead of
+  // being displayed to an operator as a tag that renders empty.
+  const reserved: Record<string, string> = {};
+  for (const tag of RESERVED_MERGE_TAGS) {
+    switch (tag.name) {
+      case "unsubscribe_url":
+        reserved[tag.name] = unsubscribeUrl;
+        break;
+      case "list_name":
+        reserved[tag.name] = list.name;
+        break;
+      case "compliance_footer":
+        reserved[tag.name] = list.complianceFooter;
+        break;
+      case "physical_address":
+        reserved[tag.name] = list.physicalAddress;
+        break;
+      default:
+        throw new Error(`reserved merge tag "${tag.name}" has no resolver in mergeValues`);
+    }
+  }
+  // An attribute only counts as a value if it HAS one. A blank string is what an
+  // imported empty cell looks like, and it must not beat the operator's fallback.
+  const present: Record<string, string> = {};
+  for (const [k, v] of Object.entries(subscriber.attributes)) {
+    if (v !== "") present[k] = v;
+  }
+  // Reserved LAST: this spread order is the precedence rule. An attribute of the
+  // same name is overwritten, never the other way round. Fallbacks FIRST, so a
+  // real value always beats the fallback and the fallback never beats reserved.
+  return { ...fallbacks, ...present, ...reserved };
 }
 
 async function listUnsubscribeHeader(
@@ -478,7 +520,12 @@ export async function sendToSubscriber(
     const token = await mintToken(magic, subscriber);
     const html = renderForRecipient(
       input.template,
-      await mergeValues(list, subscriber, input.unsubscribeLink),
+      await mergeValues(
+        list,
+        subscriber,
+        input.unsubscribeLink,
+        await mergeTagFallbacks(stores, input.orgId),
+      ),
       token,
     );
     await sender.send({
@@ -572,6 +619,12 @@ export async function sendCampaign(
   // per campaign/slice, not per recipient.
   const org = await stores.organizations.get(input.orgId);
 
+  // The org's configured merge-tag fallbacks (#266). Read ONCE per slice, for
+  // the same reason as the org above: the registry is org-wide and static for
+  // the duration of a send, and reading it inside the loop would be one store
+  // query per recipient on the hottest path in the system.
+  const fallbacks = await mergeTagFallbacks(stores, input.orgId);
+
   // The slice's key range is pushed into the QUERY (#182). This used to read the
   // whole confirmed list and then discard everything outside the window, so a
   // 250-slice campaign performed 250 full-list reads to send 250 windows —
@@ -653,7 +706,7 @@ export async function sendCampaign(
       if (magic && token === undefined) untokenized++;
       const html = renderForRecipient(
         input.template,
-        await mergeValues(list, subscriber, opts.unsubscribeLink),
+        await mergeValues(list, subscriber, opts.unsubscribeLink, fallbacks),
         token,
       );
 

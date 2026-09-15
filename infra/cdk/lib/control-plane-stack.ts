@@ -1475,6 +1475,43 @@ export class ControlPlaneStack extends Stack {
         resources: ["*"],
       }),
     );
+    // The SES sending-identity readout (#285) — GET /orgs/{org}/sending-identity,
+    // and the same grant the Settings screen's verification table needs. Two
+    // actions, both READS, and deliberately not folded into the statement above:
+    // that one is about the suppression list, this one is about whether the org
+    // can send at all, and a reader should be able to tell which route each
+    // action serves.
+    //
+    // Nothing here creates or changes an identity. `CreateEmailIdentity`,
+    // `PutEmailIdentityMailFromAttributes` and the configuration-set writes stay
+    // on `provisioningFn`, which is not internet-facing in the way this router
+    // is — the router answers every authenticated console request, so a write
+    // grant here would be reachable from ~50 routes instead of one.
+    //
+    // `GetEmailIdentity` is scoped to identities in this account and region, the
+    // same shape `tokensFn` uses for its KMS grant, rather than "*". Every
+    // identity this reads was created by our own provisioning function, so there
+    // is no reason for the router to be able to interrogate an ARN outside it.
+    adminApiFn.addToRolePolicy(
+      new PolicyStatement({
+        actions: ["ses:GetEmailIdentity"],
+        resources: [
+          Stack.of(this).formatArn({ service: "ses", resource: "identity", resourceName: "*" }),
+        ],
+      }),
+    );
+    // `ses:GetAccount` is the sandbox check — `ProductionAccessEnabled`, the one
+    // fact that explains a valid subscriber address being refused on the public
+    // signup page. Resource "*" by necessity, for the reason already written out
+    // above the suppression statement: account-level settings are a singleton
+    // with no ARN to scope to. The narrowness is the single read action, not the
+    // resource.
+    adminApiFn.addToRolePolicy(
+      new PolicyStatement({
+        actions: ["ses:GetAccount"],
+        resources: ["*"],
+      }),
+    );
     // POST /drip-sequences/enroll. Paired with the env var above: a function that
     // can reach the starter but cannot call it fails at runtime, inside a route.
     dripStateMachine.grantStartExecution(adminApiFn);
@@ -1650,6 +1687,15 @@ export class ControlPlaneStack extends Stack {
     // is scoped by the caller's own grant, creating requires identity:manage.
     adminRoute("OrgsListFn", "orgsListHandler", HttpMethod.GET, "/orgs");
     adminRoute("OrgMetaFn", "orgMetaHandler", HttpMethod.GET, "/orgs/{org}");
+    // Read-only identity config for the console's Identity & pools screen. Its
+    // own route because the handler gates on identity:manage, not reports:view.
+    adminRoute("OrgIdentityFn", "orgIdentityHandler", HttpMethod.GET, "/orgs/{org}/identity");
+    // The live SES read (#285): is the domain identity verified, and is the
+    // account out of the sandbox. Its own route, and `identity:manage` like its
+    // sibling above — the sandbox and the account quota describe the DEPLOYMENT,
+    // not this org's numbers, so `reports:view` is the wrong audience. The SES
+    // grant it needs is on `adminApiFn` beside the suppression statement.
+    adminRoute("SendingIdentityFn", "sendingIdentityHandler", HttpMethod.GET, "/orgs/{org}/sending-identity");
     adminRoute("SetupStateFn", "setupStateHandler", HttpMethod.GET, "/orgs/{org}/setup");
     adminRoute("ListsGetFn", "listsHandler", HttpMethod.GET, "/orgs/{org}/lists");
     adminRoute("ListsPostFn", "listsHandler", HttpMethod.POST, "/lists");
@@ -1664,6 +1710,14 @@ export class ControlPlaneStack extends Stack {
     adminRoute("TemplatesGetFn", "templatesHandler", HttpMethod.GET, "/orgs/{org}/templates");
     adminRoute("TemplateGetFn", "templatesHandler", HttpMethod.GET, "/orgs/{org}/templates/{id}");
     adminRoute("TemplatesPostFn", "templatesHandler", HttpMethod.POST, "/templates");
+    adminRoute("MergeTagsGetFn", "mergeTagsHandler", HttpMethod.GET, "/orgs/{org}/merge-tags");
+    adminRoute("MergeTagsPostFn", "mergeTagsHandler", HttpMethod.POST, "/merge-tags");
+    adminRoute("MergeTagDeleteFn", "mergeTagDeleteHandler", HttpMethod.POST, "/merge-tags/delete");
+    // Recurring campaign series (§4.6): list, read one, create/edit. No delete —
+    // editions and series-bound ad fills reference a series by id.
+    adminRoute("SeriesGetFn", "seriesHandler", HttpMethod.GET, "/orgs/{org}/series");
+    adminRoute("SeriesGetOneFn", "seriesHandler", HttpMethod.GET, "/orgs/{org}/series/{id}");
+    adminRoute("SeriesPostFn", "seriesHandler", HttpMethod.POST, "/series");
     adminRoute("SegmentsGetFn", "segmentsHandler", HttpMethod.GET, "/orgs/{org}/segments");
     adminRoute("SegmentsPostFn", "segmentsHandler", HttpMethod.POST, "/segments");
     adminRoute("SegmentMembersGetFn", "segmentMembersHandler", HttpMethod.GET, "/orgs/{org}/segments/{segment}/members");

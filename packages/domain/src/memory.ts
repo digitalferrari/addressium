@@ -23,6 +23,7 @@ import type {
   Subscription,
   SuppressionEntry,
   Template,
+  MergeTag,
   UsageRecord,
   DeployedVersion,
 } from "@addressium/core";
@@ -50,6 +51,7 @@ import type {
   SendDescriptor,
   SendScheduleStore,
   TemplateStore,
+  MergeTagStore,
   SendQueue,
   SentMessage,
   Stores,
@@ -445,6 +447,9 @@ export class MemCampaignSeries implements CampaignSeriesStore {
   async put(s: CampaignSeries) {
     this.map.set(subKey(s.orgId, s.seriesId), s);
   }
+  async list(orgId: string) {
+    return [...this.map.values()].filter((s) => s.orgId === orgId);
+  }
 }
 
 export class MemTemplates implements TemplateStore {
@@ -488,6 +493,23 @@ export class MemDripSequences implements DripSequenceStore {
   }
   async list(orgId: string) {
     return [...this.map.values()].filter((s) => s.orgId === orgId);
+  }
+}
+
+/** Org-defined merge tags (§4.15). Keyed by name — the name is the identity. */
+export class MemMergeTags implements MergeTagStore {
+  private map = new Map<string, MergeTag>();
+  async get(orgId: string, name: string) {
+    return this.map.get(subKey(orgId, name));
+  }
+  async put(t: MergeTag) {
+    this.map.set(subKey(t.orgId, t.name), t);
+  }
+  async list(orgId: string) {
+    return [...this.map.values()].filter((t) => t.orgId === orgId);
+  }
+  async delete(orgId: string, name: string) {
+    this.map.delete(subKey(orgId, name));
   }
 }
 
@@ -667,6 +689,7 @@ export function memStores(): Stores {
     series: new MemCampaignSeries(),
     schedules: new MemSendSchedules(),
     templates: new MemTemplates(),
+    mergeTags: new MemMergeTags(),
     alerts: new MemAlertConfigs(),
     usage: new MemUsage(),
     segments: new MemSegments(),
