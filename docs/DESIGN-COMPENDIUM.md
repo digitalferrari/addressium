@@ -294,12 +294,14 @@ was never written down, which left the code looking like an oversight. See item
   needed a second grant (`kms:GenerateDataKey*` + `kms:Decrypt`) alongside the
   `sns:Publish` of #208. Mail delivery has been observed, but bounce and
   complaint handling have not been exercised by real SES traffic.
-- `deploy-check.sh` has now seen one live change set, on a create — the
-  replacement branch it exists for remains fixture-only. Before that deploy it
+- `deploy-check.sh` has now seen two live change sets — a create and the
+  2026-09-15 update, neither holding a replaceable data resource — so the
+  replacement branch it exists for remains fixture-only. Before the first deploy it
   had never run at all, having hung off an npm `predeploy` hook that
   `ignore-scripts=true` silently suppresses.
 - Version marker/migrations are implemented as a deploy-time custom resource,
-  but await first deployment to prove the live marker.
+  and the 2026-09-15 dev deploy proved the live marker: `/version` reports
+  `inSync: true` with a `deployedAt` stamp.
 - Custom SPA domains are implemented with Route 53 aliases and us-east-1 ACM
   validation; no dev hostname/zone has been configured yet.
 - GDPR erasure's lake story is tombstone + anti-join + lifecycle expiry (#199):

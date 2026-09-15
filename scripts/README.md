@@ -60,8 +60,14 @@ disposable test accounts, and the template as the real install path.
 Then hand over the credentials it prints, and the deployer runs:
 
 ```bash
-npm run build && npm run deploy
+npm run build && npm run deploy   # CDK stack only — see below
+ADDRESSIUM_PUBLIC_ORG_ID=<your-org-id> node scripts/publish-spas.mjs
 ```
+
+`npm run deploy` is `deploy:check && cdk deploy`. It does **not** publish the
+SPAs — `publish-spas.mjs` is wired only into CI — so without that second command
+the admin console, subscriber site and signup page stay on the previous build
+while the API moves forward.
 
 Teardown (non-prod only — `prod` is refused by design):
 
@@ -77,7 +83,7 @@ credentials**, so storing AWS credentials there is circular. And anyone running
 fetch.
 
 Secrets Manager is the right home for *application* secrets — the reCAPTCHA key,
-the AI provider key, the webhook signing secret — which is exactly how the app
+the webhook signing secret — which is exactly how the app
 already uses it: passed by ARN, resolved at cold start, never in the template.
 That is a different problem from authentication.
 

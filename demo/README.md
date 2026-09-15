@@ -38,5 +38,5 @@ their reasoning rather than hidden — they are not gaps.
 
 > It is a **design reference / prototype**, not the running application. The real
 > app is the React SPAs under `apps/` talking to the Lambda API in `services/`.
-> addressium is pre-1.0 and has never been deployed to a real AWS account; the
-> banner under the console topbar says so.
+> addressium is pre-1.0 and has been deployed only to a dev AWS account; the
+> banner under the console topbar carries the same caveat.

@@ -5,8 +5,12 @@
 > standard** so it can be independently reviewed — nothing bespoke.
 
 - **Status:** Design-level, tracking
-  [`DESIGN-COMPENDIUM.md`](./DESIGN-COMPENDIUM.md) revision 2. Nothing has ever
-  been deployed (compendium §9). Where r2 decided a control that the CDK does
+  [`DESIGN-COMPENDIUM.md`](./DESIGN-COMPENDIUM.md) revision 2. Deployed to a dev
+  account only (`addressium-dev`, us-east-1, current with `9c7c260` as of
+  2026-09-15); never to production. Almost every control below is asserted from
+  the source and the synthesized template rather than probed on the running
+  stack — the exceptions are input-validation error redaction and the
+  `deploy:check` preflight, both exercised live on 2026-09-15. Where r2 decided a control that the CDK does
   not yet build, it carries the inline tag **[Decided r2 — not yet built]**.
   Read an untagged control as present in the synthesized stack today, and a
   tagged one as a decision, not a protection you currently have.

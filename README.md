@@ -15,8 +15,10 @@ the same owner.
 > with sample data.
 
 > ### ⚠️ Status: pre-1.0, not production-ready
-> This is deployed to a disposable dev account (#212). The stack stands up, all
-> 29 handlers load, an organization provisions, and mail has reached a
+> This is deployed to a disposable dev account (#212) — as of 2026-09-15 the
+> `addressium-dev` stack is current with `9c7c260`. The stack stands up, its
+> handlers load (bar two added in that roll-forward and not yet load-checked —
+> see [Status](#status)), an organization provisions, and mail has reached a
 > developer-controlled inbox. `npm run test:e2e` has still never run, and no
 > install has run for a day. See [Status](#status) before putting a real list
 > near it.
@@ -181,6 +183,22 @@ have to be handed to a pipeline, a teammate, or an agent.
 npm install
 npm run build
 npm run deploy          # deploy:check runs first — an && chain, not a hook
+
+# The SPAs are a SEPARATE step. `npm run deploy` is only `deploy:check && cdk
+# deploy`; it ships Lambdas and leaves the admin/subscriber/public bundles stale.
+ADDRESSIUM_PUBLIC_ORG_ID=<your-org-id> node scripts/publish-spas.mjs
+```
+
+`confirmUrlBase` has **no usable default** — leave it and every confirmation
+email links to `https://your-site.example/confirm`, so no subscriber can ever
+confirm. It is a `cdk` context value, and note that **`npm run deploy -- -c …`
+does not reach `cdk`**: the root script ends in a nested
+`npm --workspace @addressium/infra-cdk run deploy`, which swallows the flag. Pass
+it on a direct invocation instead:
+
+```bash
+cd infra/cdk && npx cdk deploy addressium-dev \
+  -c confirmUrlBase=https://<your-public-distribution>/confirm
 ```
 
 Details: [`scripts/README.md`](scripts/README.md) ·
@@ -193,7 +211,9 @@ Details: [`scripts/README.md`](scripts/README.md) ·
 ```bash
 npm test                # 724 tests; 720 pass, 4 skip without LocalStack
 npm run deploy:check    # dry run — refuses anything that would destroy data
-npm run deploy          # in place; CloudFormation rolls back on failure
+npm run deploy          # in place; CloudFormation rolls back on failure.
+                        # API/infra ONLY — does not publish the SPAs.
+ADDRESSIUM_PUBLIC_ORG_ID=<your-org-id> node scripts/publish-spas.mjs
 curl $API/version       # running build and the marker written by the deploy migration
 ```
 
@@ -204,8 +224,9 @@ Every deploy invokes a custom resource before application Lambdas are updated;
 it runs ordered, idempotent schema migrations and writes `SCHEMA#VERSION` only
 on success. `GET /version` then distinguishes the running build from the last
 completed deployment. This is implemented and covered by synthesis/unit tests,
-but has **not yet been deployed to the dev stack**, so the live marker remains
-unproven.
+and is now **deployed to the dev stack**: as of 2026-09-15 `GET /version` returns
+`inSync: true` with a `deployedAt` stamp, so the marker is being written and read
+back. That the migrations themselves ran correctly is not separately observed.
 Explicitly rejected either way: Terraform (a second IaC tool and a state
 distribution problem, for no gain over CDK), SAM (overlaps CDK), and storing
 deploy credentials in Secrets Manager (circular — reading it needs credentials).
@@ -280,7 +301,8 @@ Daily sending is **$0.136 per 1,000 emails** all-in — 36% above SES's raw $0.1
 for the whole platform around it. A hosted ESP at 40,000 contacts sending daily
 is commonly $400–600/month.
 
-Excludes WAF — including the two WebACLs the stack currently creates itself —
+Excludes WAF — operator-supplied, and on the operator's own bill; the stack
+creates no WebACL —
 data transfer, and the free tiers most accounts still have.
 
 ---
@@ -350,8 +372,13 @@ call.
 
 **Honest state, because a README that reads "done" is worse than useless:**
 
-- **It is deployed to a dev account** (#212) — not to production. The stack
-  stands up, its 29 handlers load, `POST /orgs` provisions a real SES identity,
+- **It is deployed to a dev account** (#212) — not to production. As of
+  **2026-09-15** the live `addressium-dev` stack (us-east-1) is **current with
+  `9c7c260`**, which is also where `origin/main` points; 95 API routes are live
+  and all three SPAs are published. Two handlers added in that deploy
+  (`TrendsFn`, `SeriesReportFn`) have **not** had their module-load health
+  verified — see the ESM-bundling bugs below for why that is not a formality.
+  The stack stands up, the handlers checked at the first deploy load, `POST /orgs` provisions a real SES identity,
   and a developer has received mail sent through it. It surfaced
   **ten bugs that neither `npm test` nor `cdk synth` could see**, because they
   fail only against real AWS APIs. Two of them produced a stack reporting
@@ -372,28 +399,33 @@ call.
   real bounces tripping the halt gate. `npm run test:e2e` is written for exactly
   those and **has never been run**.
 - `deploy:check` gates every deploy, fails **closed** on a change-set shape it
-  cannot interpret, and has now run against real CloudFormation — on a create,
-  where a change set has no data-holding resource to replace. The replacement
+  cannot interpret, and has now run against real CloudFormation on both a create
+  and an update (the 2026-09-15 roll-forward to `9c7c260`) — neither of which had
+  a data-holding resource to replace. The replacement
   path it exists for is still fixture-only. It had also **never once run** before
   that deploy: it was wired as an npm `predeploy` hook, which does not fire under
   `ignore-scripts=true`, and npm reports nothing when it skips one. It is an `&&`
   chain in the `deploy` script now, which no config can disable.
-- **Migration/version and release notification support is implemented but not
+- **Migration/version and release notification support is implemented and now
   deployed.** The deploy-time runner writes the marker after successful ordered
   migrations, and a tagged CI release publishes GitHub release notes. Live
-  confirmation awaits the next dev deployment.
+  confirmation has now happened: `GET /version` returns `inSync: true` with a
+  `deployedAt` stamp (2026-09-15).
 - **Custom domains and automated SPA publishing are implemented but not
   configured.** `adminCustomDomain` / `publicCustomDomain` accept a hostname;
   CDK requests ACM DNS validation and outputs the CloudFront targets for
-  Cloudflare. CI builds and publishes all three SPAs from stack outputs after
-  deploy. Actual hostnames and the operator's Cloudflare record changes are
-  intentionally still required.
+  Cloudflare. `scripts/publish-spas.mjs` builds and publishes all three SPAs
+  from stack outputs, but it is wired only into `.github/workflows/ci.yml` — a
+  local `npm run deploy` does **not** run it, so publishing is a manual second
+  step outside CI. Actual hostnames and the operator's Cloudflare record changes
+  are intentionally still required.
 - **`apps/subscriber-web` and `apps/public-web` share one bucket**, kept apart
   only by a Vite `base`: subscriber-web owns `/` because outgoing mail links at
   `/confirm` and `/unsubscribe` resolve there, and public-web lives under
   `/signup/` with its `embed.js`. Delete that `base` and both build to `/`, where
   whichever syncs last silently overwrites the other's `index.html`. Publishing
-  is manual `aws s3 sync` — there is no npm script for it. See
+  is handled by `scripts/publish-spas.mjs`, which **`npm run deploy` does not
+  invoke** — run it explicitly with `ADDRESSIUM_PUBLIC_ORG_ID` set. See
   [`docs/DEPLOYMENT.md` §5](docs/DEPLOYMENT.md).
 - **A sending domain cannot be corrected after the fact.** There is no
   update-org route in the API or the console, and provisioning returns early on
@@ -410,8 +442,8 @@ call.
   flattened to the same dotted columns, so one mapper serves both — and a saved
   mapping is not yet re-offered on the next file with the same headers.
 - The audit writer is implemented (WORM-safe `Put` only) and privileged routes
-  call it, but the current dev deployment predates it; a real audit object is
-  still part of the next deployment verification.
+  call it, and the current dev deployment (`9c7c260`) now includes it — but no
+  real audit object has been observed yet; that remains unverified.
 
 **1.0 is gated on** `npm run test:e2e` passing against a real AWS account and one
 install running for 30 days. Neither has happened. The dev deployment established

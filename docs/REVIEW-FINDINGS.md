@@ -10,8 +10,8 @@ were reproduced empirically. Severities reflect production impact.
 > **Re-verified 2026-07-29** (docs-vs-code audit): every Critical and High
 > finding was re-checked against the code. All four P0s, all five Criticals,
 > all six High-security items and every High-correctness item are now fixed in
-> the codebase — statuses below reflect that pass, with issue refs. Two items
-> survive: none. Every Medium and residual finding is now fixed (including the
+> the codebase — statuses below reflect that pass, with issue refs. No items
+> survive. Every Medium and residual finding is now fixed (including the
 > `event_id` in analytics rows, and the API-Gateway-5xx and Step Functions failure alarms). Three of today's
 > fixes landed *in* this pass: the `appendEvent` transaction keying (it
 > targeted `CAMPAIGN#…` where the record lives at `CAMPAIGNREC#…`, failing
@@ -23,10 +23,13 @@ were reproduced empirically. Severities reflect production impact.
 
 ## The headline
 
-As configured today, a deployed stack **cannot send a single campaign** and
-**cannot complete a login**. Four independent wiring defects each stop the
-system on their own. These are not policy nits — they are the first things to
-fix, and all four are cheap.
+When this review was written, a deployed stack **could not send a single
+campaign** and **could not complete a login**. Four independent wiring defects
+each stopped the system on their own. All four fixes are merged and present in
+the deployed build (`addressium-dev` is current with `9c7c260` as of
+2026-09-15). Neither a completed login nor a real campaign send has been
+exercised against the live stack, so "fixed" here means fixed in code and
+shipped — not observed working.
 
 | # | Defect | Effect |
 |---|---|---|
@@ -301,8 +304,9 @@ Worth protecting — do not regress these:
 
 ## Suggested order
 
-1. **The four P0s** — nothing can be tested end-to-end until login works and the
-   send pipeline can execute. (P0-1 done.)
+1. **The four P0s** — nothing could be tested end-to-end until login worked and
+   the send pipeline could execute. (All four fixed in code and present in the
+   deployed build; end-to-end login and send remain unexercised.)
 2. **Security**: scope the two wildcard IAM grants, fix the `orgs` wildcard
    parsing, real logout, `/signup` bot protection.
 3. **Send correctness**: C2, C3, C5, then fan-out slicing and the ReDoS/blank-feed

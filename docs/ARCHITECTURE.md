@@ -5,7 +5,8 @@
 > domain, and run email lists, signup forms, broadcasts, and drip automations —
 > all serverless, at near-zero idle cost.
 
-- **Status:** Built; deployed to a dev account (#212). Most of §4 and all of §6
+- **Status:** Built; deployed to a dev account (#212), current with `9c7c260`
+  as of 2026-09-15. Most of §4 and all of §6
   ships in the repo and is tested, and the stack stands up in a real account
   with its handlers loading, an organization provisioned, and mail delivered to
   a controlled inbox. Counts and most wiring claims below remain synthesized
@@ -49,7 +50,8 @@ every org in a deployment is operated by the same owner.
 4. **Email-only core** — the domain model and pipeline are built and tested for
    email. Non-email channels are out of scope.
 5. **A deploy an operator can trust** — a one-time bootstrap stack and a
-   permissions boundary, then a single gated `npm run deploy` (§9). An operator
+   permissions boundary, then a gated `npm run deploy` plus a `publish-spas`
+   step for the SPAs (§9). An operator
    should get to "verified domain, first list, first send" quickly, without ever
    handing admin credentials to a pipeline.
 6. **Multi-org by design** — one deployment runs many isolated publications: a
@@ -540,8 +542,9 @@ own delay is honored. Two derived identifiers carry the correctness:
   for the trigger list and **retires itself** if not — the newest enrollment wins,
   and the two do not both deliver the remaining steps.
 
-None of this has been deployed yet; the assertions above are what the code and
-the CDK template do.
+This is deployed to the dev account as of 2026-09-15 (`addressium-dev`,
+us-east-1, commit `9c7c260`), but the assertions above describe what the code and
+the CDK template do — most have not been individually exercised against it.
 
 **Scheduling policy — every send goes through a schedule, and one-offs keep a
 lead window.** Both "send now" and "send at" create a **one-off schedule placed
@@ -1960,13 +1963,15 @@ link can ever grant, not from assuming it stays private:
   nothing else**, so admin credentials never have to be handed to a pipeline, a
   teammate, or an agent. Then, as the deployer:
   `npm install && npm run build && npm run deploy`, where `deploy:check` runs
-  first as an **`&&` chain inside the `deploy` script**. It was a `predeploy`
+  first as an **`&&` chain inside the `deploy` script**. `deploy:check` was a `predeploy`
   lifecycle hook until the first real deploy, which is a mechanism npm skips
   entirely — and reports nothing about skipping — under `ignore-scripts=true`, a
   common hardening setting. The guard had consequently never run once. A `&&`
   chain cannot be disabled by configuration; do not move it back. The sequence lives
   in the README's Install section and in [`DEPLOYMENT.md`](./DEPLOYMENT.md) —
-  follow those, not a remembered `cdk deploy`.
+  follow those, not a remembered `cdk deploy`. Note that `npm run deploy` covers
+  the CDK stack only: `scripts/publish-spas.mjs` publishes the three SPAs and is
+  a separate command outside CI ([`DEPLOYMENT.md`](./DEPLOYMENT.md) §5).
 - **`deploy:check` is a data-destruction guard, not a health check.** It creates
   a CloudFormation **change set without executing it** and exits non-zero if any
   data-holding resource would be replaced or removed. This exists because
@@ -2357,9 +2362,13 @@ A design document that reads "done" is worse than useless. Everything above
 describes the target; this is the part that is still unearned. It mirrors
 [`DESIGN-COMPENDIUM.md`](./DESIGN-COMPENDIUM.md) §9.
 
-- **Deployed to a dev account** (#212); never to production. The deployment
-  confirmed that the stack applies, its handlers load, and mail can reach a
-  controlled inbox. Every count, alarm, and most wiring claim in this document
+- **Deployed to a dev account** (#212); never to production. Current with
+  `9c7c260` as of 2026-09-15. The deployment
+  confirmed that the stack applies, that the handlers present at the first
+  deploy load, and that mail can reach a controlled inbox. `TrendsFn` and
+  `SeriesReportFn`, added in the 2026-09-15 roll-forward, have not had their
+  module-load health checked. Every count,
+  alarm, and most wiring claim in this document
   is still read from a **synthesized CloudFormation template** rather than from
   a running system — a narrower fact than the template being *right*. It
   surfaced ten defects invisible to both `npm test` and `cdk synth`; two of them
@@ -2378,16 +2387,18 @@ describes the target; this is the part that is still unearned. It mirrors
   existing Route 53 zone; CDK validates a CloudFront certificate in us-east-1,
   creates A/AAAA aliases, and uses the hostname for Cognito callbacks and CORS.
   No dev hostname/zone has been supplied or deployed yet.
-- **`deploy-check.sh` has faced exactly one live change set**, and it was a
-  *create* — where there is no existing data-holding resource to be replaced, so
-  the branch it exists for did not execute. That branch is still fixture-only. It
+- **`deploy-check.sh` has faced two live change sets** — a *create* and the
+  2026-09-15 *update* — but neither contained a data-holding resource to be
+  replaced, so the branch it exists for has still never executed against real
+  CloudFormation. That branch remains fixture-only. It
   is the one thing standing between a key-schema change and an empty table (§9).
   Worse, until that same deploy it had never run **at all**: it hung off an npm
   `predeploy` hook, which `ignore-scripts=true` silently suppresses.
-- **Version marker and migrations are implemented but unproven live.** A
+- **Version marker and migrations are implemented and now proven live.** A
   deploy-time custom resource executes ordered migrations before application
-  Lambdas update and writes the marker after success; the next dev deploy must
-  prove `/version` reports it correctly.
+  Lambdas update and writes the marker after success. On 2026-09-15 it ran
+  against the dev stack and `/version` reported `inSync: true` with a
+  `deployedAt` stamp.
 - **GDPR erasure reaches the lake by tombstone, not by rewriting** (#164, §4.19).
   Rows bearing a pseudonymous subscriber id survive in `events/` until their
   lifecycle rule expires them — anti-joined out of every query, resolvable by

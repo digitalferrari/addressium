@@ -4,7 +4,7 @@ This guide takes you from an empty AWS account to a running deployment with one
 or more publisher organizations. addressium runs entirely in **your** account;
 there is no addressium-hosted control plane.
 
-> ### ⚠️ Status: run once, to a dev account
+> ### ⚠️ Status: run against a dev account; last rolled forward 2026-09-15
 > §1–§6 have now been walked end to end against a real AWS account (#212), and
 > the corrections that run produced are folded in below — the boundary
 > permissions, the Hosted-UI domain, the SPA publish step, and a confirmed mail
@@ -190,7 +190,37 @@ Deploy from the **repo root**, not from `infra/cdk`:
 
 ```bash
 npm run deploy         # deploy:check runs first — an && chain, not a hook
+
+# §5 — a SEPARATE command. `npm run deploy` ships Lambdas and CloudFormation
+# only; it leaves the three SPA bundles in S3 exactly as they were.
+ADDRESSIUM_PUBLIC_ORG_ID=<your-org-id> node scripts/publish-spas.mjs
 ```
+
+> **`confirmUrlBase` has no usable default.** Omit it and every confirmation
+> email links to `https://your-site.example/confirm`, a domain you do not own —
+> the signup succeeds, the mail sends, and nobody can confirm. `deploy:check`
+> only *warns*.
+>
+> **It cannot ride on `npm run deploy`.** `npm run deploy -- -c key=val` appends
+> the flag to the nested `npm --workspace @addressium/infra-cdk run deploy`,
+> where npm consumes `-c` itself and `cdk` never sees it. Deploy directly when
+> you need to set it:
+>
+> ```bash
+> cd infra/cdk && npx cdk deploy addressium-dev \
+>   -c confirmUrlBase=https://<your-public-distribution>/confirm
+> ```
+>
+> Do **not** hardcode it into the tracked `infra/cdk/cdk.json`: that file ships
+> to everyone, and a real hostname there is worse than the placeholder — it
+> silently routes other operators' confirmation tokens to your distribution.
+
+> **`npm run deploy` is not the whole deploy.** It is `deploy:check && cdk
+> deploy`; `scripts/publish-spas.mjs` is referenced only from
+> `.github/workflows/ci.yml`, so outside CI nothing publishes the SPAs. Deploy
+> without it and the API moves forward while the operator console, subscriber
+> site and signup page stay on the previously uploaded build — a deploy that
+> reports complete success and changes nothing the operator can see.
 
 `deploy` invokes `deploy:check` directly (`deploy:check && cdk deploy`), so
 `scripts/deploy-check.sh` always runs first. It creates a CloudFormation **change
@@ -231,8 +261,9 @@ that app-level context to "clean up"; the condition on `iam:CreateRole` is what
 stops a deployer minting itself something stronger than itself, and without the
 context every role fails it.
 
-> `deploy:check` has now run against real CloudFormation, but only on a **create**
-> — where no data-holding resource exists yet to be replaced. The replacement
+> `deploy:check` has now run against real CloudFormation on both a **create** and
+> an **update** (2026-09-15), but neither had a data-holding resource to replace
+> — the update's change set reported none. The replacement
 > path it exists for is still validated against fixtures alone. It is the only
 > preflight that exists — there is no `doctor` command. It also warns when no WAF
 > association or alert target is configured (§3), before it inspects anything
@@ -314,7 +345,7 @@ with both analytics flags on, plus `BackupVaultName` in prod:
 | --- | --- |
 | `HttpApiUrl` | `VITE_API_BASE` for all three SPAs (§5). A URL, not an ARN. |
 | `AdminPoolId` / `AdminClientId` | `VITE_COGNITO_*` for the admin console. |
-| `AdminSiteBucket` / `PublicSiteBucket` | Sync the built SPAs into these, by hand — there is no npm script. `PublicSiteBucket` holds **two** apps at different prefixes; see §5 before syncing it. |
+| `AdminSiteBucket` / `PublicSiteBucket` | `scripts/publish-spas.mjs` syncs the built SPAs into these — `npm run deploy` does **not** run it (§5). `PublicSiteBucket` holds **two** apps at different prefixes; see §5 before syncing it by hand. |
 | `AdminSiteUrl` / `PublicSiteUrl` | CloudFront **domain names** — not ARNs. |
 | `ApiStageArn` | Attach your REGIONAL WebACL here (§8). |
 | `AdminDistributionId` / `PublicDistributionId` | Attach your CLOUDFRONT-scope WebACL to these (§8). |
@@ -376,7 +407,10 @@ build time:
 `node scripts/publish-spas.mjs` builds and publishes all three SPAs from the
 deployed stack outputs; tagged CI runs it immediately after a successful stack
 deploy. It requires `ADDRESSIUM_PUBLIC_ORG_ID` and is also usable from an
-operator workstation. The equivalent manual procedure is:
+operator workstation. Prefer it over the manual route — the block below shows
+the build/sync/invalidate **shape for `admin-web` only**, not an equivalent of
+the script, which also builds and publishes `subscriber-web` and `public-web`
+at their respective prefixes (see the `--exclude 'signup/*'` hazard below):
 
 ```bash
 VITE_API_BASE="https://<api-id>.execute-api.<region>.amazonaws.com" \
@@ -755,14 +789,16 @@ From the repo root:
 
 ```bash
 npm --workspace @addressium/infra-cdk run diff   # preview the change
-npm run deploy                                   # roll forward (§4)
+npm run deploy                                   # roll forward (§4) — API only
+ADDRESSIUM_PUBLIC_ORG_ID=<your-org-id> \
+  node scripts/publish-spas.mjs                  # the SPAs (§5) — not automatic
 curl $API/version                                # running vs deployed
 ```
 
 > The deploy-time migration custom resource writes `SCHEMA#VERSION` only after
 > ordered migrations complete. `GET /version` reports `inSync: true` when that
-> marker matches the serving build. This support is awaiting its first dev
-> deployment; until then the currently deployed stack still reports no marker.
+> marker matches the serving build. This ran for the first time on 2026-09-15:
+> the dev stack now reports `inSync: true` with a `deployedAt` stamp.
 
 To tear a deployment down, use the teardown script — **not** `cdk destroy`:
 
@@ -798,8 +834,9 @@ handlers, and has delivered mail to a controlled inbox. The 1.0 gate remains
 `npm run test:e2e` **passing**, and that suite has still never been run. The
 deploy steps below have been walked and their corrections are folded into §1–§6;
 the broader sender, event, and mailbox-provider paths remain written rather than
-observed. Everything below is the operator's part; the code side — the smoke
-suite, the deploy guard, the scoped policy — is written and waiting.
+observed. Everything below is the operator's part; on the code side the smoke
+suite is still written and waiting, while the deploy guard and the scoped policy
+have now been exercised by two real deploys (§4).
 
 > **What that first run cost, so you can budget for the second.** Ten bugs, none
 > visible to `npm test` or `cdk synth`, because they fail only against real AWS
@@ -880,6 +917,8 @@ every record with a "why" note for this reason.
 
 ```bash
 npm run deploy        # deploy:check runs first — an && chain, not a hook
+ADDRESSIUM_PUBLIC_ORG_ID=<your-org-id> \
+  node scripts/publish-spas.mjs   # the SPAs — `npm run deploy` skips them (§5)
 AWS_REGION=us-east-1 SMOKE_STACK=addressium-dev \
   SMOKE_RECIPIENT=addressium-test@identithing.com \
   SMOKE_ADMIN_TOKEN='<short-lived Cognito token>' npm run test:e2e
@@ -898,7 +937,8 @@ admin credential is used.
 > `scripts/aws-teardown.sh` walks the survivors deliberately: it refuses
 > `prod`, prompts, and disables deletion protection first.
 
-Before the first real deploy, rehearse `deploy:check` across three change
+**Still outstanding, and now overdue** — two real deploys have run without it.
+Rehearse `deploy:check` across three change
 classes on a throwaway stack — a no-op (exits 0), a stateless edit (exits 0), and
 a deliberate partition-key change (must exit **non-zero** naming `KeySchema`).
 Do the third on a stack holding nothing you care about: the whole point of the
