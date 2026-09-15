@@ -373,13 +373,44 @@ tree, and `git status` is clean. Its reports are history, not deliverables, and
 its test counts (155 with 1 failure, 167/167) describe a tree that no longer
 exists and were measured under concurrent-agent contention.
 
-# Deployment
+# Deployment — the stack IS live, and it is ~14 hours behind main
 
-`cdk diff` against the live stack is **additive**: 56 added, 34 modified, 0
-removed, 0 replacements, 0 destructive. The additions are the CustomerSync
-queue/DLQ/Lambda/alarms plus ~30 API Gateway routes that exist in the router but
-were never registered.
+**Do not read "not deployed" anywhere and conclude the system is not running.
+It is running and it is sending real mail.** Verified against AWS on
+2026-09-15:
 
-**Nothing is deployed, and deploying is not yours.** The public site still runs
-the old code. B1 should land before any deploy — shipping now would deliver a
-feature that green-lights in the UI and then silently dead-letters.
+- CloudFormation stack `addressium-dev` (**us-east-1**, not the default region a
+  bare `aws` CLI call will use) — last updated **2026-09-15T02:54:44Z**.
+- 29 Lambdas live, all stamped `2026-09-15T02:54:52Z`.
+- SES: **6 delivery attempts, 0 bounces, 0 complaints.**
+
+**What is live is commit `ba1a259`** (2026-09-14T19:53-07:00). The deploy at
+19:54:44 PT landed one minute after it, and everything from `5de2532` onward is
+committed but **not** deployed — roughly 14 hours and 13 commits of work,
+including every defect fix listed above.
+
+Confirmed empirically rather than inferred, by probing the live API:
+
+```
+POST /signup  {"email":"notanemail", …}
+→ {"error":"[\n  {\n    \"origin\": \"string\",\n \"code\": \"invalid_format\",
+   \"pattern\": \"/^(?!\\\\.)(?!.*\\\\.\\\\.)([A-Za-z0-9_'+\\\\-\\\\.]*)…"}
+```
+
+That is the raw serialized ZodError — regex and all — on a **public** endpoint.
+`dc6ba3f` ("Stop telling subscribers our failures are their fault", #265) fixes
+exactly this and is sitting undeployed. `GET /version` also returns
+`{"deployed":null,"inSync":false}`, so the version marker is not being written.
+
+**Practical consequence for frontend work:** the deployed API is older than the
+`api.ts` in your tree. If a route 404s or a response is missing a field you can
+see in the handler source, check whether that handler is actually deployed
+before treating it as a bug. `cdk diff` currently shows **56 added, 34 modified,
+0 removed, 0 replacements, 0 destructive** — among the additions are ~30 API
+Gateway routes that exist in the router but are **not yet registered live**
+(merge-tags, api-keys, series, feeds, customer-sync, reengagement, timeline,
+upload-preview, analytics/trends, archive, series report, rotate-key).
+
+**Deploying is still not yours.** B1 should land before any deploy — shipping
+now would deliver a recurring-campaign feature that green-lights in the UI and
+then silently dead-letters.
