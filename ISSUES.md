@@ -152,6 +152,41 @@ to `number`.
 
 ## Medium
 
+### #263 — A one-off that has already sent still reads ACTIVE
+**Screen:** Schedules · **Kind:** bug · **Severity:** medium
+
+`ScheduleStatus` is `"active" | "paused" | "archived"` — there is no terminal
+state for a one-off that has done its single job, and nothing writes one. The
+sender does not transition the lifecycle record after a successful send, so a
+fired one-off sits at `active` forever. Observed with four one-offs that had all
+sent: every EventBridge schedule was gone (`ActionAfterCompletion: DELETE`) and
+all four records still read `active`.
+
+The screen therefore offers Pause and Archive on a send that already went out,
+and shows a green ACTIVE badge next to a `When` in the past. Both read as "this
+is still going to happen". Pause on a fired one-off is not merely useless — the
+#179 deferral path it drives exists to park a delivery that arrives while paused,
+which cannot occur once the schedule is deleted, so the control implies a
+cancellation it cannot perform.
+
+Two things make this worse than cosmetic rather than merely untidy. `scheduleActive`
+treats `active` as the permission to send, so the record cannot distinguish "not
+yet fired" from "already fired" for any future redelivery or replay reasoning.
+And the list grows without bound: every one-off ever sent stays in the operator's
+Schedules view at the same visual weight as a send that has not happened, which
+is precisely the screen they are meant to scan when deciding whether to stop
+something.
+
+Adding a terminal status touches the type, the sender's post-send path, the
+`scheduleActive` predicate (which must keep treating a missing record as active
+for legacy rows) and the console's badge and action gating. Note `transitionSchedule`
+already models start/pause/archive; the gap is that nothing calls it on success.
+
+**Where:** `packages/core/src/entities.ts` (`ScheduleStatus`),
+`packages/domain/src/schedule-state.ts` (`scheduleActive`, `transitionSchedule`),
+`packages/domain/src/send.ts` (post-send path), `apps/admin-web/src/App.tsx`
+(`Schedules` badge + Start/Pause/Archive gating)
+
 ### #254 — There is no campaign list, only a dropdown
 **Screen:** Campaign report (prototype: Campaigns) · **Kind:** missing-feature · **Severity:** medium
 
