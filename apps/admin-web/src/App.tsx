@@ -4,6 +4,13 @@
  * subscriber-site branding (#31), per-list presentation toggles (#33),
  * subscribers, and AI-provider settings. Server-side RBAC is the boundary; the
  * console mirrors capabilities only to hide/disable controls.
+ *
+ * Screens are module-private by default. `Compose`, `Report`, `Subscribers` and
+ * `AddOrganization` are exported ONLY so the component tests beside this file
+ * can mount them (#249, #253, #251, #250). Each of those four bugs lived in the
+ * component — which field the form collects, which counter the screen renders —
+ * so an `api.ts`-level test would have passed against the broken version and
+ * caught nothing. Nothing outside the tests imports them.
  */
 import { useEffect, useMemo, useState } from "react";
 import { completeLoginIfPresent, decodeClaims, getTokens, isExpired, login, logout } from "./auth.js";
@@ -19,7 +26,7 @@ import {
   type SendCostInput,
   type CostLine,
 } from "@addressium/domain/cost";
-import { api, EMPTY_EXPLICIT, isExplicitPredicate, type SegmentMember, type SubscriberDetail, type SuppressionCheckResult, type AlertRule, type Branding, type CreateOrgInput, type CreateOrgResult, type TeamMemberRow, type ColumnMapping, type ImportPreview, type MappedImportReport, type MappingPlan, type NewListDefaults, type CampaignReport, type DripStepDef, type EmailBlock, type ListPresentation, type ScheduleWhen, type SendScheduleState, type SetupState, type Template, type TemplateMode, type UsageRecord } from "./api.js";
+import { api, EMPTY_EXPLICIT, isExplicitPredicate, type SegmentMember, type SubscriberDetail, type SuppressionCheckResult, type SuppressionImportReport, type AlertRule, type Branding, type CreateOrgInput, type CreateOrgResult, type TeamMemberRow, type ColumnMapping, type ImportPreview, type MappedImportReport, type MappingPlan, type NewListDefaults, type CampaignReport, type DripStepDef, type EmailBlock, type ListPresentation, type ScheduleWhen, type SendScheduleState, type SetupState, type Template, type TemplateMode, type UsageRecord } from "./api.js";
 
 type View = "dashboard" | "setup" | "templates" | "compose" | "report" | "usage" | "schedules" | "branding" | "presentation" | "subscribers" | "segments" | "import" | "privacy" | "drips" | "costs" | "deliverability" | "importmap" | "team" | "audit" | "newsletters" | "addorg";
 
@@ -189,7 +196,7 @@ function Console() {
         {view === "schedules" && <Schedules org={org} grant={grant} />}
         {view === "usage" && <Usage org={org} />}
         {view === "costs" && <CostEstimator />}
-        {view === "subscribers" && <Subscribers org={org} />}
+        {view === "subscribers" && <Subscribers org={org} grant={grant} />}
         {view === "segments" && <Segments org={org} />}
         {view === "importmap" && <ImportMapper org={org} />}
         {view === "import" && <ImportSubscribers org={org} />}
@@ -285,7 +292,7 @@ function Setup({ org }: { org: string }) {
   );
 }
 
-function Report({ org, grant }: { org: string; grant: Grant | null }) {
+export function Report({ org, grant }: { org: string; grant: Grant | null }) {
   const campaigns = useAsync(() => api.campaigns(org), [org]);
   const [campaign, setCampaign] = useState("");
   const [report, setReport] = useState<CampaignReport | null>(null);
@@ -319,10 +326,24 @@ function Report({ org, grant }: { org: string; grant: Grant | null }) {
           <div className="card">
             <div className="kpis">
               <Kpi n={report.counters.sent} l="sent" />
+              {/* `delivered` is the denominator an operator actually reasons
+                  about — "sent" is what SES accepted, not what arrived — and it
+                  was computed, returned and then discarded here (#253). */}
+              <Kpi n={report.counters.delivered} l="delivered" />
               <Kpi n={report.counters.opens} l={`opens (${pct(report.rates.openRate)})`} />
               <Kpi n={report.counters.clicks} l={`clicks (${pct(report.rates.clickRate)})`} />
               <Kpi n={report.counters.bounces} l={`bounces (${pct(report.rates.bounceRate)})`} />
               <Kpi n={report.counters.complaints} l={`complaints (${pct(report.rates.complaintRate)})`} />
+              <Kpi n={report.counters.unsubscribes} l="unsubscribes" />
+              {/* Kept next to the delivery counters rather than hidden behind a
+                  zero check: `rejects` is SES refusing the message outright, and
+                  `renderingFailures` means a merge tag did not resolve — the one
+                  counter on this screen pointing at OUR bug rather than a
+                  recipient's mailbox. A row that only appears when it is nonzero
+                  is a row nobody knows to look for. */}
+              <Kpi n={report.counters.rejects} l="rejects" />
+              <Kpi n={report.counters.renderingFailures} l="rendering failures" />
+              <Kpi n={report.counters.deliveryDelays} l="delivery delays" />
             </div>
           </div>
           <div className="card">
@@ -528,7 +549,13 @@ function Templates({ org }: { org: string }) {
 
 interface DraftBlock { kind: "text" | "editorial"; html: string; label: string; url: string }
 
-function Compose({ org, onScheduled }: { org: string; onScheduled: () => void }) {
+const MODE_LABELS: Record<"blocks" | "html" | "mjml", string> = {
+  blocks: "Blocks",
+  html: "Raw HTML",
+  mjml: "MJML",
+};
+
+export function Compose({ org, onScheduled }: { org: string; onScheduled: () => void }) {
   const lists = useAsync(() => api.lists(org), [org]);
   const templates = useAsync(() => api.templates(org), [org]);
   const segments = useAsync(() => api.segments(org), [org]);
@@ -562,6 +589,14 @@ function Compose({ org, onScheduled }: { org: string; onScheduled: () => void })
     b.kind === "text" ? b.html.trim() !== "" : b.label.trim() !== "" && /^https?:\/\//.test(b.url.trim()),
   );
   const bodyValid = bodyMode === "blocks" ? blocksValid : bodyMode === "html" ? html.trim() !== "" : mjml.trim() !== "";
+  // "Holds something the operator typed", which is not the same as "is valid":
+  // a half-finished editorial block is exactly the draft worth warning about.
+  const filledBodyModes = ([
+    ["blocks", blocks.some((b) => b.html.trim() !== "" || b.label.trim() !== "" || b.url.trim() !== "")],
+    ["html", html.trim() !== ""],
+    ["mjml", mjml.trim() !== ""],
+  ] as const).filter(([, filled]) => filled).map(([m]) => m);
+  const otherFilledModes = filledBodyModes.filter((m) => m !== bodyMode);
   const valid =
     !!listId && isValidId(campaignId.trim()) && subject.trim() !== "" && bodyValid &&
     (when !== "at" || at !== "") && (when !== "recurring" || cron.trim() !== "");
@@ -649,10 +684,28 @@ function Compose({ org, onScheduled }: { org: string; onScheduled: () => void })
               <label key={m} style={{ display: "flex", gap: 6, alignItems: "center" }}>
                 <input type="radio" name="bodyMode" checked={bodyMode === m} onChange={() => setBodyMode(m)} />
                 {m === "blocks" ? "Blocks" : m === "html" ? "Raw HTML" : "MJML"}
+                {/* The three modes are independent state, so switching keeps
+                    what was typed — but the submit path reads ONLY the selected
+                    one, and nothing said so (#249). A mode holding text that
+                    will not be sent is the whole failure: the operator's model
+                    is "my draft is here", and the send disagrees. */}
+                {bodyMode !== m && filledBodyModes.includes(m) && (
+                  <span className="muted" title="This mode holds a draft that will not be sent.">
+                    · has a draft
+                  </span>
+                )}
               </label>
             ))}
           </span>
         </div>
+        {otherFilledModes.length > 0 && (
+          <p className="muted" style={{ margin: "0 0 8px" }}>
+            Sending the <strong>{MODE_LABELS[bodyMode]}</strong> body.{" "}
+            {otherFilledModes.map((m) => MODE_LABELS[m]).join(" and ")}{" "}
+            {otherFilledModes.length > 1 ? "hold drafts that are" : "holds a draft that is"} kept
+            here but not sent — switch back to send {otherFilledModes.length > 1 ? "one" : "it"}.
+          </p>
+        )}
         {bodyMode === "mjml" ? (
           <div>
             {mjmlTemplates.length > 0 && (
@@ -852,7 +905,7 @@ function Schedules({ org, grant }: { org: string; grant: Grant | null }) {
   );
 }
 
-function Subscribers({ org }: { org: string }) {
+export function Subscribers({ org, grant }: { org: string; grant: Grant | null }) {
   const [q, setQ] = useState("");
   const [query, setQuery] = useState("");
   const [rev, setRev] = useState(0);
@@ -867,6 +920,8 @@ function Subscribers({ org }: { org: string }) {
   const [msg, setMsg] = useState("");
   /** The subscriber whose detail panel is open (#205). */
   const [openSub, setOpenSub] = useState<string | null>(null);
+  const [importReport, setImportReport] = useState<SuppressionImportReport | null>(null);
+  const [importBusy, setImportBusy] = useState(false);
   const reload = () => setRev((n) => n + 1);
 
   const suppress = async () => {
@@ -883,6 +938,13 @@ function Subscribers({ org }: { org: string }) {
     setMsg("");
     try { await api.unsuppress(org, liftEmail); setMsg(`Lifted suppression for ${liftEmail}`); reload(); }
     catch (e) { setMsg(String(e)); }
+  };
+  const runSuppressionImport = async (dryRun: boolean) => {
+    setImportBusy(true); setMsg(""); setImportReport(null);
+    try {
+      setImportReport(await api.importSuppression(org, dryRun));
+      if (!dryRun) reload();
+    } catch (e) { setMsg(String(e)); } finally { setImportBusy(false); }
   };
 
   return (
@@ -952,6 +1014,65 @@ function Subscribers({ org }: { org: string }) {
           <button className="btn" onClick={() => void suppress()} disabled={!email}>Suppress</button>
         </div>
       </div>
+
+      {/* The route was built, routed and IAM-granted with nothing calling it
+          (#251). Gated on `suppression:manage` to match the server: these
+          entries are global, written in bulk, and have no bulk way back, so the
+          route is developer_admin-only and a button that 403s for everyone else
+          would be worse than no button. */}
+      {can(grant, "suppression:manage", org) && (
+        <div className="card">
+          <div className="muted" style={{ marginBottom: 8 }}>Import the SES account suppression list</div>
+          <p className="muted" style={{ marginTop: 0 }}>
+            Run this <strong>before</strong> importing subscribers. A subscriber base can be
+            re-exported from the old provider at any time; &ldquo;this address hard-bounced two
+            years ago&rdquo; exists only on the SES account list. Skip it and the first campaign
+            after a migration mails every one of those addresses — straight into the bounce rate
+            the deliverability halt exists to catch.
+          </p>
+          <div className="row">
+            <button className="btn ghost" disabled={importBusy} onClick={() => void runSuppressionImport(true)}>
+              {importBusy ? "Reading…" : "Dry run"}
+            </button>
+            <button className="btn" disabled={importBusy} onClick={() => void runSuppressionImport(false)}>
+              Import
+            </button>
+          </div>
+          {importReport && (
+            <div style={{ marginTop: 8 }}>
+              <p className="muted" style={{ margin: 0 }}>
+                {importReport.dryRun ? "Dry run — nothing was written. " : ""}
+                Read {importReport.read}, {importReport.dryRun ? "would write" : "wrote"}{" "}
+                {importReport.written}
+                {importReport.malformed > 0 ? `, ${importReport.malformed} with no usable address` : ""}.
+              </p>
+              {/* Listed, not counted. The alternative reading of "4 skipped" is
+                  "4 addresses we will now mail", and that is the one that
+                  matters — an unmapped reason is never written. */}
+              {importReport.unmapped.length > 0 && (
+                <>
+                  <p className="err" style={{ marginBottom: 4 }}>
+                    {importReport.unmapped.length} entr
+                    {importReport.unmapped.length === 1 ? "y" : "ies"} carry a reason we do not map
+                    and were NOT suppressed — these addresses stay mailable.
+                  </p>
+                  <table>
+                    <thead><tr><th>Email</th><th>Reason</th></tr></thead>
+                    <tbody>
+                      {importReport.unmapped.map((u) => (
+                        <tr key={u.email}>
+                          <td className="t-strong">{u.email}</td>
+                          <td className="muted">{u.reason}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </>
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="card">
         <div className="muted" style={{ marginBottom: 8 }}>Suppression list</div>
@@ -2201,7 +2322,30 @@ function PresentationEditor({ org }: { org: string }) {
  * before it creates it, and surfaces the DNS records afterwards — a new org that
  * cannot send because nobody saw the DKIM records is the common failure.
  */
-function AddOrganization() {
+/** One entry per line or comma, blanks dropped — the shape `recipientAllowedForDev` reads. */
+export function parseDevAllowlist(text: string): string[] {
+  return text.split(/[\n,]/).map((e) => e.trim()).filter(Boolean);
+}
+
+/**
+ * The two forms `recipientAllowedForDev` can actually match (#250): an exact
+ * address, or a leading-`@` domain suffix. `example.com` and `*@example.com`
+ * both look like they grant a domain and match NOTHING — the same silent
+ * undeliverability this issue is about, re-created one layer up.
+ */
+export function isDevAllowlistEntry(entry: string): boolean {
+  const e = entry.trim();
+  // The domain half must be dotted: the matcher compares the WHOLE domain, so
+  // `@localhost` can never equal a real recipient's domain.
+  const domain = "[A-Za-z0-9-]+(?:\\.[A-Za-z0-9-]+)+";
+  // The local half excludes `*` deliberately. A permissive "anything but @"
+  // class accepts `*@example.com`, which reads as a wildcard, is compared
+  // literally, and therefore denies every address it appears to allow.
+  if (e.startsWith("@")) return new RegExp(`^@${domain}$`).test(e);
+  return new RegExp(`^[A-Za-z0-9._%+-]+@${domain}$`).test(e);
+}
+
+export function AddOrganization() {
   const [form, setForm] = useState<CreateOrgInput>({
     name: "",
     primaryDomain: "",
@@ -2211,11 +2355,23 @@ function AddOrganization() {
     environment: "prod",
   });
   const [poolId, setPoolId] = useState("");
+  const [allowlistText, setAllowlistText] = useState("");
   const [result, setResult] = useState<CreateOrgResult | null>(null);
   const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState(false);
 
   const set = (patch: Partial<CreateOrgInput>) => setForm((f) => ({ ...f, ...patch }));
+
+  const allowlist = parseDevAllowlist(allowlistText);
+  // An entry the matcher cannot match is worse than no entry: it looks like the
+  // operator granted an address and denies it anyway. Both halves are blocking
+  // (#250) because creation is the ONLY chance to set this field — there is no
+  // org-update route, so an org provisioned as `dev` with an empty or unusable
+  // allowlist can never deliver a message and can never be repaired.
+  const badEntries = allowlist.filter((e) => !isDevAllowlistEntry(e));
+  const devNeedsAllowlist = form.environment === "dev" && allowlist.length === 0;
+  const canSubmit =
+    !busy && !!form.name && !!form.primaryDomain && !devNeedsAllowlist && badEntries.length === 0;
 
   const submit = async () => {
     setBusy(true); setMsg(""); setResult(null);
@@ -2223,6 +2379,9 @@ function AddOrganization() {
       const body: CreateOrgInput = {
         ...form,
         ...(form.magicLinks && poolId.trim() ? { subscriberPool: { poolId: poolId.trim() } } : {}),
+        // Omitted, not empty, for a prod org: `recipientAllowedForDev` never
+        // gates prod, so storing a list there would record a rule nothing reads.
+        ...(form.environment === "dev" ? { devAllowlist: allowlist } : {}),
       };
       setResult(await api.createOrg(body));
     } catch (e) { setMsg((e as Error).message); } finally { setBusy(false); }
@@ -2259,6 +2418,38 @@ function AddOrganization() {
             <option value="dev">dev — fail-closed to an allowlist</option>
           </select>
         </label>
+        {form.environment === "dev" && (
+          <label>
+            Dev send allowlist
+            <textarea
+              value={allowlistText}
+              onChange={(e) => setAllowlistText(e.target.value)}
+              rows={4}
+              placeholder={"qa@team.example\n@team.example"}
+              style={{ width: "100%", fontFamily: "monospace" }}
+            />
+            <div className="muted">
+              One per line: an exact address, or <code>@domain</code> for everyone at a domain. A{" "}
+              <strong>dev org sends only to these addresses</strong> — everything else is dropped,
+              and the drop is silent: campaigns schedule, run, and reach no one. This is the only
+              screen that can set the list, so it cannot be left for later.
+            </div>
+            {devNeedsAllowlist && (
+              <div className="err">
+                A dev org with an empty allowlist can never deliver a message. Add at least one
+                entry, or choose <code>prod</code>.
+              </div>
+            )}
+            {badEntries.length > 0 && (
+              <div className="err">
+                Not a form the send guard matches: {badEntries.join(", ")}. Use{" "}
+                <code>name@example.com</code> or <code>@example.com</code> — a bare domain or a{" "}
+                <code>*@</code> wildcard matches nothing and would deny the address it looks like it
+                allows.
+              </div>
+            )}
+          </label>
+        )}
       </div>
 
       <div className="card">
@@ -2283,7 +2474,7 @@ function AddOrganization() {
         )}
       </div>
 
-      <button className="btn" disabled={busy || !form.name || !form.primaryDomain} onClick={submit}>
+      <button className="btn" disabled={!canSubmit} onClick={submit}>
         {busy ? "Provisioning…" : "Create organization"}
       </button>
       {msg && <div className="error" style={{ marginTop: 8 }}>{msg}</div>}

@@ -49,6 +49,9 @@ cannot tell whether it was due five minutes ago or next Tuesday — which is
 exactly the decision the pause window exists to support. Fixing it spans the
 entity type, the write path, the API projection and the UI.
 **Where:** `packages/core/src/entities.ts:442-452` · `apps/admin-web/src/api.ts:195-204` · `apps/admin-web/src/App.tsx:832`
+**Status:** deferred — the fix has to add a field to `SendScheduleState` and
+populate it in the campaign-schedule write path, which is under concurrent
+change. Not started rather than half-started.
 
 ### #249 — Switching body mode in Compose silently discards the body
 **Screen:** Compose & schedule · **Kind:** bug · **Severity:** high
@@ -61,6 +64,12 @@ submit path reads only the current one, and the operator has no signal that
 their draft survived or that it did not. There is no draft persistence anywhere
 in `Compose`, so a mis-click loses the whole message.
 **Where:** `apps/admin-web/src/App.tsx:539-542,648-654,580-597`
+**Status:** fixed — with a correction to the premise: the three slots are
+separate `useState`, so switching keeps the text; what was missing was any
+signal that the unselected slots hold a draft the submit path will not send.
+Each mode now marks a held draft, and a banner names both the body that will be
+sent and the ones that will not. No draft persistence was added — the text was
+never being discarded.
 
 ### #250 — A dev org created in the console can never send to anyone
 **Screen:** Add organization · **Kind:** bug · **Severity:** high
@@ -75,6 +84,11 @@ produces an organization that can never deliver a message, and the failure mode
 is silence: campaigns schedule, run, and reach no one. The prototype presents
 the allowlist as the answer to "how do I test safely" (`demo/index.html:1303`).
 **Where:** `apps/admin-web/src/App.tsx:2255-2261` · `apps/admin-web/src/api.ts:463-473` · `packages/domain/src/send.ts:226-248` · `services/api/src/index.ts:2199`
+**Status:** fixed — Add organization collects the allowlist when `dev` is
+selected, refuses to submit a dev org with an empty one (creation is the only
+chance to set it), and rejects entries `recipientAllowedForDev` cannot match —
+`*@example.com` and a bare domain both deny every address they appear to allow.
+The fail-closed guard is untouched.
 
 ### #251 — The SES suppression import has no console surface
 **Screen:** Subscribers (prototype: Suppression) · **Kind:** missing-feature · **Severity:** high
@@ -89,6 +103,11 @@ migration mails every one of those addresses, straight into the bounce rate the
 deliverability halt exists to catch. Today that step is reachable only by
 calling the API by hand.
 **Where:** `services/api/src/index.ts:1677,2241` · `infra/cdk/lib/control-plane-stack.ts:1447` · `apps/admin-web/src/api.ts` (no client method)
+**Status:** fixed — `api.importSuppression` plus a card on Subscribers with a
+dry run, gated on `suppression:manage` to match the server rather than offering
+a button that 403s. Unmapped reasons are listed with their addresses, not
+counted: "4 skipped" reads as housekeeping, and what it means is "4 addresses we
+will now mail".
 
 ### #252 — Large imports are refused by the only import screens that exist
 **Screen:** Import (mapper), Import (simple) · **Kind:** missing-feature · **Severity:** high
@@ -103,6 +122,12 @@ textarea. Moving a real subscriber base in, on migration day, therefore hits a
 (`accept=".csv,text/csv"`, read as text) where the prototype and the async path
 both take the gzipped JSON Lines a Pinpoint export job produces.
 **Where:** `services/api/src/index.ts:1596-1606,1701,1728,2243-2244` · `apps/admin-web/src/App.tsx:1443-1448,1493,1780-1783`
+**Status:** deferred — larger than it reads. The console cannot PUT to the
+presigned URL at all until `ImportBucket` carries a CORS rule allowing PUT from
+the console origin, and it has none (`infra/cdk/lib/control-plane-stack.ts:379`
+sets `blockPublicAccess`, `enforceSSL` and lifecycle rules only). That makes
+this an infra + console change whose central step cannot be verified locally,
+on top of presign → PUT → async → poll and the gzipped-JSONL accept change.
 
 ### #253 — The report drops four counters the API already returns
 **Screen:** Campaign report · **Kind:** bug · **Severity:** high
@@ -116,6 +141,11 @@ the only counter here pointing at our bug rather than a recipient's mailbox. The
 prototype gives all of them a panel (`demo/index.html:866-876`); the data is
 already on the wire and nothing renders it.
 **Where:** `packages/domain/src/reporting.ts:20-33` · `apps/admin-web/src/api.ts:80-85` · `apps/admin-web/src/App.tsx:320-327`
+**Status:** fixed — the report renders all ten counters, zeros included, so a
+rendering failure is readable as a fact rather than inferred from a missing
+tile. `rejects`/`renderingFailures`/`deliveryDelays` were also typed as the
+literal `0` in `api.ts`, asserting the API never returns a nonzero one; widened
+to `number`.
 
 ---
 

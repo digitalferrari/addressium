@@ -79,7 +79,11 @@ export interface ClickMapRow {
 }
 export interface CampaignReport {
   campaignId: string;
-  counters: { sent: number; delivered: number; opens: number; clicks: number; bounces: number; complaints: number; unsubscribes: number, rejects: 0, renderingFailures: 0, deliveryDelays: 0 };
+  /** Mirrors `HotCounters`. `rejects`/`renderingFailures`/`deliveryDelays` were
+   * typed as the literal `0` (#253), which asserted the API never returns a
+   * nonzero one — it does, and a rendering failure is our bug, not a
+   * recipient's mailbox. */
+  counters: { sent: number; delivered: number; opens: number; clicks: number; bounces: number; complaints: number; unsubscribes: number; rejects: number; renderingFailures: number; deliveryDelays: number };
   rates: { openRate: number; clickRate: number; bounceRate: number; complaintRate: number };
   clickMap: { sent: number; rows: ClickMapRow[] };
 }
@@ -296,6 +300,23 @@ export interface SuppressionEntry {
   source: string;
   scope: "org" | "global";
   addedAt: string;
+}
+
+/** Mirrors the domain's `SuppressionImportReport` (#251). */
+export interface SuppressionImportReport {
+  /** Entries the provider returned. */
+  read: number;
+  /** Entries written — or that would be, on a dry run. */
+  written: number;
+  bySource: Record<string, number>;
+  /**
+   * Entries whose reason we do not map — never written, so these addresses stay
+   * mailable. Listed rather than counted: "3 skipped" reads as housekeeping,
+   * and what it means is "3 addresses we will now mail".
+   */
+  unmapped: { email: string; reason: string }[];
+  malformed: number;
+  dryRun: boolean;
 }
 
 /** SES's live account-list entry for one address, or the check could not be made (#247). */
@@ -590,6 +611,14 @@ export const api = {
       ...(acknowledgeManualConfirmation ? { acknowledgeManualConfirmation: true } : {}),
     }),
   suppressions: (org: string) => call<SuppressionEntry[]>("GET", `/orgs/${org}/suppressions`),
+  /**
+   * Import the SES ACCOUNT suppression list (#251). The half of a migration
+   * nothing else can reconstruct: a subscriber export can be taken again, but
+   * "this address hard-bounced two years ago" lives only on the account list.
+   * Reads the deployment's own SES account — there is nothing to name.
+   */
+  importSuppression: (orgId: string, dryRun: boolean) =>
+    call<SuppressionImportReport>("POST", `/orgs/${orgId}/import/suppression`, { dryRun }),
   /** Both local and live (SES) status for one address (#247) — used by the subscriber-detail view. */
   suppressionCheck: (org: string, email: string) =>
     call<SuppressionCheckResult>("GET", `/orgs/${org}/suppression/check?email=${encodeURIComponent(email)}`),
