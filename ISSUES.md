@@ -321,6 +321,9 @@ type and populated by nothing. So the ad path exists end to end in the backend
 and is unreachable from the console, which for a publisher-facing product means
 the revenue-carrying block is the one you cannot place.
 **Where:** `apps/admin-web/src/api.ts:166-169,128` · `packages/domain/src/render.ts:17` · `apps/admin-web/src/App.tsx:529,557-558,726-727`
+**Status:** fixed — Templates now declare named ad slots, Compose can author `ad`
+blocks, and the Ad tags screen binds LiveIntent fills to recurring series using
+the existing series API. The renderer's verbatim/untracked behavior is unchanged.
 
 ### #258 — Templates and Compose hold separate copies of the same body
 **Screen:** Compose & schedule · **Kind:** ux-gap · **Severity:** medium
@@ -386,6 +389,27 @@ constant supplied.
 
 ---
 
+### #266 — API & webhooks console surface is deferred
+**Screen:** API & webhooks · **Kind:** deferred-feature · **Severity:** medium
+
+The console now has an informational API & webhooks page, but API-key management
+is deliberately deferred. When it is built, keys should be org-scoped, shown
+only once, stored hashed, revocable and least-privilege rather than becoming a
+second authentication path with unclear ownership.
+**Decision:** deferred while feeds, ad tags and customer-record delivery land.
+
+### #267 — Outbound webhook authentication is deferred
+**Screen:** API & webhooks · **Kind:** security-gap · **Severity:** high
+
+Customer-record delivery notifies a separate system when a visitor subscribes
+to or unsubscribes from a newsletter. The first delivery slice uses the
+organization-configured endpoint and secret as a basic credential, and delivery
+is queued. Before treating this as a general public webhook contract, add HMAC
+signing, secret rotation and replay protection.
+**Decision:** defer strong webhook authentication until the delivery contract is
+proven; do not advertise the current simple secret header as a finished webhook
+security model.
+
 ## Not filed, and why
 
 These are the largest prototype/console differences that are **not** defects.
@@ -408,11 +432,11 @@ single org; `api.usage(org)` cannot produce the cross-org view, which makes it a
 backend gap rather than a console one.
 
 - Every surface the prototype tags `Not yet built` — Analytics trends, the click
-  map overlay, Feeds, Merge tags, Ad tags (the management screen, as opposed to
-  #257's authoring gap), API keys, series-level reporting, the re-engagement
-  policy editor, engagement-recency segments, per-subscriber timelines. These
-  are declared design intent that the code has deliberately not implemented, and
-  the prototype says so in place.
+  map overlay, API keys, series-level reporting, engagement-recency segments,
+  per-subscriber timelines. These are declared design intent that the code has
+  deliberately not implemented, and the prototype says so in place. The
+  re-engagement policy editor is now implemented: it persists the per-org
+  policy, validates the selected send list, and feeds the existing weekly sweep.
 - **Identity & pools** — the prototype's own copy says every field on it is
   read-only and that no org-update route exists. A screen that can only display
   provisioning output is a fair thing to defer.

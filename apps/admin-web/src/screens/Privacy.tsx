@@ -88,7 +88,7 @@ export function Privacy({ org }: { org: string }) {
 
   return (
     <div>
-      <h1 className="h1">Data requests · {org || "—"}</h1>
+      <h1 className="h1">Data &amp; exports · {org || "—"}</h1>
       <p className="muted" style={{ marginTop: -8 }}>
         Handle DSAR export and erasure requests. Erase requires the <code>subscribers:delete</code> role and will 403 otherwise.
       </p>

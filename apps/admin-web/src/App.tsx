@@ -13,7 +13,7 @@
  * over one file.
  */
 import { useEffect, useMemo, useState } from "react";
-import { completeLoginIfPresent, decodeClaims, getTokens, isExpired, login, logout } from "./auth.js";
+import { completeLoginIfPresent, decodeClaims, getTokens, isExpired, isLocalDevelopment, login, logout } from "./auth.js";
 import { grantFromClaims, can, type Grant } from "./rbac.js";
 import { api } from "./api.js";
 import { Dashboard, HealthBadge } from "./screens/Dashboard.js";
@@ -29,6 +29,10 @@ import { Schedules } from "./screens/Schedules.js";
 import { Usage } from "./screens/Usage.js";
 import { CostEstimator } from "./screens/CostEstimator.js";
 import { Subscribers } from "./screens/Subscribers.js";
+import { Suppression } from "./screens/Suppression.js";
+import { Feeds } from "./screens/Feeds.js";
+import { AdTags } from "./screens/AdTags.js";
+import { ApiWebhooks } from "./screens/ApiWebhooks.js";
 import { Segments } from "./screens/Segments.js";
 import { ImportMapper } from "./screens/ImportMapper.js";
 import { ImportSubscribers } from "./screens/ImportSubscribers.js";
@@ -68,8 +72,8 @@ export function App() {
         <div className="card" style={{ textAlign: "center" }}>
           <div className="brand">addressium</div>
           <p className="muted">Operator console</p>
-          <button className="btn" onClick={() => void login()}>
-            Sign in with Cognito
+          <button className="btn" onClick={() => void login().then(() => setAuthed(true))}>
+            {isLocalDevelopment ? "Enter local development console" : "Sign in with Cognito"}
           </button>
         </div>
       </div>
@@ -106,7 +110,7 @@ function Console() {
         // without this the picker SHOWS the first org while `org` is still ""
         // — every request then goes to /orgs//lists and 404s, and the header
         // reads "Dashboard · —" next to a populated dropdown.
-        setOrg((cur) => (cur === "" && ids.length > 0 ? ids[0] : cur));
+        setOrg((cur) => (cur === "" ? (ids[0] ?? cur) : cur));
       })
       // A failure here leaves whatever the claim gave us. The switcher degrades
       // to the old behaviour rather than emptying itself under the user.
@@ -166,19 +170,23 @@ function Console() {
       <main className="main">
         <Topbar orgName={orgName} org={org} view={view} orgEnv={orgEnv} claims={claims} />
         <div className="view" key={view}>
-        {view === "dashboard" && (<><HealthBadge org={org} /><Dashboard org={org} onGoToSetup={() => setView("setup")} /></>)}
+        {view === "dashboard" && (<><HealthBadge org={org} /><Dashboard org={org} onGoToSetup={() => setView("setup")} onCompose={() => setView("compose")} onViewCampaigns={() => setView("campaigns")} /></>)}
         {view === "setup" && <Setup org={org} />}
         {view === "newsletters" && <Newsletters org={org} />}
         {view === "templates" && <Templates org={org} />}
         {view === "mergetags" && <MergeTags org={org} />}
         {view === "compose" && <Compose org={org} onScheduled={() => setView("schedules")} />}
-        {view === "campaigns" && <Campaigns org={org} grant={grant} />}
+        {view === "campaigns" && <Campaigns org={org} grant={grant} onCompose={() => setView("compose")} />}
         {view === "report" && <Report org={org} grant={grant} />}
         {view === "analytics" && <Analytics org={org} grant={grant} />}
         {view === "schedules" && <Schedules org={org} grant={grant} />}
         {view === "usage" && <Usage org={org} />}
         {view === "costs" && <CostEstimator />}
         {view === "subscribers" && <Subscribers org={org} grant={grant} />}
+        {view === "suppression" && <Suppression org={org} />}
+        {view === "feeds" && <Feeds org={org} />}
+        {view === "adtags" && <AdTags org={org} />}
+        {view === "apiwebhooks" && <ApiWebhooks />}
         {view === "segments" && <Segments org={org} />}
         {view === "importmap" && <ImportMapper org={org} />}
         {view === "import" && <ImportSubscribers org={org} />}

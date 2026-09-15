@@ -184,7 +184,13 @@ export interface EditionPlan {
  */
 export function buildEdition(
   items: FeedItem[],
-  opts: { baseCampaignId: string; editionKey: string; maxItems?: number; subjectPrefix?: string },
+  opts: {
+    baseCampaignId: string;
+    editionKey: string;
+    maxItems?: number;
+    subjectPrefix?: string;
+    fieldMap?: Record<string, string>;
+  },
 ): EditionPlan {
   const usable = items.filter((i) => i.title && i.link);
   const chosen = usable.slice(0, opts.maxItems ?? 10);
@@ -195,6 +201,14 @@ export function buildEdition(
     label: i.title!,
     url: i.link!,
   }));
+  // Feed mappings are per-campaign values: the lead item is the stable source
+  // for placeholders such as {{article_excerpt}} in the generated edition.
+  // Keep the generated editorial links as well; mapped fields supplement them.
+  const mapped = mapFeedItem(chosen[0] ?? {}, opts.fieldMap ?? {});
+  const mappedTags = Object.keys(mapped).filter((tag) => tag !== (opts.fieldMap ?? {}).link);
+  if (mappedTags.length > 0) {
+    blocks.unshift({ kind: "text", html: mappedTags.map((tag) => `{{${tag}}}`).join("\n") });
+  }
   return {
     editionId: `${opts.baseCampaignId}-${opts.editionKey}`,
     subject,
@@ -226,12 +240,14 @@ export function planLaunchDescriptor(
     const edition = buildEdition(items, {
       baseCampaignId: payload.descriptor.campaignId,
       editionKey: payload.editionKey,
+      fieldMap: payload.feed.fieldMap,
     });
     return {
       ...payload.descriptor,
       campaignId: edition.editionId,
       subject: edition.subject,
       template: edition.template,
+      campaignAttributes: mapFeedItem(items[0] ?? {}, payload.feed.fieldMap ?? {}),
     };
   }
   return {

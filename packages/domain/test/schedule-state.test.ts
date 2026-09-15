@@ -19,6 +19,9 @@ import {
   scheduleActive,
   markScheduleActive,
   transitionSchedule,
+  completeScheduleRange,
+  ConcurrentModificationError,
+  planFanOut,
   type EmailTemplate,
 } from "@addressium/domain";
 
@@ -70,6 +73,7 @@ test("scheduleActive: undefined (legacy) and active fire; paused/archived don't"
   assert.equal(scheduleActive({ ...base, status: "active" }), true);
   assert.equal(scheduleActive({ ...base, status: "paused" }), false);
   assert.equal(scheduleActive({ ...base, status: "archived" }), false);
+  assert.equal(scheduleActive({ ...base, status: "completed" }), false);
 });
 
 test("markScheduleActive records active and preserves createdAt on resume", async () => {
@@ -182,4 +186,146 @@ test("schedules.list returns an org's lifecycle records", async () => {
   const rows = await h.stores.schedules.list(ORG);
   assert.equal(rows.length, 2);
   assert.deepEqual(rows.map((r) => r.scheduleId).sort(), ["a", "b"]);
+});
+
+test("successful one-off completes, rejects restart/pause, and replay cannot send to new subscribers", async () => {
+  const h = await harness();
+  await confirmed(h, "first@example.com");
+  const initial = await markScheduleActive(h.stores, h.clock, { orgId: ORG, scheduleId: "done", kind: "one_off" });
+  assert.equal((await send(h, "done")).sent, 1);
+  const done = await h.stores.schedules.get(ORG, "done");
+  assert.equal(done?.status, "completed");
+  assert.equal(done?.createdAt, initial.createdAt);
+  await confirmed(h, "later@example.com");
+  assert.equal((await send(h, "done")).skipped, true);
+  assert.equal(h.sender.sent.length, 1);
+  for (const action of ["start", "pause"] as const) {
+    await assert.rejects(transitionSchedule(h.stores, h.clock, { orgId: ORG, scheduleId: "done", action }), /completed/);
+  }
+  await transitionSchedule(h.stores, h.clock, { orgId: ORG, scheduleId: "done", action: "archive" });
+  await assert.rejects(transitionSchedule(h.stores, h.clock, { orgId: ORG, scheduleId: "done", action: "start" }), /completed/);
+  await assert.rejects(markScheduleActive(h.stores, h.clock, { orgId: ORG, scheduleId: "done", kind: "one_off" }), /completed/);
+});
+
+test("empty and fully suppressed one-offs complete; recurring and legacy sends keep their lifecycle", async () => {
+  const h = await harness();
+  await markScheduleActive(h.stores, h.clock, { orgId: ORG, scheduleId: "empty", kind: "one_off" });
+  await send(h, "empty");
+  assert.equal((await h.stores.schedules.get(ORG, "empty"))?.status, "completed");
+  const sub = await confirmed(h, "blocked@example.com");
+  await h.stores.subscribers.put({ ...sub, status: "suppressed" });
+  await markScheduleActive(h.stores, h.clock, { orgId: ORG, scheduleId: "blocked", kind: "one_off" });
+  assert.equal((await send(h, "blocked")).suppressed, 1);
+  assert.equal((await h.stores.schedules.get(ORG, "blocked"))?.status, "completed");
+  await markScheduleActive(h.stores, h.clock, { orgId: ORG, scheduleId: "series", kind: "recurring" });
+  await send(h, "series");
+  assert.equal((await h.stores.schedules.get(ORG, "series"))?.status, "active");
+  await send(h, "legacy");
+  assert.equal(await h.stores.schedules.get(ORG, "legacy"), undefined);
+});
+
+test("failed send stays active and retry completes without duplicating earlier deliveries", async () => {
+  const h = await harness();
+  await confirmed(h, "one@example.com");
+  await confirmed(h, "two@example.com");
+  await markScheduleActive(h.stores, h.clock, { orgId: ORG, scheduleId: "retry", kind: "one_off" });
+  const original = h.sender.send.bind(h.sender);
+  let calls = 0;
+  h.sender.send = async (message) => {
+    if (++calls === 2) throw new Error("SES unavailable");
+    await original(message);
+  };
+  await assert.rejects(send(h, "retry"), /SES unavailable/);
+  assert.equal((await h.stores.schedules.get(ORG, "retry"))?.status, "active");
+  await send(h, "retry");
+  assert.equal(h.sender.sent.length, 2);
+  assert.equal((await h.stores.schedules.get(ORG, "retry"))?.status, "completed");
+});
+
+test("completion write failure retries after all recipients were already sent", async () => {
+  const h = await harness();
+  await confirmed(h, "reader@example.com");
+  await markScheduleActive(h.stores, h.clock, { orgId: ORG, scheduleId: "write-retry", kind: "one_off" });
+  const put = h.stores.schedules.put.bind(h.stores.schedules);
+  let fail = true;
+  h.stores.schedules.put = async (state, opts) => {
+    if (state.status === "completed" && fail) { fail = false; throw new Error("write failed"); }
+    await put(state, opts);
+  };
+  await assert.rejects(send(h, "write-retry"), /write failed/);
+  await send(h, "write-retry");
+  assert.equal(h.sender.sent.length, 1);
+  assert.equal((await h.stores.schedules.get(ORG, "write-retry"))?.status, "completed");
+});
+
+test("out-of-order slices and duplicate retries complete only after every range", async () => {
+  const h = await harness();
+  for (let i = 0; i < 3; i++) await confirmed(h, `reader${i}@example.com`);
+  const rows = await h.stores.subscriptions.listConfirmed(ORG, LIST);
+  const slices = planFanOut(rows.map((r) => r.subscriberId).sort(), 1);
+  await markScheduleActive(h.stores, h.clock, { orgId: ORG, scheduleId: "sliced", kind: "one_off" });
+  const sliceSend = (index: number) => sendCampaign(h.stores, h.sender, h.magic, h.clock, {
+    orgId: ORG, campaignId: "sliced", listId: LIST, subject: "x", template, slice: slices[index],
+  });
+  await sliceSend(2);
+  await sliceSend(2);
+  assert.equal((await h.stores.schedules.get(ORG, "sliced"))?.status, "active");
+  await Promise.all([sliceSend(0), sliceSend(1)]);
+  assert.equal((await h.stores.schedules.get(ORG, "sliced"))?.status, "completed");
+  assert.equal(h.sender.sent.length, 3);
+});
+
+test("duplicate worker cannot complete while the original send is in flight", async () => {
+  const h = await harness();
+  await confirmed(h, "reader@example.com");
+  await markScheduleActive(h.stores, h.clock, { orgId: ORG, scheduleId: "race", kind: "one_off" });
+  let entered!: () => void;
+  let release!: () => void;
+  const started = new Promise<void>((resolve) => { entered = resolve; });
+  const blocked = new Promise<void>((resolve) => { release = resolve; });
+  const original = h.sender.send.bind(h.sender);
+  h.sender.send = async (message) => { entered(); await blocked; await original(message); };
+  const sending = send(h, "race");
+  await started;
+  try {
+    await assert.rejects(send(h, "race"), /awaiting recorded delivery/);
+    assert.equal((await h.stores.schedules.get(ORG, "race"))?.status, "active");
+  } finally { release(); }
+  await sending;
+  assert.equal((await h.stores.schedules.get(ORG, "race"))?.status, "completed");
+  assert.equal(h.sender.sent.length, 1);
+});
+
+test("stale pause/resume writes lose to completion, even with a fixed clock", async () => {
+  const h = await harness();
+  const initial = await markScheduleActive(h.stores, h.clock, { orgId: ORG, scheduleId: "cas", kind: "one_off" });
+  await completeScheduleRange(h.stores, h.clock, ORG, "cas");
+  await assert.rejects(h.stores.schedules.put({ ...initial, status: "paused" }, { ifRevision: initial.revision }), ConcurrentModificationError);
+  assert.equal((await h.stores.schedules.get(ORG, "cas"))?.status, "completed");
+});
+
+test("archive during dispatch stays archived; paused in-flight completion clears parked work", async () => {
+  for (const action of ["pause", "archive"] as const) {
+    const h = await harness();
+    await confirmed(h, "reader@example.com");
+    await markScheduleActive(h.stores, h.clock, { orgId: ORG, scheduleId: "operator", kind: "one_off" });
+    const original = h.sender.send.bind(h.sender);
+    h.sender.send = async (message) => {
+      await transitionSchedule(h.stores, h.clock, { orgId: ORG, scheduleId: "operator", action });
+      if (action === "pause") await send(h, "operator");
+      await original(message);
+    };
+    await send(h, "operator");
+    const state = await h.stores.schedules.get(ORG, "operator");
+    assert.equal(state?.status, action === "pause" ? "completed" : "archived");
+    assert.equal(state?.deferred, undefined);
+  }
+});
+
+test("halted send does not complete", async () => {
+  const h = await harness();
+  await markScheduleActive(h.stores, h.clock, { orgId: ORG, scheduleId: "halted", kind: "one_off" });
+  await h.stores.halts.halt(ORG, "halted", h.clock.now().toISOString());
+  assert.equal((await send(h, "halted")).halted, true);
+  assert.equal((await h.stores.schedules.get(ORG, "halted"))?.status, "active");
 });

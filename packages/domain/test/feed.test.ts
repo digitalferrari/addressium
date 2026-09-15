@@ -77,3 +77,14 @@ test("planLaunchDescriptor builds from feed items, else stamps a fresh id", () =
   assert.equal(noFeed.campaignId, "daily-2026-07-20");
   assert.equal(noFeed.subject, "fallback"); // base subject reused
 });
+
+test("planLaunchDescriptor carries lead feed mappings into the edition", () => {
+  const payload: RecurringLaunchPayload = {
+    descriptor: { orgId: "summit", campaignId: "daily", listId: "ledger", subject: "fallback", template: { blocks: [] } },
+    feed: { url: "https://northwindtimes.example/feed", format: "rss", fieldMap: { title: "article_title", content: "article_excerpt" } },
+    editionKey: "2026-07-20",
+  };
+  const planned = planLaunchDescriptor(payload, parseFeed(RSS, "rss"));
+  assert.deepEqual(planned.campaignAttributes, { article_title: "Markets rally", article_excerpt: "Stocks up" });
+  assert.deepEqual(planned.template.blocks?.[0], { kind: "text", html: "{{article_title}}\n{{article_excerpt}}" });
+});

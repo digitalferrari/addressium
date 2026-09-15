@@ -27,6 +27,7 @@ export {
 } from "./ses-events.js";
 export { KmsMagicLinkSigner, type KmsMagicLinkSignerConfig } from "./kms.js";
 export { SqsSendQueue } from "./sqs.js";
+export { SqsCustomerSyncQueue, type CustomerSyncEvent } from "./customer-sync.js";
 export { EventBridgeScheduler, type EventBridgeSchedulerConfig } from "./scheduler.js";
 export { SfnDripStarter, type SfnDripStarterConfig } from "./sfn.js";
 export { getSecret } from "./secrets.js";

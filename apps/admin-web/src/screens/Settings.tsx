@@ -27,15 +27,16 @@
  * Team 403'd into a red box would be the console blaming them for a door it
  * drew. A tab the grant cannot use is not rendered at all.
  */
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useAsync } from "../useAsync.js";
 import { api } from "../api.js";
 import { can, type Capability, type Grant } from "../rbac.js";
 import { Deliverability } from "./Deliverability.js";
 import { Privacy } from "./Privacy.js";
 import { Team } from "./Team.js";
+import { SendingIdentity } from "./SendingIdentity.js";
 
-type TabId = "domains" | "magic" | "alerts" | "privacy" | "team";
+type TabId = "domains" | "magic" | "alerts" | "privacy" | "team" | "customer";
 
 const TABS: { id: TabId; label: string; cap: Capability }[] = [
   { id: "domains", label: "Domains & deliverability", cap: "reports:view" },
@@ -43,6 +44,7 @@ const TABS: { id: TabId; label: string; cap: Capability }[] = [
   { id: "alerts", label: "Alerts & SNS", cap: "alerts:manage" },
   { id: "privacy", label: "Privacy & data", cap: "subscribers:manage" },
   { id: "team", label: "Team", cap: "team:manage" },
+  { id: "customer", label: "Customer sync", cap: "identity:manage" },
 ];
 
 export function Settings({ org, grant }: { org: string; grant: Grant | null }) {
@@ -84,13 +86,68 @@ export function Settings({ org, grant }: { org: string; grant: Grant | null }) {
         ))}
       </div>
 
-      {active === "domains" && <DomainsTab org={org} />}
+      {active === "domains" && (
+        <>
+          <DomainsTab org={org} />
+          {can(grant, "identity:manage", org) ? <SendingIdentity org={org} /> : (
+            <p className="muted">Live SES verification and account quota require identity:manage.</p>
+          )}
+        </>
+      )}
       {active === "magic" && <MagicLinkTab org={org} />}
       {active === "alerts" && <Deliverability org={org} />}
       {active === "privacy" && <Privacy org={org} />}
       {active === "team" && <TeamTab org={org} />}
+      {active === "customer" && <CustomerSyncTab org={org} />}
     </div>
   );
+}
+
+function CustomerSyncTab({ org }: { org: string }) {
+  const loaded = useAsync(() => api.customerSync(org), [org]);
+  const [endpoint, setEndpoint] = useState("");
+  const [tableName, setTableName] = useState("");
+  const [secret, setSecret] = useState("");
+  const [enabled, setEnabled] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState("");
+
+  useEffect(() => {
+    if (!loaded.data) return;
+    setEndpoint(loaded.data.endpoint ?? "");
+    setTableName(loaded.data.tableName ?? "");
+    setEnabled(loaded.data.enabled ?? true);
+  }, [loaded.data]);
+
+  if (loaded.loading) return <div className="muted">Loading…</div>;
+  if (loaded.error) return <div className="error">{loaded.error}</div>;
+  const configured = loaded.data?.configured ?? false;
+
+  const save = async () => {
+    setBusy(true); setMessage("");
+    try {
+      const result = await api.saveCustomerSync({ orgId: org, endpoint: endpoint.trim(), tableName: tableName.trim(), secret, enabled });
+      setEndpoint(result.endpoint); setSecret(""); setMessage("Customer sync saved. The secret is not shown again.");
+    } catch (e) { setMessage((e as Error).message); }
+    finally { setBusy(false); }
+  };
+
+  return <div>
+    <div className="card">
+      <h3>External customer record</h3>
+      <p className="muted">Addressium keeps lists, subscriptions and segments here. When a subscriber confirms or unsubscribes, the customer record system can be updated asynchronously.</p>
+      <label>HTTPS endpoint<input value={endpoint} onChange={(e) => setEndpoint(e.target.value)} placeholder="https://customers.example.com/addressium-events" style={{ width: "100%" }} disabled={busy} /></label>
+      <label>External table name<input value={tableName} onChange={(e) => setTableName(e.target.value)} placeholder="customers" style={{ width: "100%" }} disabled={busy} /></label>
+      <label style={{ display: "flex", gap: 8, alignItems: "center" }}><input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} disabled={busy} /> Enable customer updates</label>
+      <label>Endpoint secret{configured && <span className="muted"> (leave blank only to keep the existing secret)</span>}<input type="password" value={secret} onChange={(e) => setSecret(e.target.value)} placeholder={configured ? "Existing secret is stored securely" : "Enter secret"} style={{ width: "100%" }} disabled={busy} /></label>
+      <button className="btn" disabled={busy || !endpoint.trim() || !tableName.trim() || (!configured && !secret)} onClick={() => void save()}>{busy ? "Saving…" : "Save customer sync"}</button>
+      {message && <p className={message.startsWith("Customer sync saved") ? "muted" : "err"}>{message}</p>}
+    </div>
+    <div className="card" style={{ borderColor: "var(--warn)", background: "var(--warn-soft)" }}>
+      <strong>Events in the first delivery slice</strong>
+      <p className="muted">Only confirmed newsletter subscriptions and newsletter unsubscriptions are sent. Delivery is queued so this endpoint cannot block the public signup or unsubscribe path.</p>
+    </div>
+  </div>;
 }
 
 /**
@@ -118,7 +175,7 @@ function DomainsTab({ org }: { org: string }) {
         {domains.length === 0 ? (
           <p className="muted">
             No sending domain on this organization. This is the setup checklist&rsquo;s first
-            required step, and until it passes there is no SES identity to send from. A domain is
+            required step. This record does not establish whether an SES identity exists. A domain is
             set when the organization is created and cannot be added from this screen.
           </p>
         ) : (
@@ -165,24 +222,11 @@ function DomainsTab({ org }: { org: string }) {
 
       <div className="card">
         <h3>Verification &amp; quota</h3>
-        {/*
-          This card used to say verification and quota were unreadable from the
-          console and that the admin router held no SES grant. That stopped
-          being true at #285: `GET /orgs/{org}/sending-identity` reads SES live,
-          and the admin function carries both `ses:GetEmailIdentity` and
-          `ses:GetAccount` (control-plane-stack.ts). The readout is NOT
-          duplicated here — `<SendingIdentity>` on Setup is tri-state
-          throughout (verified / pending / could-not-check, and a quota that is
-          "not reported" rather than 0), and a second renderer of the same
-          response would be a second place for those distinctions to be lost.
-          So this points at it instead of restating it.
-        */}
         <p className="muted">
-          <strong>Shown on Setup, read live from SES.</strong> Per-domain verification and DKIM
+          <strong>Read live from SES below.</strong> Per-domain verification and DKIM
           state, whether this account has left the SES sandbox, and the account send quota and
-          send rate all come from <code>GET /orgs/{"{org}"}/sending-identity</code> on the{" "}
-          <strong>Setup</strong> screen. They are not repeated here, so there is one place that
-          renders them and one set of rules for what an unreadable check looks like.
+          send rate all come from <code>GET /orgs/{"{org}"}/sending-identity</code>.
+          Settings and Setup use the same live status component.
         </p>
         <p className="muted">
           That route is gated on <code>identity:manage</code> — the account sandbox and quota
@@ -258,7 +302,7 @@ function MagicLinkTab({ org }: { org: string }) {
             <tr>
               <td>Public keys</td>
               <td>
-                <code>/orgs/{org || "{org}"}/.well-known/jwks.json</code>
+                <code>/orgs/{org ? encodeURIComponent(org) : "{org}"}/.well-known/jwks.json</code>
                 <div className="muted">
                   Per organization, not one deployment-wide set — but at the standard{" "}
                   <code>.well-known</code> path under the org, which is the route the deployment
@@ -347,9 +391,7 @@ function TeamTab({ org }: { org: string }) {
       <div className="card">
         <p className="muted">
           <strong>MFA status and last activity are not shown.</strong> Neither is part of the team
-          record — both are Cognito user attributes, and no route reads them, so the columns the
-          design draws for them would be invented. The user pool is where MFA enrolment and
-          sign-in history can be seen today.
+          record returned to this screen.
         </p>
       </div>
     </div>

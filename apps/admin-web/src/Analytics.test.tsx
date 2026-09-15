@@ -129,6 +129,13 @@ test("the links tab renders per-link clicks, unique and CTR", async () => {
   expect(await screen.findByText("the chart everyone's sharing")).toBeTruthy();
   expect(screen.getByText("84")).toBeTruthy(); // unique, not clicks
   expect(screen.getByText("9.0%")).toBeTruthy(); // CTR of sent
+  expect(screen.getByRole("combobox", { name: "Campaign" })).toBeTruthy();
+  expect(screen.getByRole("columnheader", { name: "Clicks / sent" })).toBeTruthy();
+  expect(screen.getByText(/includes repeat clicks and can exceed 100%/)).toBeTruthy();
+});
+
+test("per-link event percentages preserve repeat clicks above the sent count", () => {
+  expect(linkCtr({ ...REPORT.clickMap.rows[0]!, clicks: 1200, unique: 84 }, 1000)).toBe("120.0%");
 });
 
 test("counters that point at our own bug are rendered, not hidden when small", async () => {

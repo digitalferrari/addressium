@@ -194,6 +194,18 @@ export const saveCampaignSeriesSchema = z.object({
 });
 export type SaveCampaignSeriesInput = z.infer<typeof saveCampaignSeriesSchema>;
 
+/** Create/update an RSS, Atom or JSON Feed source for recurring editions. */
+export const saveFeedSchema = z.object({
+  orgId: idSchema,
+  feedId: idSchema,
+  url: z.string().url().refine((value) => value.startsWith("https://"), "feed URL must use https"),
+  format: z.enum(["rss", "atom", "json"]),
+  targetListId: idSchema,
+  fieldMap: z.record(z.string(), idSchema).default({}),
+  pullIntervalMins: z.number().int().min(5).max(10080).default(60),
+});
+export type SaveFeedInput = z.infer<typeof saveFeedSchema>;
+
 /**
  * Email body blocks (mirror `EmailTemplate`/`Block` in @addressium/domain's
  * renderer): text (may hold {{merge}} tags), a tracked editorial link, or an
@@ -290,6 +302,8 @@ export const scheduleCampaignSchema = z.object({
    * the CAN-SPAM footer every message needs.
    */
   segmentId: idSchema.optional(),
+  /** Optional configured feed used to build each recurring edition. */
+  feedId: idSchema.optional(),
   subject: z.string().min(1),
   template: emailTemplateSchema,
   when: z.union([
@@ -528,6 +542,33 @@ export const saveAlertConfigSchema = z.object({
   notifyTargets: z.array(z.string()).max(32).default([]),
 });
 export type SaveAlertConfigInput = z.infer<typeof saveAlertConfigSchema>;
+
+/** Per-organization engagement-based sunset / win-back policy. */
+export const saveReengagementSchema = z
+  .object({
+    orgId: idSchema,
+    enabled: z.boolean().default(false),
+    coldAfterDays: z.number().int().min(1).max(3650),
+    steps: z.number().int().min(1).max(10),
+    stepIntervalDays: z.number().int().min(1).max(365),
+    suppressScope: z.enum(["org", "global"]).default("org"),
+    listId: idSchema.optional(),
+  })
+  .refine((value) => !value.enabled || !!value.listId, {
+    message: "listId is required when re-engagement is enabled",
+    path: ["listId"],
+  });
+export type SaveReengagementInput = z.infer<typeof saveReengagementSchema>;
+
+/** Per-organization customer-record sync destination. */
+export const saveCustomerSyncSchema = z.object({
+  orgId: idSchema,
+  endpoint: z.string().url().refine((value) => value.startsWith("https://"), "endpoint must use https"),
+  tableName: z.string().min(1).max(255).regex(/^[A-Za-z0-9_.-]+$/, "table name may contain only letters, numbers, _, . or -"),
+  secret: z.string().min(1).max(4096).optional(),
+  enabled: z.boolean().default(true),
+});
+export type SaveCustomerSyncInput = z.infer<typeof saveCustomerSyncSchema>;
 
 export const createOrgSchema = z
   .object({

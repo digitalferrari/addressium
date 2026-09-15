@@ -29,7 +29,7 @@ import type {
 } from "./ports.js";
 import { mergeTagFallbacks } from "./merge-tags.js";
 import { buildLinkMap, plainTextFrom, renderForRecipient, type EmailTemplate } from "./render.js";
-import { deferSend, scheduleActive } from "./schedule-state.js";
+import { completeScheduleRange, deferSend, scheduleActive } from "./schedule-state.js";
 
 /** Alias kept for readability; a campaign send takes a SendDescriptor. */
 export type SendCampaignInput = SendDescriptor;
@@ -275,10 +275,10 @@ export function recipientAllowedForDev(
  * Reserved names win over a subscriber attribute of the same name. An imported
  * CSV column called `unsubscribe_url` must not be able to replace the real one.
  *
- * PRECEDENCE, lowest to highest: configured fallbacks, then the subscriber's own
- * non-empty attributes, then the reserved values. `fallbacks` comes from
- * `mergeTagFallbacks`, read once per send by the caller rather than per
- * recipient.
+ * PRECEDENCE, lowest to highest: configured fallbacks, per-campaign values
+ * (such as a feed's lead item), the subscriber's own non-empty attributes, then
+ * the reserved values. `fallbacks` comes from `mergeTagFallbacks`, read once per
+ * send by the caller rather than per recipient.
  *
  * "WHEN EMPTY" MEANS ABSENT **OR** BLANK, and that is deliberate — the console
  * labels the field "fallback when empty", and the ordinary way an attribute
@@ -292,6 +292,7 @@ async function mergeValues(
   subscriber: Subscriber,
   builder: UnsubscribeLinkBuilder | undefined,
   fallbacks: Record<string, string>,
+  campaignAttributes: Record<string, string> = {},
 ): Promise<Record<string, string>> {
   const unsubscribeUrl = builder
     ? await builder.build({ orgId: list.orgId, subscriberId: subscriber.sub, listId: list.listId })
@@ -326,10 +327,9 @@ async function mergeValues(
   for (const [k, v] of Object.entries(subscriber.attributes)) {
     if (v !== "") present[k] = v;
   }
-  // Reserved LAST: this spread order is the precedence rule. An attribute of the
-  // same name is overwritten, never the other way round. Fallbacks FIRST, so a
-  // real value always beats the fallback and the fallback never beats reserved.
-  return { ...fallbacks, ...present, ...reserved };
+  // Reserved LAST: subscriber attributes beat per-campaign feed values, and
+  // both beat fallbacks; reserved system values cannot be shadowed.
+  return { ...fallbacks, ...campaignAttributes, ...present, ...reserved };
 }
 
 async function listUnsubscribeHeader(
@@ -352,6 +352,7 @@ export interface SendOneInput {
   listId: string;
   subject: string;
   template: EmailTemplate;
+  campaignAttributes?: Record<string, string>;
   /** Optional pacing — acquired only for an actual send (skips don't burn tokens). */
   throttle?: SendThrottle;
   /** See SendOptions.unsubscribeLink — same contract for per-recipient sends. */
@@ -525,6 +526,7 @@ export async function sendToSubscriber(
         subscriber,
         input.unsubscribeLink,
         await mergeTagFallbacks(stores, input.orgId),
+        input.campaignAttributes,
       ),
       token,
     );
@@ -599,6 +601,7 @@ export async function sendCampaign(
         listId: input.listId,
         subject: input.subject,
         template: input.template,
+        campaignAttributes: input.campaignAttributes,
       });
     }
     return { sent: 0, suppressed: 0, skipped: true };
@@ -652,6 +655,7 @@ export async function sendCampaign(
   let suppressed = 0;
   let devBlocked = 0;
   let alreadySent = 0;
+  const claimedRecipients: string[] = [];
   let untokenized = 0;
 
   // Deliverability halt (§4.13, #165). checkDeliverability flips the campaign to
@@ -695,6 +699,7 @@ export async function sendCampaign(
     // a redelivery skips exactly those already dispatched and delivers the rest.
     if (!(await stores.sendClaims.claim(input.orgId, sendClaimKey(input.campaignId, subscriber.sub)))) {
       alreadySent++;
+      claimedRecipients.push(subscriber.sub);
       continue;
     }
 
@@ -706,7 +711,7 @@ export async function sendCampaign(
       if (magic && token === undefined) untokenized++;
       const html = renderForRecipient(
         input.template,
-        await mergeValues(list, subscriber, opts.unsubscribeLink, fallbacks),
+        await mergeValues(list, subscriber, opts.unsubscribeLink, fallbacks, input.campaignAttributes),
         token,
       );
 
@@ -741,6 +746,19 @@ export async function sendCampaign(
     };
     await stores.events.append(evt);
     sent++;
+  }
+
+  if (!halted && schedule?.kind === "one_off" && !(await isHalted())) {
+    // A claim alone may belong to another worker still inside sender.send.
+    // Never complete its window before that dispatch has a durable sent event.
+    if (claimedRecipients.length > 0) {
+      const delivered = new Set((await stores.events.all(input.orgId, input.campaignId))
+        .filter((e) => e.type === "sent").map((e) => e.subscriberId));
+      if (claimedRecipients.some((id) => !delivered.has(id))) {
+        throw new Error("send claims still awaiting recorded delivery; retry completion");
+      }
+    }
+    await completeScheduleRange(stores, clock, input.orgId, input.campaignId, input.slice);
   }
 
   // `skipped` now means "nothing new to dispatch" — true for a full redelivery

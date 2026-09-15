@@ -60,7 +60,7 @@ export function ImportMapper({ org }: { org: string }) {
     } catch (e) { setMsg((e as Error).message); } finally { setBusy(false); }
   };
 
-  const OUTCOMES = ["email", "attribute", "audience", "discard"] as const;
+  const OUTCOMES = ["email", "externalId", "attribute", "audience", "discard"] as const;
   const kindOf = (m: ColumnMapping): string =>
     m.kind === "optOut" || m.kind === "endpointStatus" || m.kind === "channel" ? m.kind : m.kind;
 
@@ -139,6 +139,7 @@ export function ImportMapper({ org }: { org: string }) {
                         onChange={(e) => {
                           const k = e.target.value;
                           if (k === "email") setColumn(h, { kind: "email" });
+                          else if (k === "externalId") setColumn(h, { kind: "externalId" });
                           else if (k === "attribute") setColumn(h, { kind: "attribute", key: h.split(".").pop() ?? h });
                           else if (k === "audience")
                             setColumn(h, { kind: "audience", list: { createNamed: h.split(".").pop() ?? h }, consentBasis: basis });
@@ -146,6 +147,7 @@ export function ImportMapper({ org }: { org: string }) {
                         }}
                       >
                         <option value="email">Email address</option>
+                        <option value="externalId">External customer ID</option>
                         <option value="attribute">Attribute</option>
                         <option value="audience">Audience</option>
                         <option value="discard">Discard</option>

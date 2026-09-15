@@ -14,6 +14,7 @@
     { "path": "services/automations" },
     { "path": "services/reporting" },
     { "path": "services/tokens" },
+    { "path": "services/customer-sync" },
     { "path": "services/provisioning" },
     { "path": "services/feeds" },
     { "path": "services/privacy" },

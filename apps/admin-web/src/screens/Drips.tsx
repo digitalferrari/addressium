@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useAsync } from "../useAsync.js";
 import { isValidId } from "../ids.js";
 import { can, type Grant } from "../rbac.js";
@@ -7,6 +7,7 @@ import {
   type DripEnrollment,
   type DripSequence,
   type DripStepDef,
+  type ReengagementPolicy,
   type SubscriberDetail,
   type SubscriberRow,
 } from "../api.js";
@@ -108,6 +109,7 @@ export function Drips({ org, grant }: { org: string; grant: Grant | null }) {
   const sequences = useAsync(() => api.dripSequences(org), [org, rev]);
   const lists = useAsync(() => api.lists(org), [org]);
   const templates = useAsync(() => api.templates(org), [org]);
+  const reengagement = useAsync(() => api.reengagement(org), [org, rev]);
   const [sequenceId, setSequenceId] = useState("");
   const [name, setName] = useState("");
   const [triggerKind, setTriggerKind] = useState<"signup" | "manual">("signup");
@@ -115,6 +117,24 @@ export function Drips({ org, grant }: { org: string; grant: Grant | null }) {
   const [steps, setSteps] = useState<DraftStep[]>([{ stepId: "", waitSeconds: "0", listId: "", templateId: "", subject: "" }]);
   const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState(false);
+  const [reBusy, setReBusy] = useState(false);
+  const [reMsg, setReMsg] = useState("");
+  const [rePolicy, setRePolicy] = useState<ReengagementPolicy>({
+    enabled: false,
+    coldAfterDays: 180,
+    steps: 3,
+    stepIntervalDays: 7,
+    suppressScope: "org",
+    listId: "",
+  });
+
+  useEffect(() => {
+    const loaded = reengagement.data?.policy;
+    if (loaded && reengagement.data?.configured) {
+      // The API is the source of truth; hydrate only when the response changes.
+      setRePolicy({ ...loaded, listId: loaded.listId ?? "" });
+    }
+  }, [reengagement.data]);
 
   const setStep = (i: number, patch: Partial<DraftStep>) =>
     setSteps((ss) => ss.map((s, j) => (j === i ? { ...s, ...patch } : s)));
@@ -141,12 +161,31 @@ export function Drips({ org, grant }: { org: string; grant: Grant | null }) {
     finally { setBusy(false); }
   };
 
+  const saveReengagement = async () => {
+    setReMsg(""); setReBusy(true);
+    try {
+      const saved = await api.saveReengagement({ orgId: org, ...rePolicy, listId: rePolicy.listId || undefined });
+      setRePolicy({ ...saved.policy, listId: saved.policy.listId ?? "" });
+      setReMsg(saved.policy.enabled ? "Re-engagement enabled." : "Re-engagement disabled.");
+    } catch (e) {
+      setReMsg(String(e));
+    } finally {
+      setReBusy(false);
+    }
+  };
+
   const stepsValid = steps.length > 0 && steps.every((s) => isValidId(s.stepId.trim()) && s.listId && s.templateId && s.subject.trim());
   const valid = isValidId(sequenceId.trim()) && name.trim() && stepsValid && (triggerKind === "manual" || !!triggerListId);
 
   return (
     <div>
-      <h1 className="h1">Drip sequences · {org || "—"}</h1>
+      <div className="pagehead">
+        <div>
+          <h1>Automations</h1>
+          <p>Linear drip sequences on Step Functions — waits and sends, in order.</p>
+        </div>
+        <button className="btn" onClick={() => document.getElementById("new-sequence")?.scrollIntoView({ behavior: "smooth" })}>＋ New sequence</button>
+      </div>
       <p className="muted" style={{ marginTop: -8 }}>
         Automated multi-step sends triggered on signup or manually. Drip steps render the selected
         template; use raw_html templates (server-side MJML compile isn't available).
@@ -171,7 +210,7 @@ export function Drips({ org, grant }: { org: string; grant: Grant | null }) {
       )}
       <EnrollCard org={org} grant={grant} sequences={sequences.data} />
 
-      <div className="card">
+      <div className="card" id="new-sequence">
         <div className="muted" style={{ marginBottom: 8 }}>New sequence</div>
         <div style={{ display: "flex", gap: 8 }}>
           <input value={sequenceId} onChange={(e) => setSequenceId(e.target.value)} placeholder="sequence id" style={{ flex: 1 }} disabled={busy} />
@@ -224,6 +263,24 @@ export function Drips({ org, grant }: { org: string; grant: Grant | null }) {
         <div style={{ display: "flex", gap: 10, alignItems: "center", marginTop: 12 }}>
           <button className="btn" disabled={!valid || busy} onClick={() => void save()}>{busy ? "Saving…" : "Save sequence"}</button>
           {msg && <span className={msg.startsWith("Saved") ? "muted" : "err"}>{msg}</span>}
+        </div>
+      </div>
+      <div className="card">
+        <strong>Re-engagement → sunset</strong>
+        <p className="muted">Win back people who have not clicked recently. If they still do not engage after the final step, they are unsubscribed and marked inactive.</p>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
+          <label><input type="checkbox" checked={rePolicy.enabled} onChange={(e) => setRePolicy({ ...rePolicy, enabled: e.target.checked })} /> Enable weekly sweep</label>
+          {reengagement.data?.configured && <span className="pill">Configured</span>}
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 10 }}>
+          <label>Cold after (days)<input type="number" min={1} max={3650} value={rePolicy.coldAfterDays} onChange={(e) => setRePolicy({ ...rePolicy, coldAfterDays: Number(e.target.value) })} /></label>
+          <label>Win-back emails<input type="number" min={1} max={10} value={rePolicy.steps} onChange={(e) => setRePolicy({ ...rePolicy, steps: Number(e.target.value) })} /></label>
+          <label>Days between steps<input type="number" min={1} max={365} value={rePolicy.stepIntervalDays} onChange={(e) => setRePolicy({ ...rePolicy, stepIntervalDays: Number(e.target.value) })} /></label>
+          <label>Send from list<select value={rePolicy.listId ?? ""} onChange={(e) => setRePolicy({ ...rePolicy, listId: e.target.value })}><option value="">Choose a list…</option>{(lists.data ?? []).map((l) => <option key={l.listId} value={l.listId}>{l.name} ({l.listId})</option>)}</select></label>
+        </div>
+        <div style={{ display: "flex", gap: 10, alignItems: "center", marginTop: 12 }}>
+          <button className="btn" disabled={!can(grant, "campaigns:manage", org) || reBusy} onClick={() => void saveReengagement()}>{reBusy ? "Saving…" : "Save re-engagement"}</button>
+          {reMsg && <span className={reMsg.includes("enabled") || reMsg.includes("disabled") ? "muted" : "err"}>{reMsg}</span>}
         </div>
       </div>
     </div>

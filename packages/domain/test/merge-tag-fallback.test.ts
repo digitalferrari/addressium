@@ -20,8 +20,12 @@
  */
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import { runInNewContext } from "node:vm";
 import { generateKeyPair } from "jose";
 import type { List } from "@addressium/core";
+import { RESERVED_MERGE_TAGS } from "@addressium/core";
 import {
   memStores,
   CaptureSender,
@@ -242,3 +246,72 @@ test("a reserved name still wins over a stored fallback row", async () => {
   );
   assert.match(html, /u=\[[^\]]+\]/, "and the real value still rendered");
 });
+
+// Use the console's installed compiler in an isolated browser-like context.
+// Compilation precedes sending; the API converts `mjmlHtml` to `html`.
+const browser = { window: {} as { mjml?: (source: string) => { html: string; errors: unknown[] } } };
+runInNewContext(readFileSync(createRequire(import.meta.url).resolve("mjml-browser"), "utf8"), browser);
+const body = "Hi [{{first_name}}] " + RESERVED_MERGE_TAGS.map((t) => `${t.name}=[{{${t.name}}}]`).join(" ");
+const compiled = browser.window.mjml!(
+  `<mjml><mj-body><mj-section><mj-column><mj-text>${body}</mj-text></mj-column></mj-section></mj-body></mjml>`,
+);
+assert.equal(compiled.errors.length, 0);
+
+const formats: Record<string, EmailTemplate> = {
+  blocks: { blocks: [{ kind: "text", html: body }] },
+  html: { html: `<p>${body}</p>` },
+  "compiled MJML": { html: compiled.html },
+};
+const special = `<b>O'Neil</b> & "Co" $& &lt; {{list_name}}`;
+const escaped = "&lt;b&gt;O&#39;Neil&lt;/b&gt; &amp; &quot;Co&quot; $&amp; &amp;lt; {{list_name}}";
+const cases: { name: string; attrs: Record<string, string>; fallback: string; value: string; html: string }[] = [
+  { name: "absent", attrs: {}, fallback: "there", value: "there", html: "there" },
+  { name: "blank", attrs: { first_name: "" }, fallback: "there", value: "there", html: "there" },
+  { name: "nonempty wins", attrs: { first_name: "Jordan" }, fallback: "there", value: "Jordan", html: "Jordan" },
+  { name: "whitespace is nonempty", attrs: { first_name: " " }, fallback: "there", value: " ", html: " " },
+  { name: "fallback escaping", attrs: {}, fallback: special, value: special, html: escaped },
+  { name: "attribute escaping", attrs: { first_name: special }, fallback: "there", value: special, html: escaped },
+  { name: "empty fallback", attrs: {}, fallback: "", value: "", html: "" },
+];
+
+for (const [format, template] of Object.entries(formats)) {
+  for (const path of ["campaign", "subscriber"] as const) {
+    for (const scenario of cases) {
+      test(`${path}, ${format}: ${scenario.name}; reserved values win; text agrees`, async () => {
+        const h = await harness();
+        await withFallback(h, scenario.fallback);
+        for (const tag of RESERVED_MERGE_TAGS) {
+          await h.stores.mergeTags.put({ ...tag, orgId: ORG, fallback: "FALLBACK-HIJACK" });
+        }
+        const sub = await subscriber(h, {
+          ...Object.fromEntries(RESERVED_MERGE_TAGS.map((tag) => [tag.name, "ATTRIBUTE-HIJACK"])),
+          ...scenario.attrs,
+        });
+        const input = { orgId: ORG, campaignId: "matrix", listId: LIST, subject: "x", template };
+        const unsubscribeLink = { build: async () => "https://example.com/unsubscribe?token=real&list=ledger" };
+        if (path === "campaign") {
+          const result = await sendCampaign(h.stores, h.sender, h.magic, h.clock, input, { unsubscribeLink });
+          assert.equal(result.sent, 1);
+        } else {
+          const result = await sendToSubscriber(h.stores, h.sender, h.magic, h.clock, {
+            ...input, subscriberId: sub, unsubscribeLink,
+          });
+          assert.equal(result.sent, true);
+        }
+        assert.equal(h.sender.sent.length, 1);
+        const message = h.sender.sent[0]!;
+        assert.ok(message.text !== undefined);
+        assert.ok(message.html.includes(`Hi [${scenario.html}]`), message.html);
+        assert.ok(message.text.includes(`Hi [${scenario.value}]`), message.text);
+        for (const output of [message.html, message.text!]) {
+          assert.doesNotMatch(output, /FALLBACK-HIJACK|ATTRIBUTE-HIJACK/);
+          assert.ok(output.includes("list_name=[RealListName]"));
+          assert.ok(output.includes("compliance_footer=[RealComplianceFooter]"));
+          assert.ok(output.includes("physical_address=[RealPhysicalAddress]"));
+        }
+        assert.ok(message.html.includes("unsubscribe_url=[https://example.com/unsubscribe?token=real&amp;list=ledger]"));
+        assert.ok(message.text!.includes("unsubscribe_url=[https://example.com/unsubscribe?token=real&list=ledger]"));
+      });
+    }
+  }
+}

@@ -32,21 +32,35 @@ export function App() {
   }, []);
 
   return (
-    <div className="wrap">
-      <header>
-        {branding?.logoUrl && <img src={branding.logoUrl} alt="logo" />}
-        <h1>Newsletters</h1>
+    <div className="site-shell">
+      <header className="site-header">
+        <a className="brand" href="/" aria-label="Home">
+          {branding?.logoUrl ? <img src={branding.logoUrl} alt="" /> : <span className="brand-mark">A</span>}
+          <span>{branding ? "Newsletters" : "addressium"}</span>
+        </a>
+        {(route.name === "directory" || route.name === "all") && (
+          <nav aria-label="Newsletter navigation">
+            <a className={route.name === "directory" ? "active" : ""} href="/">Browse</a>
+            <a className={route.name === "all" ? "active" : ""} href="/all">Subscribe to all</a>
+          </nav>
+        )}
       </header>
       {(route.name === "directory" || route.name === "all") && (
-        <nav className="muted" style={{ marginBottom: 16 }}>
-          <a href="/" style={{ marginRight: 12, fontWeight: route.name === "directory" ? 700 : 400 }}>Browse</a>
-          <a href="/all" style={{ fontWeight: route.name === "all" ? 700 : 400 }}>Subscribe to all</a>
-        </nav>
+        <section className="hero">
+          <p className="eyebrow">Stay in the loop</p>
+          <h1>Ideas worth opening.</h1>
+          <p>Choose the newsletters you want in your inbox. No account required — just a thoughtful email when it matters.</p>
+        </section>
       )}
-      {route.name === "directory" && <Directory />}
-      {route.name === "all" && <AllNewsletters />}
-      {route.name === "confirm" && <Confirm token={route.token} />}
-      {route.name === "unsubscribe" && <Unsubscribe token={route.token} />}
+      {(route.name === "directory" || route.name === "all") && (
+        <main>
+          {route.name === "directory" && <Directory />}
+          {route.name === "all" && <AllNewsletters />}
+        </main>
+      )}
+      {route.name === "confirm" && <main className="action-page"><Confirm token={route.token} /></main>}
+      {route.name === "unsubscribe" && <main className="action-page"><Unsubscribe token={route.token} /></main>}
+      <footer>Powered by addressium · You can unsubscribe at any time.</footer>
     </div>
   );
 }
@@ -89,31 +103,31 @@ function AllNewsletters() {
   if (err) return <p className="err">{err}</p>;
   if (!ORG) return <p className="muted">Set VITE_ORG_ID to view this org's newsletters.</p>;
   return (
-    <div className="card">
-      <div className="title">Subscribe to our newsletters</div>
+    <section className="subscribe-panel">
+      <div className="section-heading"><div><p className="eyebrow">One simple signup</p><h2>Choose your inbox</h2></div><span className="count">{lists.length} available</span></div>
       <p className="muted">Pick the ones you'd like, add your email, and confirm once.</p>
       {!loaded && <p className="muted">Loading newsletters…</p>}
       {loaded && lists.length === 0 && (
         <p className="muted">No newsletters are published yet.</p>
       )}
       {lists.map((l) => (
-        <label key={l.listId} className="row" style={{ alignItems: "flex-start", gap: 10, padding: "8px 0" }}>
+        <label key={l.listId} className="choice">
           <input type="checkbox" checked={selected.has(l.listId)} onChange={() => toggle(l.listId)} />
-          <span>
+          <span className="choice-copy">
             <b>{l.name}</b>
             {l.presentation.showFrequency && l.frequencyLabel && <span className="pill" style={{ marginLeft: 8 }}>{l.frequencyLabel}</span>}
             {l.description && <div className="muted">{l.description}</div>}
           </span>
         </label>
       ))}
-      <div className="row" style={{ marginTop: 12 }}>
+      <div className="signup-row">
         <input placeholder="you@example.com" value={email} onChange={(e) => setEmail(e.target.value)} />
-        <button onClick={() => void subscribe()} disabled={!email || selected.size === 0}>
+        <button className="primary" onClick={() => void subscribe()} disabled={!email || selected.size === 0}>
           Subscribe{selected.size > 0 ? ` (${selected.size})` : ""}
         </button>
       </div>
       {msg && <p className="muted">{msg}</p>}
-    </div>
+    </section>
   );
 }
 
@@ -131,12 +145,12 @@ function Directory() {
   if (err) return <p className="err">{err}</p>;
   if (!ORG) return <p className="muted">Set VITE_ORG_ID to view this org's newsletters.</p>;
   return (
-    <div>
+    <div className="directory">
       {!loaded && <p className="muted">Loading newsletters…</p>}
       {loaded && ids.length === 0 && (
         <p className="muted">No newsletters are published yet.</p>
       )}
-      {ids.map((id) => <ListCard key={id} listId={id} />)}
+      <div className="list-grid">{ids.map((id) => <ListCard key={id} listId={id} />)}</div>
     </div>
   );
 }
@@ -155,8 +169,8 @@ function ListCard({ listId }: { listId: string }) {
   };
   if (!list) return null;
   return (
-    <div className="card">
-      <div className="title">{list.name}</div>
+    <article className="list-card">
+      <div className="list-card-top"><span className="list-icon">✦</span><div className="title">{list.name}</div></div>
       <div className="meta">
         {list.presentation.showFrequency && list.frequencyLabel && <span className="pill">{list.frequencyLabel}</span>}
         {list.presentation.showSendTime && list.sendTimeLabel && <span>{list.sendTimeLabel}</span>}
@@ -166,12 +180,12 @@ function ListCard({ listId }: { listId: string }) {
         )}
       </div>
       {list.description && <p className="muted">{list.description}</p>}
-      <div className="row">
+      <div className="signup-row">
         <input placeholder="you@example.com" value={email} onChange={(e) => setEmail(e.target.value)} />
-        <button onClick={() => void subscribe()} disabled={!email}>Subscribe</button>
+        <button className="primary" onClick={() => void subscribe()} disabled={!email}>Subscribe</button>
       </div>
       {msg && <p className="muted">{msg}</p>}
-    </div>
+    </article>
   );
 }
 
@@ -181,7 +195,7 @@ function Confirm({ token }: { token: string }) {
     api.confirm(token).then((r) => setState(r.status === "confirmed" ? "You're subscribed — thank you!" : `Status: ${r.status}`))
       .catch((e) => setState(displayError(e)));
   }, [token]);
-  return <div className="card"><div className="title">Confirm subscription</div><p className="muted">{state}</p></div>;
+  return <div className="action-card"><span className="action-icon">✓</span><div className="title">Confirm subscription</div><p className="muted">{state}</p><a href="/">Back to newsletters</a></div>;
 }
 
 function Unsubscribe({ token }: { token: string }) {
@@ -191,11 +205,13 @@ function Unsubscribe({ token }: { token: string }) {
     try { await api.unsubscribe(token); setState("done"); } catch (e) { setErr(displayError(e)); setState("error"); }
   };
   return (
-    <div className="card">
+    <div className="action-card">
+      <span className="action-icon">↗</span>
       <div className="title">Unsubscribe</div>
       {state === "idle" && <><p className="muted">Confirm you want to unsubscribe from this list.</p><button onClick={() => void go()}>Unsubscribe</button></>}
       {state === "done" && <p className="muted">You've been unsubscribed.</p>}
       {state === "error" && <p className="err">{err}</p>}
+      {state !== "idle" && <a href="/">Back to newsletters</a>}
     </div>
   );
 }

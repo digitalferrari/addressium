@@ -4,7 +4,6 @@ import { api, type ListPresentation } from "../api.js";
 
 const DEFAULT_PRESENTATION: ListPresentation = {
   showFrequency: true, showSendTime: true, showDescription: true, showReaderCount: false, showFreePaidCount: false,
-  frequencyLabel: "Daily", sendTimeLabel: "Weekday mornings",
 };
 
 export function PresentationEditor({ org }: { org: string }) {
@@ -14,7 +13,9 @@ export function PresentationEditor({ org }: { org: string }) {
   const [msg, setMsg] = useState("");
   // Prefill with the selected list's *current* toggles so Save doesn't silently
   // clobber them with defaults (#143). The admin lists payload already carries
-  // `presentation`; fall back to defaults for a list that has none set yet.
+  // `presentation`; fall back to toggle defaults for a list that has none set
+  // yet. Optional labels stay absent until edited (#262); examples belong in
+  // placeholders, never in the state sent to the API.
   useEffect(() => {
     if (!listId) {
       setP(DEFAULT_PRESENTATION);
@@ -43,7 +44,7 @@ export function PresentationEditor({ org }: { org: string }) {
           {(lists.data ?? []).map((l) => (<option key={l.listId} value={l.listId}>{l.name} ({l.listId})</option>))}
         </select>
         <p className="muted" style={{ margin: "6px 0 0" }}>
-          Saving overwrites this list's current toggles with the values shown.
+          Saving updates this list's toggles and labels. Label examples are not saved unless you enter them.
         </p>
         <div style={{ marginTop: 12 }}>
           <Check k="showFrequency" label="Show frequency" />
@@ -53,8 +54,8 @@ export function PresentationEditor({ org }: { org: string }) {
           <Check k="showFreePaidCount" label="Show free / paid count" />
         </div>
         <div className="row" style={{ marginTop: 8 }}>
-          <div><label>Frequency label</label><input value={p.frequencyLabel ?? ""} onChange={(e) => setP({ ...p, frequencyLabel: e.target.value })} /></div>
-          <div><label>Send-time label</label><input value={p.sendTimeLabel ?? ""} onChange={(e) => setP({ ...p, sendTimeLabel: e.target.value })} /></div>
+          <div><label htmlFor="presentation-frequency-label">Frequency label</label><input id="presentation-frequency-label" placeholder="e.g. Daily" value={p.frequencyLabel ?? ""} onChange={(e) => setP({ ...p, frequencyLabel: e.target.value })} /></div>
+          <div><label htmlFor="presentation-send-time-label">Send-time label</label><input id="presentation-send-time-label" placeholder="e.g. Weekday mornings" value={p.sendTimeLabel ?? ""} onChange={(e) => setP({ ...p, sendTimeLabel: e.target.value })} /></div>
         </div>
         <div className="row" style={{ marginTop: 12 }}>
           <button className="btn" onClick={() => void save()} disabled={!listId}>Save toggles</button>

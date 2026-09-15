@@ -247,6 +247,15 @@ export interface Organization {
   devAllowlist?: string[];
   /** Engagement-based sunset / win-back automation policy (§4.22). Off unless enabled. */
   reengagement?: ReengagementPolicy;
+  /** Optional outbound customer-record synchronization destination. */
+  customerSync?: {
+    endpoint: string;
+    /** Table/collection name in the external customer-record system. */
+    tableName: string;
+    /** Secrets Manager name/ARN; the secret value is never returned by the API. */
+    secretRef: string;
+    enabled: boolean;
+  };
   setupComplete: boolean;
 }
 
@@ -429,7 +438,7 @@ export interface Campaign {
 }
 
 export type ScheduleKind = "one_off" | "recurring";
-export type ScheduleStatus = "active" | "paused" | "archived";
+export type ScheduleStatus = "active" | "paused" | "archived" | "completed";
 
 /**
  * Lifecycle record for a scheduled send (§4.6). It is the **source of truth** for
@@ -444,6 +453,10 @@ export interface SendScheduleState {
   scheduleId: string;
   kind: ScheduleKind;
   status: ScheduleStatus;
+  /** Optimistic revision for concurrent sender/operator lifecycle writes. */
+  revision?: number;
+  /** Successfully processed key ranges; merged until the whole send is covered. */
+  completedRanges?: Array<{ after?: string; until?: string }>;
   /** Cron for a recurring series (informational; drives the admin view). */
   cron?: string;
   /**

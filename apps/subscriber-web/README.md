@@ -9,4 +9,8 @@ variables at load. Builds to the public S3 + CloudFront distribution.
 ```
 npm run dev -w apps/subscriber-web
 ```
-Config: `VITE_API_BASE`, `VITE_ORG_ID` (and `VITE_COGNITO_*` for subscriber login).
+Config: `VITE_API_BASE`, `VITE_ORG_ID`. Subscribers do not log in; the email
+address is the identity and confirmation/unsubscribe links carry signed tokens.
+
+For local development, run the API with `npm run dev`, then start this app with
+`VITE_API_BASE=http://localhost:4000 VITE_ORG_ID=<org> npm run dev -w apps/subscriber-web`.

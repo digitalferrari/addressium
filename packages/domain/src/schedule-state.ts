@@ -1,8 +1,8 @@
 /**
  * Send-schedule lifecycle (docs/ARCHITECTURE.md §4.6).
  *
- * A scheduled send has three operator-facing states — **active** (scheduled /
- * started), **paused**, and **archived** — and is **never deleted**. The
+ * A scheduled send is active, paused, archived, or completed (one-offs only),
+ * and its lifecycle record is never deleted. The
  * lifecycle record (`SendScheduleState`) is the source of truth: the recurring
  * launch handler and the one-off campaign sender both gate on it, so pausing a
  * daily series stops the next edition even though its EventBridge schedule keeps
@@ -11,7 +11,7 @@
  */
 import { createHash } from "node:crypto";
 import type { ScheduleKind, ScheduleStatus, SendScheduleState } from "@addressium/core";
-import { InvalidInputError, type Clock, type SendDescriptor, type Stores } from "./ports.js";
+import { ConcurrentModificationError, InvalidInputError, type Clock, type RecipientSlice, type SendDescriptor, type Stores } from "./ports.js";
 
 /** EventBridge Scheduler caps a schedule name at 64 characters. */
 const SCHEDULE_NAME_MAX = 64;
@@ -78,11 +78,17 @@ export async function markScheduleActive(
 ): Promise<SendScheduleState> {
   const now = clock.now().toISOString();
   const existing = await stores.schedules.get(input.orgId, input.scheduleId);
+  if (existing?.status === "completed" || existing?.completedRanges?.some((r) =>
+    r.after === undefined && r.until === undefined)) {
+    throw new InvalidInputError("completed schedule cannot be restarted");
+  }
   const state: SendScheduleState = {
     orgId: input.orgId,
     scheduleId: input.scheduleId,
     kind: input.kind,
     status: "active",
+    revision: (existing?.revision ?? 0) + 1,
+    completedRanges: existing?.completedRanges,
     cron: input.cron ?? existing?.cron,
     timezone: input.timezone ?? existing?.timezone,
     sendAt: input.sendAt ?? existing?.sendAt,
@@ -97,7 +103,7 @@ export async function markScheduleActive(
   // be worse than wrong: resume passes no `sendAt` at all, so every
   // pause/resume cycle would erase a live one-off's time.
   if (input.kind === "recurring") delete state.sendAt;
-  await stores.schedules.put(state);
+  await stores.schedules.put(state, { ifRevision: existing?.revision });
   return state;
 }
 
@@ -109,6 +115,13 @@ export async function transitionSchedule(
 ): Promise<SendScheduleState & { resumed?: SendDescriptor }> {
   const existing = await stores.schedules.get(input.orgId, input.scheduleId);
   if (!existing) throw new InvalidInputError(`unknown schedule ${input.scheduleId}`);
+  if (existing.status === "completed" && input.action !== "archive") {
+    throw new InvalidInputError("completed schedule cannot be restarted or paused");
+  }
+  if (existing.completedRanges?.some((r) => r.after === undefined && r.until === undefined)
+      && input.action !== "archive") {
+    throw new InvalidInputError("completed schedule cannot be restarted or paused");
+  }
   const status: ScheduleStatus =
     input.action === "start" ? "active" : input.action === "pause" ? "paused" : "archived";
 
@@ -121,13 +134,14 @@ export async function transitionSchedule(
 
   const state: SendScheduleState = {
     ...existing,
+    revision: (existing.revision ?? 0) + 1,
     status,
     updatedAt: clock.now().toISOString(),
   };
   // `pause` keeps whatever is parked; start and archive both clear it.
   if (input.action !== "pause") delete state.deferred;
 
-  await stores.schedules.put(state);
+  await stores.schedules.put(state, { ifRevision: existing.revision });
   return resumed ? { ...state, resumed } : state;
 }
 
@@ -145,13 +159,50 @@ export async function deferSend(
   const existing = await stores.schedules.get(descriptor.orgId, descriptor.campaignId);
   // Nothing to park against — a legacy send with no lifecycle record is treated
   // as active by `scheduleActive`, so it never reaches here.
-  if (!existing) return;
+  if (!existing || existing.status !== "paused") return;
   await stores.schedules.put({
     ...existing,
+    revision: (existing.revision ?? 0) + 1,
     // The slice is deliberately dropped: on resume the campaign fans out afresh
     // against the recipient set as it stands THEN, which is both correct and
     // simpler than parking N slices and hoping they still tile the list.
     deferred: { ...descriptor, slice: undefined },
     updatedAt: clock.now().toISOString(),
-  });
+  }, { ifRevision: existing.revision });
+}
+
+/** Record a successful window. Only full coverage completes a one-off (#263).
+ * Range union is idempotent, including overlapping windows from a fan-out retry.
+ * CAS retries merge concurrent slices without losing either worker's progress.
+ */
+export async function completeScheduleRange(
+  stores: Stores, clock: Clock, orgId: string, scheduleId: string, range: RecipientSlice = {},
+): Promise<void> {
+  for (let attempt = 0; attempt < 10; attempt++) {
+    const existing = await stores.schedules.get(orgId, scheduleId);
+    if (!existing || existing.kind !== "one_off" || existing.status === "completed") return;
+    const ranges = [...(existing.completedRanges ?? []), range].sort((a, b) =>
+      a.after === b.after ? 0 : a.after === undefined ? -1 : b.after === undefined ? 1 : a.after < b.after ? -1 : 1);
+    const merged: RecipientSlice[] = [];
+    for (const next of ranges) {
+      const prev = merged.at(-1);
+      if (prev && (prev.until === undefined || next.after === undefined || next.after <= prev.until)) {
+        if (next.until === undefined || (prev.until !== undefined && next.until > prev.until)) prev.until = next.until;
+      } else merged.push({ ...next });
+    }
+    const first = merged[0];
+    const complete = merged.length === 1 && first !== undefined && first.after === undefined && first.until === undefined;
+    const state: SendScheduleState = {
+      ...existing, revision: (existing.revision ?? 0) + 1, completedRanges: merged,
+      status: complete && existing.status !== "archived" ? "completed" : existing.status,
+      updatedAt: clock.now().toISOString(),
+    };
+    if (complete) delete state.deferred;
+    try {
+      await stores.schedules.put(state, { ifRevision: existing.revision });
+      return;
+    } catch (e) {
+      if (!(e instanceof ConcurrentModificationError) || attempt === 9) throw e;
+    }
+  }
 }

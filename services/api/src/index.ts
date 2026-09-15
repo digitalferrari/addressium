@@ -20,12 +20,14 @@ import {
   SesSuppressionListReader,
   SfnDripStarter,
   SqsSendQueue,
+  SqsCustomerSyncQueue,
   getSecret,
   sanitizeEmailHtml,
 } from "@addressium/adapters-aws";
 import { gsiEngineLimitation, type SegmentPredicate } from "@addressium/segment";
 import { randomUUID } from "node:crypto";
 import { InvokeCommand, LambdaClient } from "@aws-sdk/client-lambda";
+import { CreateSecretCommand, PutSecretValueCommand, SecretsManagerClient } from "@aws-sdk/client-secrets-manager";
 import {
   schemas,
   APP_VERSION,
@@ -106,6 +108,7 @@ import {
   saveTemplate,
   saveMergeTag,
   listMergeTags,
+  resolveReengagementPolicy,
   deleteMergeTag,
   saveCampaignSeries,
   listCampaignSeries,
@@ -264,6 +267,59 @@ function requireGrant(event: HttpEvent, capability: Capability, orgId: string): 
 const clock = new SystemClock();
 let _stores: DynamoStores | undefined;
 const stores = () => (_stores ??= new DynamoStores(env("TABLE_NAME")));
+let _customerSyncQueue: SqsCustomerSyncQueue | undefined;
+const customerSyncQueue = () => {
+  const url = process.env.CUSTOMER_SYNC_QUEUE_URL;
+  return url ? (_customerSyncQueue ??= new SqsCustomerSyncQueue(url)) : undefined;
+};
+
+async function publishCustomerSync(
+  subscription: Subscription,
+  type: "subscribed" | "unsubscribed",
+): Promise<void> {
+  const queue = customerSyncQueue();
+  if (!queue) return;
+  const [org, subscriber] = await Promise.all([
+    stores().organizations.get(subscription.orgId),
+    stores().subscribers.get(subscription.orgId, subscription.subscriberId),
+  ]);
+  if (!org?.customerSync?.enabled || !subscriber?.externalId) return;
+  try {
+    await queue.enqueue({
+      eventId: `${subscription.orgId}/${subscription.subscriberId}/${subscription.listId}/${type}`,
+      type,
+      orgId: subscription.orgId,
+      subscriberId: subscription.subscriberId,
+      externalId: subscriber.externalId,
+      email: subscriber.email,
+      listId: subscription.listId,
+      occurredAt: subscription.updatedAt,
+    });
+  } catch (e) {
+    // The subscription is already durable. A queue outage must not turn a
+    // successful confirmation/unsubscribe into a misleading failure page.
+    console.error("customer-sync: queue handoff failed", {
+      orgId: subscription.orgId,
+      subscriberId: subscription.subscriberId,
+      listId: subscription.listId,
+      type,
+      error: (e as Error).message,
+    });
+  }
+}
+const customerSyncSecrets = new SecretsManagerClient({});
+
+async function saveCustomerSyncSecret(orgId: string, value: string): Promise<string> {
+  const name = `addressium/${orgId}/customer-sync`;
+  if (process.env.ADDRESSIUM_LOCAL === "1") return value;
+  try {
+    await customerSyncSecrets.send(new CreateSecretCommand({ Name: name, SecretString: value }));
+  } catch (e) {
+    if ((e as { name?: string }).name !== "ResourceExistsException") throw e;
+    await customerSyncSecrets.send(new PutSecretValueCommand({ SecretId: name, SecretString: value }));
+  }
+  return name;
+}
 
 let _confirmSigner: HmacConfirmationSigner | undefined;
 async function confirmSigner(): Promise<HmacConfirmationSigner> {
@@ -484,6 +540,7 @@ export async function confirmHandler(
   try {
     const token = event.queryStringParameters?.token ?? "";
     const subs = await confirmOptInAny(stores(), await confirmSigner(), clock, token, provenance(event));
+    await Promise.all(subs.map((subscription) => publishCustomerSync(subscription, "subscribed")));
 
     // After the double opt-in is verified, ensure the subscriber has an account
     // in the org's linked pool, so their magic-link tokens can carry the pool
@@ -681,6 +738,14 @@ export async function scheduleCampaignHandler(
       // cohort" campaign mailed the entire list.
       ...(body.segmentId ? { segmentId: body.segmentId } : {}),
     };
+    const feed = body.feedId ? await stores().feeds.get(body.orgId, body.feedId) : undefined;
+    if (body.feedId && !feed) return json(400, { error: `unknown feed "${body.feedId}"` });
+    if (body.feedId && body.when.type !== "recurring") {
+      return json(400, { error: "a feed can only be used with a recurring campaign" });
+    }
+    if (feed && feed.targetListId !== body.listId) {
+      return json(400, { error: `feed "${feed.feedId}" targets newsletter "${feed.targetListId}"` });
+    }
     // Not string concatenation: `-` is legal inside both ids, so the old
     // `camp-${orgId}-${campaignId}` was ambiguous across tenants (#196).
     const oneOffName = scheduleName("camp", body.orgId, body.campaignId);
@@ -744,7 +809,11 @@ export async function scheduleCampaignHandler(
           // EventBridge Scheduler substitutes the context attribute below with
           // this firing's scheduled time, and it is stable across retries of
           // that firing, so idempotency still holds.
-          payload: { descriptor, editionKey: "<aws.scheduler.scheduled-time>" },
+          payload: {
+            descriptor,
+            ...(feed ? { feed: { url: feed.url, format: feed.format, fieldMap: feed.fieldMap } } : {}),
+            editionKey: "<aws.scheduler.scheduled-time>",
+          },
         });
         // The series PARENT gets a record too, with no `schedule.sendAt` — a
         // recurring series has no single send time, and its cron already lives on
@@ -852,7 +921,8 @@ export async function unsubscribeHandler(event: HttpEvent): Promise<HttpResult> 
     const { orgId, sub, listId } = (await confirmSigner()).verify(token);
     if (!listId) throw new Error("token has no list");
     if (method === "GET") return unsubscribePage(token);
-    await unsubscribeFromList(stores(), clock, { orgId, subscriberId: sub, listId });
+    const updated = await unsubscribeFromList(stores(), clock, { orgId, subscriberId: sub, listId });
+    await publishCustomerSync(updated, "unsubscribed");
     return method === "POST" && !event.queryStringParameters?.token
       ? json(200, { status: "unsubscribed" })
       : unsubscribeDonePage();
@@ -1326,8 +1396,7 @@ export async function mergeTagDeleteHandler(event: HttpEvent): Promise<HttpResul
 /**
  * GET /orgs/{org}/series — list. GET …/series/{id} — one. POST /series — save.
  *
- * Gated exactly like campaigns and templates: `campaigns:manage` to write,
- * `reports:view` to read. A series IS a campaign construct — it is the parent of
+ * Gated on `campaigns:manage` for both read and write. A series IS a campaign construct — it is the parent of
  * every `series_edition` — and writing one sets the template and the ad HTML
  * that every future edition will carry, which is the same authority as editing
  * a campaign. There is deliberately no delete: editions and series-bound ad
@@ -1343,13 +1412,43 @@ export async function seriesHandler(event: HttpEvent): Promise<HttpResult> {
       return json(200, await saveCampaignSeries(stores(), input));
     }
     const orgId = event.pathParameters?.org ?? "";
-    requireGrant(event, "reports:view", orgId);
+    requireGrant(event, "campaigns:manage", orgId);
     const seriesId = event.pathParameters?.id;
     if (seriesId) {
       const s = await getCampaignSeries(stores(), orgId, seriesId);
       return s ? json(200, s) : json(404, { error: "not found" });
     }
     return json(200, await listCampaignSeries(stores(), orgId));
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+/** GET /orgs/{org}/feeds — list. POST /feeds — create/edit one feed. */
+export async function feedsHandler(event: HttpEvent): Promise<HttpResult> {
+  try {
+    const method = event.requestContext?.http?.method ?? (event.body ? "POST" : "GET");
+    if (method === "POST") {
+      const input = schemas.saveFeedSchema.parse(JSON.parse(event.body ?? "{}"));
+      requireGrant(event, "campaigns:manage", input.orgId);
+      const list = await stores().lists.get(input.orgId, input.targetListId);
+      if (!list) return json(400, { error: `newsletter "${input.targetListId}" does not exist` });
+      const feed = {
+        orgId: input.orgId,
+        feedId: input.feedId,
+        url: input.url,
+        format: input.format,
+        targetListId: input.targetListId,
+        fieldMap: input.fieldMap,
+        pullIntervalMins: input.pullIntervalMins,
+      };
+      await stores().feeds.put(feed);
+      await audit(event, input.orgId, "feed.update", input.feedId);
+      return json(200, feed);
+    }
+    const orgId = event.pathParameters?.org ?? "";
+    requireGrant(event, "campaigns:manage", orgId);
+    return json(200, await stores().feeds.list(orgId));
   } catch (e) {
     return fail(e);
   }
@@ -1653,6 +1752,10 @@ export async function subscriptionStatusHandler(event: HttpEvent): Promise<HttpR
       input.status === "confirmed" ? "subscription.manual_confirm" : `subscription.${input.status}`,
       `${input.sub}:${input.listId}`,
     );
+    if (input.status === "confirmed" || input.status === "unsubscribed") {
+      const updated = await stores().subscriptions.get(input.orgId, input.sub, input.listId);
+      if (updated) await publishCustomerSync(updated, input.status === "confirmed" ? "subscribed" : "unsubscribed");
+    }
     return json(200, detail);
   } catch (e) {
     return fail(e);
@@ -2417,11 +2520,14 @@ export async function subscriberUnsubscribeHandler(event: HttpEvent): Promise<Ht
     if (!orgId || !subscriberId) return json(400, { error: "orgId and subscriberId required" });
     requireGrant(event, "subscribers:manage", orgId);
     if (listId) {
-      await unsubscribeFromList(stores(), clock, { orgId, subscriberId, listId });
+      const updated = await unsubscribeFromList(stores(), clock, { orgId, subscriberId, listId });
+      await publishCustomerSync(updated, "unsubscribed");
       return json(200, { status: "unsubscribed", scope: "list" });
     }
     if (!email) return json(400, { error: "email required for unsubscribe-all" });
     const n = await unsubscribeAll(stores(), clock, { orgId, subscriberId, email });
+    const after = await stores().subscriptions.listBySubscriber(orgId, subscriberId);
+    await Promise.all(after.filter((subscription) => subscription.status === "unsubscribed").map((subscription) => publishCustomerSync(subscription, "unsubscribed")));
     return json(200, { status: "unsubscribed", scope: "all", lists: n });
   } catch (e) {
     return fail(e);
@@ -2446,6 +2552,77 @@ export async function brandingHandler(event: HttpEvent): Promise<HttpResult> {
     requireGrant(event, "branding:manage", orgId);
     const org = await setBranding(stores(), orgId, branding);
     return json(200, org.branding);
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+/** GET/POST /orgs/customer-sync — configure the external customer record sink. */
+export async function customerSyncHandler(event: HttpEvent): Promise<HttpResult> {
+  try {
+    const method = event.requestContext?.http?.method ?? (event.body ? "POST" : "GET");
+    const orgId = event.pathParameters?.org ?? event.queryStringParameters?.orgId ?? "";
+    if (method === "GET") {
+      if (!orgId) return json(400, { error: "orgId required" });
+      requireGrant(event, "identity:manage", orgId);
+      const config = (await stores().organizations.get(orgId))?.customerSync;
+      return json(200, config ? { endpoint: config.endpoint, tableName: config.tableName, enabled: config.enabled, configured: true } : { configured: false });
+    }
+    const parsed = schemas.saveCustomerSyncSchema.safeParse(JSON.parse(event.body ?? "{}"));
+    if (!parsed.success) return json(400, { error: parsed.error.issues[0]?.message ?? "invalid" });
+    requireGrant(event, "identity:manage", parsed.data.orgId);
+    const org = await stores().organizations.get(parsed.data.orgId);
+    if (!org) return json(404, { error: "organization not found" });
+    if (!parsed.data.secret && !org.customerSync?.secretRef) return json(400, { error: "secret required for first configuration" });
+    const secretRef = parsed.data.secret
+      ? await saveCustomerSyncSecret(parsed.data.orgId, parsed.data.secret)
+      : org.customerSync!.secretRef;
+    await stores().organizations.put({
+      ...org,
+      customerSync: { endpoint: parsed.data.endpoint, tableName: parsed.data.tableName, secretRef, enabled: parsed.data.enabled },
+    });
+    await audit(event, parsed.data.orgId, "customer_sync.update", parsed.data.endpoint);
+    return json(200, { endpoint: parsed.data.endpoint, tableName: parsed.data.tableName, enabled: parsed.data.enabled, configured: true });
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+/** GET/POST /orgs/reengagement — configure the engagement-based sunset sweep. */
+export async function reengagementHandler(event: HttpEvent): Promise<HttpResult> {
+  try {
+    const method = event.requestContext?.http?.method ?? (event.body ? "POST" : "GET");
+    const orgId = event.pathParameters?.org ?? event.queryStringParameters?.orgId ?? "";
+    if (method === "GET") {
+      if (!orgId) return json(400, { error: "orgId required" });
+      requireGrant(event, "campaigns:manage", orgId);
+      const org = await stores().organizations.get(orgId);
+      if (!org) return json(404, { error: "organization not found" });
+      return json(200, {
+        configured: !!org.reengagement,
+        policy: resolveReengagementPolicy(org.reengagement),
+      });
+    }
+    const parsed = schemas.saveReengagementSchema.safeParse(JSON.parse(event.body ?? "{}"));
+    if (!parsed.success) return json(400, { error: parsed.error.issues[0]?.message ?? "invalid" });
+    requireGrant(event, "campaigns:manage", parsed.data.orgId);
+    const org = await stores().organizations.get(parsed.data.orgId);
+    if (!org) return json(404, { error: "organization not found" });
+    if (parsed.data.enabled) {
+      const list = await stores().lists.get(parsed.data.orgId, parsed.data.listId!);
+      if (!list) return json(400, { error: `unknown list "${parsed.data.listId}"` });
+    }
+    const policy = {
+      enabled: parsed.data.enabled,
+      coldAfterDays: parsed.data.coldAfterDays,
+      steps: parsed.data.steps,
+      stepIntervalDays: parsed.data.stepIntervalDays,
+      suppressScope: parsed.data.suppressScope,
+      ...(parsed.data.listId ? { listId: parsed.data.listId } : {}),
+    };
+    await stores().organizations.put({ ...org, reengagement: policy });
+    await audit(event, parsed.data.orgId, "reengagement.update", parsed.data.listId);
+    return json(200, { configured: true, policy });
   } catch (e) {
     return fail(e);
   }
@@ -2675,6 +2852,8 @@ const ADMIN_ROUTES: Record<string, RouteHandler> = {
   "GET /orgs/{org}/series": seriesHandler,
   "GET /orgs/{org}/series/{id}": seriesHandler,
   "POST /series": seriesHandler,
+  "GET /orgs/{org}/feeds": feedsHandler,
+  "POST /feeds": feedsHandler,
   "GET /orgs/{org}/segments": segmentsHandler,
   "POST /segments": segmentsHandler,
   "GET /orgs/{org}/segments/{segment}/members": segmentMembersHandler,
@@ -2708,6 +2887,10 @@ const ADMIN_ROUTES: Record<string, RouteHandler> = {
   "POST /orgs/{org}/import/mappings": importMappingsHandler,
   "POST /privacy": privacyHandler,
   "POST /orgs/branding": brandingHandler,
+  "GET /orgs/{org}/customer-sync": customerSyncHandler,
+  "POST /orgs/customer-sync": customerSyncHandler,
+  "GET /orgs/{org}/reengagement": reengagementHandler,
+  "POST /orgs/reengagement": reengagementHandler,
   "GET /orgs/{org}/alerts": alertConfigHandler,
   "POST /orgs/alerts": alertConfigHandler,
 };

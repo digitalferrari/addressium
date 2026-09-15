@@ -264,6 +264,48 @@ export interface SaveTemplateBody {
   mergeTags?: string[];
   adSlots?: string[];
 }
+export interface Feed {
+  orgId: string;
+  feedId: string;
+  url: string;
+  format: "rss" | "atom" | "json";
+  targetListId: string;
+  fieldMap: Record<string, string>;
+  pullIntervalMins: number;
+}
+export interface SaveFeedBody {
+  orgId: string;
+  feedId: string;
+  url: string;
+  format: Feed["format"];
+  targetListId: string;
+  fieldMap: Record<string, string>;
+  pullIntervalMins: number;
+}
+export type Cadence = "daily" | "weekly" | "biweekly" | "monthly";
+export interface AdSlotFill {
+  slot: string;
+  html: string;
+  binding: { kind: "series"; seriesId: string };
+  version: number;
+}
+export interface CampaignSeries {
+  orgId: string;
+  seriesId: string;
+  name: string;
+  cadence: Cadence;
+  templateId: string;
+  adSlotFills: AdSlotFill[];
+  aggregate: Record<string, number>;
+}
+export interface SaveSeriesBody {
+  orgId: string;
+  seriesId: string;
+  name: string;
+  cadence: Cadence;
+  templateId: string;
+  adSlotFills: Array<{ slot: string; html: string; version?: number }>;
+}
 
 export type MergeTagSource = "profile" | "feed" | "system" | "token_claim";
 export type MergeTagScope = "per_recipient" | "per_campaign" | "token_claim";
@@ -334,6 +376,7 @@ export interface ScheduleCampaignBody {
   listId: string;
   /** Narrow the send to a segment's members (#203); the list still selects the base set. */
   segmentId?: string;
+  feedId?: string;
   subject: string;
   template: EmailTemplateBody;
   when: ScheduleWhen;
@@ -556,8 +599,18 @@ export interface AlertConfig {
   notifyTargets: string[];
 }
 
+export interface ReengagementPolicy {
+  enabled: boolean;
+  coldAfterDays: number;
+  steps: number;
+  stepIntervalDays: number;
+  suppressScope?: "org" | "global";
+  listId?: string;
+}
+
 export type ColumnMapping =
   | { kind: "email" }
+  | { kind: "externalId" }
   | { kind: "attribute"; key: string }
   | {
       kind: "audience";
@@ -739,6 +792,12 @@ export const api = {
   /** null means this org has NO thresholds — render "unprotected", not zeros. */
   alertConfig: (org: string) => call<AlertConfig | null>("GET", `/orgs/${org}/alerts`),
   saveAlertConfig: (body: AlertConfig) => call<AlertConfig>("POST", `/orgs/alerts`, body),
+  customerSync: (org: string) => call<{ configured: boolean; endpoint?: string; tableName?: string; enabled?: boolean }>("GET", `/orgs/${org}/customer-sync`),
+  saveCustomerSync: (body: { orgId: string; endpoint: string; tableName: string; secret: string; enabled: boolean }) =>
+    call<{ configured: boolean; endpoint: string; tableName: string; enabled: boolean }>("POST", `/orgs/customer-sync`, body),
+  reengagement: (org: string) => call<{ configured: boolean; policy: ReengagementPolicy }>("GET", `/orgs/${org}/reengagement`),
+  saveReengagement: (body: ReengagementPolicy & { orgId: string }) =>
+    call<{ configured: boolean; policy: ReengagementPolicy }>("POST", `/orgs/reengagement`, body),
   orgMeta: (org: string) => call<OrgMeta>("GET", `/orgs/${org}`),
   orgIdentity: (org: string) => call<OrgIdentity>("GET", `/orgs/${org}/identity`),
   /**
@@ -831,6 +890,10 @@ export const api = {
   schedules: (org: string) => call<SendScheduleState[]>("GET", `/orgs/${org}/schedules`),
   templates: (org: string) => call<Template[]>("GET", `/orgs/${org}/templates`),
   saveTemplate: (body: SaveTemplateBody) => call<Template>("POST", `/templates`, body),
+  feeds: (org: string) => call<Feed[]>("GET", `/orgs/${org}/feeds`),
+  saveFeed: (body: SaveFeedBody) => call<Feed>("POST", `/feeds`, body),
+  series: (org: string) => call<CampaignSeries[]>("GET", `/orgs/${org}/series`),
+  saveSeries: (body: SaveSeriesBody) => call<CampaignSeries>("POST", `/series`, body),
   mergeTags: (org: string) => call<MergeTagEntry[]>("GET", `/orgs/${org}/merge-tags`),
   saveMergeTag: (body: SaveMergeTagBody) => call<MergeTagEntry>("POST", `/merge-tags`, body),
   deleteMergeTag: (orgId: string, name: string) =>

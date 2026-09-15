@@ -127,7 +127,7 @@ export function Analytics({ org, grant }: { org: string; grant: Grant | null }) 
   if (!can(grant, "reports:view", org)) {
     return (
       <div>
-        <h1 className="h1">Analytics</h1>
+        <div className="pagehead"><div><h1>Analytics</h1><p>Campaign counters, deliverability rates and the per-link click table.</p></div></div>
         <p className="muted">Your role can't view reports.</p>
       </div>
     );
@@ -138,14 +138,15 @@ export function Analytics({ org, grant }: { org: string; grant: Grant | null }) 
 
   return (
     <div>
-      <h1 className="h1">Analytics</h1>
+      <div className="pagehead"><div><h1>Analytics</h1><p>Campaign counters, deliverability rates and the per-link click table.</p></div></div>
       <p className="muted">
         Per-campaign counters, deliverability rates and the per-link click table. Every percentage on this screen is a
-        share of <b>sent</b>. Opens and clicks are counted once per subscriber.
+        share of <b>sent</b>. Campaign opens and clicks are counted once per subscriber;
+        per-link clicks count all recorded click events.
       </p>
 
       <div className="card row">
-        <select value={campaign} onChange={(e) => setCampaign(e.target.value)}>
+        <select aria-label="Campaign" value={campaign} onChange={(e) => setCampaign(e.target.value)}>
           <option value="">Choose a campaign…</option>
           {(campaigns.data ?? []).map((x) => (
             <option key={x.campaignId} value={x.campaignId}>
@@ -225,7 +226,8 @@ function LinksTab({ report }: { report: CampaignReport }) {
     <>
       <div className="card">
         <div className="muted" style={{ marginBottom: 8 }}>
-          All links — editorial links only. CTR is a share of sent.
+          Recorded links from the campaign archive. Clicks count events; Unique counts subscribers
+          per link. Clicks / sent includes repeat clicks and can exceed 100%.
         </div>
         {rows.length === 0 ? (
           // An empty table would read as "zero clicks on every link". The
@@ -243,7 +245,7 @@ function LinksTab({ report }: { report: CampaignReport }) {
                 <th>Link</th>
                 <th>Clicks</th>
                 <th>Unique</th>
-                <th>CTR</th>
+                <th>Clicks / sent</th>
                 <th />
               </tr>
             </thead>
@@ -291,9 +293,9 @@ function LinksTab({ report }: { report: CampaignReport }) {
         <p className="muted">
           None of rejects, delivery delays or rendering failures suppresses anyone. A <b>reject</b> is SES accepting the
           message and then refusing to send it — nothing reached a receiver, so it is not a bounce. A{" "}
-          <b>delivery delay</b> is a full mailbox or a throttling receiver, still being retried, and suppression is
-          global. A <b>rendering failure</b> is the one counter here that points at our bug rather than a recipient's
-          mailbox: a merge tag did not resolve.
+          <b>delivery delay</b> records a temporary delivery problem, such as a full mailbox or
+          throttling; a later delivery may also be counted. A <b>rendering failure</b> records
+          SES failing to render a template, for example because template data is missing.
         </p>
       </div>
     </>
@@ -352,7 +354,7 @@ function FunnelTab({ report }: { report: CampaignReport }) {
         </tbody>
       </table>
       <p className="muted">
-        <b>{stuck}</b> messages are unresolved — derived as sent − delivered − bounces − rejects ({c.sent} − {c.delivered}{" "}
+        Unresolved estimate: <b>{stuck}</b> — derived as sent − delivered − bounces − rejects ({c.sent} − {c.delivered}{" "}
         − {c.bounces} − {c.rejects}), clamped at zero. This is a derivation, not a count: SES emits more than one event
         per message, so it is not the same figure as the <b>{c.deliveryDelays}</b> delivery delays counted on the Links
         tab.

@@ -54,7 +54,7 @@ export function Subscribers({ org, grant }: { org: string; grant: Grant | null }
 
   return (
     <div>
-      <h1 className="h1">Subscribers · {org || "—"}</h1>
+      <div className="pagehead"><div><h1>Subscribers</h1><p>The addressium subscriber record is the primary identity. Search, inspect, unsubscribe or suppress.</p></div></div>
       {msg && <p className="muted">{msg}</p>}
 
       <div className="card">

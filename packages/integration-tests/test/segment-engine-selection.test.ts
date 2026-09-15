@@ -22,6 +22,8 @@ import { dirname, resolve } from "node:path";
 import {
   GSI_NO_BASE_LIST,
   GSI_NO_ENGAGEMENT,
+  GSI_NO_ANY,
+  GSI_MULTIPLE_LISTS,
   GsiSegmentEngine,
   OpenSearchSegmentEngine,
   gsiEngineLimitation,
@@ -65,17 +67,16 @@ test("gsiEngineLimitation names both v1 limits and clears what it can resolve", 
   assert.equal(gsiEngineLimitation(engagement), GSI_NO_ENGAGEMENT);
   assert.equal(gsiEngineLimitation(noBaseList), GSI_NO_BASE_LIST);
   assert.equal(gsiEngineLimitation(resolvable), undefined);
-  // `any` fans out per condition and needs no base set, so the base-list rule
-  // must not fire on it — refusing these would reject predicates that work.
+  // The GSI engine cannot fan out across conditions.
   assert.equal(
     gsiEngineLimitation({ match: "any", conditions: [{ field: "plan", op: "eq", value: "gold" }] }),
-    undefined,
+    GSI_NO_ANY,
   );
   // An explicit cohort names its members outright; no engine resolves it by query.
   assert.equal(gsiEngineLimitation({ match: "explicit", subscriberIds: ["s1"] }), undefined);
 });
 
-test("the rule agrees with what the engine actually throws", () => {
+test("the rule agrees with what the engine actually throws", async () => {
   // The point of extracting it. Two copies of this rule would put the
   // save-time/send-time disagreement straight back the first time one changed.
   const engine = new GsiSegmentEngine({
@@ -86,10 +87,19 @@ test("the rule agrees with what the engine actually throws", () => {
   for (const [predicate, expected] of [
     [engagement, GSI_NO_ENGAGEMENT],
     [noBaseList, GSI_NO_BASE_LIST],
+    [{ match: "any", conditions: [{ field: "plan", op: "eq", value: "gold" }] }, GSI_NO_ANY],
+    [{ match: "any", conditions: resolvable.conditions }, GSI_NO_ANY],
+    [{ match: "all", conditions: [
+      { field: "list", op: "in", value: "ledger" },
+      { field: "list", op: "in", value: "weekly" },
+    ] }, GSI_MULTIPLE_LISTS],
   ] as const) {
-    assert.rejects(async () => {
-      for await (const _ of engine.resolve("summit", predicate)) void _;
+    const input = predicate as SegmentPredicate;
+    assert.equal(gsiEngineLimitation(input), expected);
+    await assert.rejects(async () => {
+      for await (const _ of engine.resolve("summit", input)) assert.fail("must not yield recipients");
     }, new RegExp(expected.replace(/[.*+?^${}()|[\]\\`]/g, "\\$&")));
+    await assert.rejects(engine.estimate("summit", input), { message: expected });
   }
 });
 

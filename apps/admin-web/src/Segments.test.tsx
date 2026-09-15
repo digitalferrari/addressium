@@ -34,7 +34,7 @@ import {
   newRow,
   type Row,
 } from "./screens/segment-predicate.js";
-import { GsiSegmentEngine } from "@addressium/segment";
+import { GsiSegmentEngine, gsiEngineLimitation, GSI_NO_ANY, GSI_MULTIPLE_LISTS, type SegmentPredicate } from "@addressium/segment";
 
 const LISTS = [
   { orgId: "acme", listId: "ledger", name: "The Morning Ledger" },
@@ -222,47 +222,37 @@ test("every rule the builder emits is ALL, and needs a base list", () => {
   expect(toPredicate(rows).match).toBe("all");
 });
 
-/**
- * Why the builder emits no `match: "any"` — driven against the real engine
- * rather than inferred from the comment at `packages/segment/src/index.ts:85`,
- * which says `any` "needs no base set" and reads as though it were supported.
- *
- * `gsiEngineLimitation` returns undefined for both shapes below, so
- * `segmentsHandler` SAVES them. What happens next is the whole argument for
- * leaving `any` out of the structured path.
- */
-test("an ANY rule is saveable and then breaks at send — so the builder never emits one", async () => {
+test("unsupported audiences fail the shared save/send guard without yielding recipients", async () => {
   const subscriber = {
     orgId: "o", sub: "s1", email: "a@example.com",
     entitlement: "free", status: "active", attributes: { plan: "silver" },
   };
   const stores = {
-    subscriptions: { listConfirmed: async () => [{ subscriberId: "s1", listId: "ledger", status: "confirmed" }] },
+    subscriptions: { listConfirmed: vi.fn(async () => [{ subscriberId: "s1", listId: "ledger", status: "confirmed" }]) },
     subscribers: { get: async () => subscriber },
   };
   const engine = new GsiSegmentEngine(stores as never);
-  const drain = async (p: unknown) => {
-    const out: string[] = [];
-    for await (const id of engine.resolve("o" as never, p as never)) out.push(id);
-    return out;
-  };
-
-  // (a) No base list: `resolve` does `conditions.find(...)!.value` and throws.
-  await expect(
-    drain({ match: "any", conditions: [{ field: "plan", op: "eq", value: "gold" }] }),
-  ).rejects.toThrow(TypeError);
-
-  // (b) With a base list: `case "list": return true` short-circuits `some`, so
-  // a subscriber whose plan is "silver" matches a rule asking for "gold" — the
-  // segment mails the whole list. This is the #195 shape, and the reason
-  // "just require a list condition" is not a fix for `any`.
-  expect(await drain({
-    match: "any",
-    conditions: [
+  const cases: [SegmentPredicate, string][] = [
+    [{ match: "any", conditions: [{ field: "plan", op: "eq", value: "gold" }] }, GSI_NO_ANY],
+    [{ match: "any", conditions: [
       { field: "list", op: "in", value: "ledger" },
       { field: "plan", op: "eq", value: "gold" },
-    ],
-  })).toEqual(["s1"]);
+    ] }, GSI_NO_ANY],
+    [{ match: "all", conditions: [
+      { field: "list", op: "in", value: "ledger" },
+      { field: "list", op: "in", value: "weekly" },
+    ] }, GSI_MULTIPLE_LISTS],
+  ];
+  for (const [predicate, error] of cases) {
+    expect(gsiEngineLimitation(predicate)).toBe(error);
+    const yielded: string[] = [];
+    await expect((async () => {
+      for await (const id of engine.resolve("o", predicate)) yielded.push(id);
+    })()).rejects.toThrow(error);
+    expect(yielded).toEqual([]);
+    await expect(engine.estimate("o", predicate)).rejects.toThrow(error);
+  }
+  expect(stores.subscriptions.listConfirmed).not.toHaveBeenCalled();
 });
 
 test("subscription status is not offered — it is dead on both engines", async () => {

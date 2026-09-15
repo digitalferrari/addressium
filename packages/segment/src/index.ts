@@ -59,6 +59,8 @@ export * from "./opensearch.js";
 export const GSI_NO_BASE_LIST = "v1 segment engine requires a `list in <listId>` base condition";
 export const GSI_NO_ENGAGEMENT =
   "engagement predicates are not supported by the v1 segment engine (#28)";
+export const GSI_NO_ANY = 'v1 segment engine does not support `match: "any"`';
+export const GSI_MULTIPLE_LISTS = "v1 segment engine supports exactly one list condition";
 
 /**
  * Why the v1 GSI engine cannot resolve this predicate, or undefined if it can
@@ -72,7 +74,7 @@ export const GSI_NO_ENGAGEMENT =
  * claimed itself. Two copies of this rule would put that failure back the first
  * time one of them changed.
  *
- * The OpenSearch engine has neither limitation, which is exactly why the answer
+ * The OpenSearch engine does not have these limitations, which is why the answer
  * depends on which engine the deployment actually runs.
  */
 export function gsiEngineLimitation(predicate: SegmentPredicate): string | undefined {
@@ -80,9 +82,9 @@ export function gsiEngineLimitation(predicate: SegmentPredicate): string | undef
   // query, so neither engine's limits apply.
   if (isExplicit(predicate)) return undefined;
   if (predicate.conditions.some((c) => c.field === "last_open_at")) return GSI_NO_ENGAGEMENT;
-  // `match: "any"` fans out per condition and needs no base set; only the
-  // intersecting form ranges over one list.
-  if (predicate.match === "any") return undefined;
+  // The resolver filters one list; it cannot union audiences or intersect lists.
+  if (predicate.match === "any") return GSI_NO_ANY;
+  if (predicate.conditions.filter((c) => c.field === "list").length > 1) return GSI_MULTIPLE_LISTS;
   const hasBase = predicate.conditions.some((c) => c.field === "list" && c.op === "in");
   return hasBase ? undefined : GSI_NO_BASE_LIST;
 }

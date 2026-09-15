@@ -1,32 +1,33 @@
 /**
  * Palette (#260). The design (`demo/index.html`) is light-first with a dark
  * variant; the console has always been dark and 22 screens are written against
- * it, so we adopt the design's DARK values under the design's token names and
- * alias the four legacy names (--panel, --line, --ink-2, --accent) onto them.
+ * it, so we use the prototype's light-first tokens and keep the same names
+ * available to the existing screens.
  * Every existing screen keeps rendering; new chrome can use the fuller scale.
  */
 :root {
-  --bg: #0c1220;
-  --surface: #121a2a;
-  --surface-2: #182234;
-  --surface-3: #1f2c42;
-  --border: #28344c;
-  --border-strong: #37475f;
-  --ink: #e8edf6;
-  --ink-2: #a6b3c9;
-  --ink-3: #7382a0;
-  --ink-4: #5a6884;
-  --accent: #6b8bf5;
-  --accent-ink: #a9bdfb;
-  --accent-soft: #1a2745;
-  --good: #3ec98a;
-  --good-soft: #123024;
-  --warn: #e0a94a;
-  --warn-soft: #33280f;
-  --crit: #f0756c;
+  --bg: #f4f6fa;
+  --surface: #ffffff;
+  --surface-2: #eef1f7;
+  --surface-3: #e7ebf3;
+  --border: #d7dde8;
+  --border-strong: #c2cbdb;
+  --ink: #151d2b;
+  --ink-2: #48566b;
+  --ink-3: #77839a;
+  --ink-4: #9aa4b8;
+  --accent: #2f56d4;
+  --accent-ink: #213f9e;
+  --accent-soft: #e6ecfb;
+  --good: #12855a;
+  --good-soft: #dcf2e6;
+  --warn: #a56a12;
+  --warn-soft: #f8eed8;
+  --crit: #c3372f;
+  --crit-soft: #fae1df;
+  --shadow: 0 1px 2px rgba(20, 29, 43, 0.06), 0 4px 16px rgba(20, 29, 43, 0.06);
   --radius: 10px;
   --radius-sm: 7px;
-  --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 4px 16px rgba(0, 0, 0, 0.35);
 
   /* Legacy aliases — the names the 22 existing screens already use. */
   --panel: var(--surface);
@@ -51,6 +52,28 @@ a { color: var(--accent); }
 .nav button.active { background: var(--accent-soft); color: var(--accent-ink); font-weight: 650; }
 .main { min-width: 0; display: flex; flex-direction: column; }
 .main > .view { padding: 26px; max-width: 1180px; }
+
+/* Prototype layout primitives used by the redesigned screens. */
+.pagehead { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin-bottom: 20px; }
+.pagehead h1 { font-size: 23px; letter-spacing: -0.02em; margin: 0; }
+.pagehead p { margin: 5px 0 0; color: var(--ink-3); font-size: 13.5px; }
+.dashboard { display: flex; flex-direction: column; gap: 16px; }
+.dashboard-grid { display: grid; grid-template-columns: 1fr 1.55fr; gap: 16px; align-items: start; }
+.cardhead { display: flex; align-items: center; justify-content: space-between; padding: 14px 18px; border-bottom: 1px solid var(--border); }
+.cardhead h2, .cardhead h3 { margin: 0; font-size: 14.5px; }
+.cardpad { padding: 18px; }
+.dashboard-newsletters .cardpad { min-height: 132px; }
+.dashboard-campaigns { overflow: hidden; }
+.dashboard-setup { margin-bottom: 0; }
+.actlist { display: flex; flex-direction: column; margin: 0; padding: 0; }
+.actitem { display: flex; gap: 12px; align-items: center; padding: 12px 18px; border-bottom: 1px solid var(--border); }
+.actitem:last-child { border-bottom: 0; }
+.actitem .ci { width: 34px; height: 34px; flex: none; display: grid; place-items: center; border-radius: 8px; background: var(--accent-soft); color: var(--accent-ink); font-size: 15px; }
+.actitem .meta { flex: 1; min-width: 0; }
+.actitem .meta b { display: block; font-size: 13.5px; }
+.actitem .meta div { color: var(--ink-3); font-size: 12px; }
+.flink { color: var(--accent-ink); font-weight: 600; font-size: 13px; }
+.num { font-variant-numeric: tabular-nums; }
 
 /* ---- Console shell (#260) — sidebar identity, grouped nav, topbar ---- */
 
@@ -150,6 +173,23 @@ th { color: var(--ink-2); font-weight: 600; }
 .bar { height: 8px; background: var(--accent); border-radius: 4px; }
 .swatch { width: 22px; height: 22px; border-radius: 6px; border: 1px solid var(--line); display: inline-block; vertical-align: middle; }
 .center { display: grid; place-items: center; min-height: 100vh; }
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0c1220; --surface: #121a2a; --surface-2: #182234; --surface-3: #1f2c42;
+    --border: #28344c; --border-strong: #37475f; --ink: #e8edf6; --ink-2: #a6b3c9;
+    --ink-3: #7382a0; --ink-4: #5a6884; --accent: #6b8bf5; --accent-ink: #a9bdfb;
+    --accent-soft: #1a2745; --good: #3ec98a; --good-soft: #123024; --warn: #e0a94a;
+    --warn-soft: #33280f; --crit: #f0756c; --crit-soft: #341614;
+    --shadow: 0 1px 2px rgba(0,0,0,.4), 0 4px 16px rgba(0,0,0,.35);
+  }
+}
+@media (max-width: 900px) {
+  .app { grid-template-columns: 1fr; }
+  .sidebar { position: static; }
+  .main > .view { padding: 18px; }
+  .dashboard-grid { grid-template-columns: 1fr; }
+}
 
 /* ---- Motion system (#119) — subtle, CSS-first, reduced-motion aware ---- */
 :root { --dur-1: 140ms; --dur-2: 240ms; --ease: cubic-bezier(0.2, 0.7, 0.2, 1); }

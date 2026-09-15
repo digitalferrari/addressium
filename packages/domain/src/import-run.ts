@@ -279,7 +279,21 @@ export async function importWithMapping(
     }
     if (!mapped.mailable) report.nonMailable++;
 
-    const existing = await stores.subscribers.findByEmail(opts.orgId, mapped.email);
+    const byEmail = await stores.subscribers.findByEmail(opts.orgId, mapped.email);
+    const byExternal = mapped.externalId ? await stores.subscribers.findByExternalId(opts.orgId, mapped.externalId) : undefined;
+    if (byExternal && byExternal.email !== mapped.email) {
+      report.errors.push(`line ${index + 2}: external customer id belongs to a different email address`);
+      continue;
+    }
+    if (byEmail && byEmail.externalId && mapped.externalId && byEmail.externalId !== mapped.externalId) {
+      report.errors.push(`line ${index + 2}: email already belongs to a different external customer id`);
+      continue;
+    }
+    if (byExternal && byEmail && byExternal.sub !== byEmail.sub) {
+      report.errors.push(`line ${index + 2}: external customer id and email belong to different subscribers`);
+      continue;
+    }
+    const existing = byExternal ?? byEmail;
     if (opts.dryRun) {
       existing ? report.updated++ : report.created++;
       countSubscriptions(mapped, byName, report);
@@ -288,7 +302,11 @@ export async function importWithMapping(
 
     let subscriber: Subscriber;
     if (existing) {
-      subscriber = { ...existing, attributes: { ...existing.attributes, ...mapped.attributes } };
+      subscriber = {
+        ...existing,
+        ...(mapped.externalId && !existing.externalId ? { externalId: mapped.externalId } : {}),
+        attributes: { ...existing.attributes, ...mapped.attributes },
+      };
       await stores.subscribers.put(subscriber);
       report.updated++;
     } else {
@@ -296,6 +314,7 @@ export async function importWithMapping(
         orgId: opts.orgId,
         sub: randomUUID(),
         email: mapped.email,
+        ...(mapped.externalId ? { externalId: mapped.externalId } : {}),
         attributes: mapped.attributes,
         source: "import",
         status: "active",

@@ -9,6 +9,7 @@ import type {
   Campaign,
   CampaignSeries,
   DripSequence,
+  Feed,
   EmailArchive,
   EngagementEvent,
   EntitlementSync,
@@ -51,6 +52,8 @@ export interface SendDescriptor {
   listId: string;
   subject: string;
   template: EmailTemplate;
+  /** Values resolved once for the campaign, such as fields from a feed edition. */
+  campaignAttributes?: Record<string, string>;
   /**
    * Narrow this send to a segment's members (#203). The list still selects the
    * base set — a segment targets WITHIN a list, and the list is what carries the
@@ -459,10 +462,17 @@ export interface CampaignSeriesStore {
   list(orgId: string): Promise<CampaignSeries[]>;
 }
 
+/** Operator-configured article feeds used by recurring campaign launches. */
+export interface FeedStore {
+  get(orgId: string, feedId: string): Promise<Feed | undefined>;
+  put(feed: Feed): Promise<void>;
+  list(orgId: string): Promise<Feed[]>;
+}
+
 /** Send-schedule lifecycle records (§4.6). Never deleted — pause/archive flip status. */
 export interface SendScheduleStore {
   get(orgId: string, scheduleId: string): Promise<SendScheduleState | undefined>;
-  put(s: SendScheduleState): Promise<void>;
+  put(s: SendScheduleState, opts?: { ifRevision: number | undefined }): Promise<void>;
   list(orgId: string): Promise<SendScheduleState[]>;
 }
 
@@ -762,6 +772,7 @@ export interface Stores {
   /** Halt markers for record-less send ids (recurring editions, drip, re-engagement). */
   halts: HaltStore;
   series: CampaignSeriesStore;
+  feeds: FeedStore;
   schedules: SendScheduleStore;
   templates: TemplateStore;
   /** Org-defined merge tags (§4.15); reserved names are not stored, they are merged in on read. */

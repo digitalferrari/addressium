@@ -8,6 +8,7 @@ import type {
   Campaign,
   CampaignSeries,
   DripSequence,
+  Feed,
   EmailArchive,
   EngagementEvent,
   EntitlementSync,
@@ -34,6 +35,7 @@ import type {
   ArchiveStore,
   CampaignScheduler,
   CampaignSeriesStore,
+  FeedStore,
   CampaignStore,
   DripEnrollment,
   DripSequenceStore,
@@ -452,6 +454,19 @@ export class MemCampaignSeries implements CampaignSeriesStore {
   }
 }
 
+export class MemFeeds implements FeedStore {
+  private map = new Map<string, Feed>();
+  async get(orgId: string, feedId: string) {
+    return this.map.get(subKey(orgId, feedId));
+  }
+  async put(feed: Feed) {
+    this.map.set(subKey(feed.orgId, feed.feedId), feed);
+  }
+  async list(orgId: string) {
+    return [...this.map.values()].filter((feed) => feed.orgId === orgId);
+  }
+}
+
 export class MemTemplates implements TemplateStore {
   private map = new Map<string, Template>();
   async get(orgId: string, templateId: string) {
@@ -475,7 +490,10 @@ export class MemSendSchedules implements SendScheduleStore {
   async get(orgId: string, scheduleId: string) {
     return this.map.get(subKey(orgId, scheduleId));
   }
-  async put(s: SendScheduleState) {
+  async put(s: SendScheduleState, opts?: { ifRevision: number | undefined }) {
+    if (opts && this.map.get(subKey(s.orgId, s.scheduleId))?.revision !== opts.ifRevision) {
+      throw new ConcurrentModificationError("schedule");
+    }
     this.map.set(subKey(s.orgId, s.scheduleId), s);
   }
   async list(orgId: string) {
@@ -687,6 +705,7 @@ export function memStores(): Stores {
     campaigns,
     halts: new MemHalts(),
     series: new MemCampaignSeries(),
+    feeds: new MemFeeds(),
     schedules: new MemSendSchedules(),
     templates: new MemTemplates(),
     mergeTags: new MemMergeTags(),

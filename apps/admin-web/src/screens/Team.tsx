@@ -43,7 +43,7 @@ export function Team({ org }: { org: string }) {
 
   return (
     <div>
-      <h2>Team &amp; access</h2>
+      <h2>Roles &amp; access</h2>
       <p className="muted">
         Members of this deployment&rsquo;s admin console. Roles are enforced server-side; the
         organizations listed here scope what each member can act on.

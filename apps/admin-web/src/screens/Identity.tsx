@@ -26,7 +26,7 @@
  */
 import { useState } from "react";
 import { useAsync } from "../useAsync.js";
-import { absoluteApiUrl, api, type OrgIdentity } from "../api.js";
+import { absoluteApiUrl, api } from "../api.js";
 import { adminPoolConfig } from "../auth.js";
 
 /**
@@ -61,9 +61,9 @@ function IdField({ label, value, hint }: { label: string; value?: string; hint?:
   };
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
-      <label className="muted" style={{ fontSize: 11.5, letterSpacing: 0.02 }}>
+      <div className="muted" style={{ fontSize: 11.5, letterSpacing: 0.02 }}>
         {label}
-      </label>
+      </div>
       {value ? (
         <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
           <code
@@ -88,6 +88,7 @@ function IdField({ label, value, hint }: { label: string; value?: string; hint?:
             style={{ flex: "none", fontSize: 11.5, padding: "5px 9px" }}
             onClick={() => void copy()}
             title={`Copy ${label}`}
+            aria-label={`Copy ${label}`}
           >
             {copied ? "Copied" : "Copy"}
           </button>
@@ -204,7 +205,7 @@ export function Identity({ org }: { org: string }) {
                 organization — one pool of staff operators serving every org — so it is read from
                 this console's own build configuration rather than from the organization record.
                 A field reading <i>not configured</i> means that build-time value was not set;
-                sign-in still works on whatever the console was actually built with.
+                the pool ID is display-only, while sign-in requires the Hosted UI domain and app client ID.
               </Note>
             </div>
 
@@ -227,7 +228,7 @@ export function Identity({ org }: { org: string }) {
               />
               <Note tone="info">
                 addressium <b>references</b> this pool — it does not own it and never creates it;
-                the stack holds no <code>CreateUserPool</code> permission anywhere. Linking
+                the subscriber-pool linking path does not create a pool. Linking
                 validates it with <code>DescribeUserPool</code> and nothing more. An organization
                 with magic links off has no pool at all and runs a list fine.
               </Note>
@@ -260,13 +261,13 @@ export function Identity({ org }: { org: string }) {
                   <IdField
                     label="Key ID (kid)"
                     value={data.magicLink.kid}
-                    hint="Identifies this org's key inside the shared JWKS."
+                    hint="Identifies the signing key inside this organization's JWKS."
                   />
                 </div>
                 <Note tone="info">
-                  The <b>JWKS endpoint is one shared API route</b> serving every organization, not a
-                  per-org resource: it publishes each org's key under its own <code>kid</code>,
-                  which is what keeps silos from sharing tokens.
+                  The <b>JWKS endpoint is scoped to this organization</b>: it publishes this
+                  org's public signing key. Verifiers must also check the expected issuer,
+                  audience and token expiry.
                 </Note>
               </>
             ) : (
@@ -279,8 +280,9 @@ export function Identity({ org }: { org: string }) {
               <Note tone="info">
                 Magic links are <b>off</b> for this organization, which is a complete and valid
                 configuration — not a missing step. It has <b>no signing key, no linked pool, no
-                JWKS and no token</b>: editorial links render untokenized (still click-tracked) and
-                every list sends normally. An org gets its own KMS signing key only when the
+                token</b>. Its public JWKS endpoint returns an empty key set. Editorial links
+                render untokenized (still click-tracked); sending also depends on SES readiness.
+                An org gets its own KMS signing key only when the
                 feature is turned on, at provisioning time.
               </Note>
             )}

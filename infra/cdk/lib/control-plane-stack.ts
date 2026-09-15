@@ -480,6 +480,19 @@ export class ControlPlaneStack extends Stack {
       deadLetterQueue: { queue: eventsDlq, maxReceiveCount: 5 },
       ...queueEncryption,
     });
+    const customerSyncDlq = new Queue(this, "CustomerSyncDlq", {
+      fifo: true,
+      contentBasedDeduplication: false,
+      retentionPeriod: Duration.days(14),
+      ...queueEncryption,
+    });
+    const customerSyncQueue = new Queue(this, "CustomerSyncQueue", {
+      fifo: true,
+      contentBasedDeduplication: false,
+      visibilityTimeout: Duration.minutes(5),
+      deadLetterQueue: { queue: customerSyncDlq, maxReceiveCount: 5 },
+      ...queueEncryption,
+    });
     // Encrypted at rest (#202). SNS is NOT encrypted by default, and this topic
     // carries bounce and complaint notifications containing subscriber emails.
     const sesEvents = new Topic(this, "SesEventsTopic", { masterKey: dataKey });
@@ -879,6 +892,7 @@ export class ControlPlaneStack extends Stack {
       WEBHOOK_SECRET_ARN: webhookSecret.secretArn,
       AUDIT_BUCKET: auditBucket.bucketName, // WORM audit sink (#29)
       EXPORT_BUCKET: exportBucket.bucketName, // bulk export staging (#224)
+      CUSTOMER_SYNC_QUEUE_URL: customerSyncQueue.queueUrl,
     };
     const signupFn = fn("SignupFn", apiEntry, "signupHandler", {
       ...apiEnv,
@@ -976,8 +990,10 @@ export class ControlPlaneStack extends Stack {
     // Invoke only, on that one function. `/confirm` can ask for provisioning; it
     // cannot perform it, and it cannot reach Cognito at all.
     subscriberAccountFn.grantInvoke(confirmFn);
+    customerSyncQueue.grantSendMessages(confirmFn);
     reservePublic(confirmFn);
     const unsubscribeFn = fn("UnsubscribeFn", apiEntry, "unsubscribeHandler", apiEnv);
+    customerSyncQueue.grantSendMessages(unsubscribeFn);
     // The one route that must NEVER be starved by a send in progress.
     reservePublic(unsubscribeFn, 20);
     const entitlementFn = fn("EntitlementFn", apiEntry, "entitlementSyncHandler", apiEnv);
@@ -1025,6 +1041,25 @@ export class ControlPlaneStack extends Stack {
     // names actually exists.
     const segmentEngine = enableOpenSearchMirror ? "opensearch" : "gsi";
     const eventsFn = fn("EventsFn", svc("services/events/src/index.ts"), "handler");
+
+    // Customer-record updates are deliberately a separate FIFO pipeline. A
+    // slow or unavailable external system must never block subscribe or
+    // unsubscribe, while FIFO ordering keeps one organization's changes in
+    // the order they occurred and the DLQ makes exhausted deliveries visible.
+    const customerSyncFn = fn(
+      "CustomerSyncFn",
+      svc("services/customer-sync/src/index.ts"),
+      "handler",
+    );
+    table.grantReadData(customerSyncFn);
+    customerSyncQueue.grantConsumeMessages(customerSyncFn);
+    customerSyncFn.addToRolePolicy(orgSecretsScoped());
+    customerSyncFn.addEventSource(
+      new SqsEventSource(customerSyncQueue, {
+        batchSize: 10,
+        reportBatchItemFailures: true,
+      }),
+    );
 
     // Launch handler for recurring series (EventBridge Scheduler target, §4.16).
     const launchFn = fn("LaunchFn", svc("services/automations/src/index.ts"), "handler", {
@@ -1442,6 +1477,15 @@ export class ControlPlaneStack extends Stack {
     });
     table.grantReadWriteData(adminApiFn);
     sendQueue.grantSendMessages(adminApiFn);
+    customerSyncQueue.grantSendMessages(adminApiFn);
+    // Customer-sync configuration stores the endpoint's secret in Secrets
+    // Manager; only the reference is written to the organization record.
+    adminApiFn.addToRolePolicy(
+      new PolicyStatement({
+        actions: ["secretsmanager:CreateSecret", "secretsmanager:PutSecretValue", "secretsmanager:TagResource"],
+        resources: ["*"],
+      }),
+    );
     // Three suppression-list actions, two different risk shapes (#240, #247).
     //
     // ListSuppressedDestinations — POST /orgs/{org}/import/suppression (#240):
@@ -1718,6 +1762,8 @@ export class ControlPlaneStack extends Stack {
     adminRoute("SeriesGetFn", "seriesHandler", HttpMethod.GET, "/orgs/{org}/series");
     adminRoute("SeriesGetOneFn", "seriesHandler", HttpMethod.GET, "/orgs/{org}/series/{id}");
     adminRoute("SeriesPostFn", "seriesHandler", HttpMethod.POST, "/series");
+    adminRoute("FeedsGetFn", "feedsHandler", HttpMethod.GET, "/orgs/{org}/feeds");
+    adminRoute("FeedsPostFn", "feedsHandler", HttpMethod.POST, "/feeds");
     adminRoute("SegmentsGetFn", "segmentsHandler", HttpMethod.GET, "/orgs/{org}/segments");
     adminRoute("SegmentsPostFn", "segmentsHandler", HttpMethod.POST, "/segments");
     adminRoute("SegmentMembersGetFn", "segmentMembersHandler", HttpMethod.GET, "/orgs/{org}/segments/{segment}/members");
@@ -1764,6 +1810,10 @@ export class ControlPlaneStack extends Stack {
     adminRoute("AuditReadFn", "auditReadHandler", HttpMethod.GET, "/orgs/{org}/audit");
     adminRoute("PrivacyFn", "privacyHandler", HttpMethod.POST, "/privacy");
     adminRoute("BrandingPostFn", "brandingHandler", HttpMethod.POST, "/orgs/branding");
+    adminRoute("CustomerSyncGetFn", "customerSyncHandler", HttpMethod.GET, "/orgs/{org}/customer-sync");
+    adminRoute("CustomerSyncPostFn", "customerSyncHandler", HttpMethod.POST, "/orgs/customer-sync");
+    adminRoute("ReengagementGetFn", "reengagementHandler", HttpMethod.GET, "/orgs/{org}/reengagement");
+    adminRoute("ReengagementPostFn", "reengagementHandler", HttpMethod.POST, "/orgs/reengagement");
     // Deliverability thresholds — these drive the auto-halt (#217).
     adminRoute("AlertConfigGetFn", "alertConfigHandler", HttpMethod.GET, "/orgs/{org}/alerts");
     adminRoute("AlertConfigPostFn", "alertConfigHandler", HttpMethod.POST, "/orgs/alerts");
@@ -1930,6 +1980,22 @@ export class ControlPlaneStack extends Stack {
       treatMissingData: TreatMissingData.NOT_BREACHING,
       alarmDescription: "addressium: event queue backing up (oldest message > 15m)",
     }));
+    alarm("CustomerSyncDlqNotEmptyAlarm", new Alarm(this, "CustomerSyncDlqNotEmptyAlarm", {
+      metric: customerSyncDlq.metricApproximateNumberOfMessagesVisible({ period: Duration.minutes(1) }),
+      threshold: 0,
+      comparisonOperator: ComparisonOperator.GREATER_THAN_THRESHOLD,
+      evaluationPeriods: 1,
+      treatMissingData: TreatMissingData.NOT_BREACHING,
+      alarmDescription: "addressium: customer-record updates in the dead-letter queue",
+    }));
+    alarm("CustomerSyncQueueAgeAlarm", new Alarm(this, "CustomerSyncQueueAgeAlarm", {
+      metric: customerSyncQueue.metricApproximateAgeOfOldestMessage({ period: Duration.minutes(5) }),
+      threshold: Duration.minutes(15).toSeconds(),
+      comparisonOperator: ComparisonOperator.GREATER_THAN_THRESHOLD,
+      evaluationPeriods: 1,
+      treatMissingData: TreatMissingData.NOT_BREACHING,
+      alarmDescription: "addressium: customer-record update queue backing up (oldest message > 15m)",
+    }));
     // Lambda errors + throttles across the critical send path AND the public
     // surface. Previously only the three send-path functions were alarmed, so a
     // failing signup, confirm, unsubscribe, webhook, or SES-event handler was
@@ -1939,6 +2005,7 @@ export class ControlPlaneStack extends Stack {
       ["Launch", launchFn],
       ["DripStep", dripStepFn],
       ["Events", eventsFn],
+      ["CustomerSync", customerSyncFn],
       ["Signup", signupFn],
       ["SignupBatch", signupBatchFn],
       ["Confirm", confirmFn],
@@ -2289,6 +2356,15 @@ export class ControlPlaneStack extends Stack {
           eventsQueue.metricApproximateAgeOfOldestMessage(),
         ],
         right: [eventsDlq.metricApproximateNumberOfMessagesVisible()],
+        width: 12,
+      }),
+      new GraphWidget({
+        title: "Customer-record sync",
+        left: [
+          customerSyncQueue.metricApproximateNumberOfMessagesVisible(),
+          customerSyncQueue.metricApproximateAgeOfOldestMessage(),
+        ],
+        right: [customerSyncDlq.metricApproximateNumberOfMessagesVisible()],
         width: 12,
       }),
       new GraphWidget({

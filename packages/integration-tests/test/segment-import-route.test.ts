@@ -7,6 +7,7 @@ import { createRequire } from "node:module";
 import type { AddressInfo } from "node:net";
 import { DynamoDBClient, CreateTableCommand } from "@aws-sdk/client-dynamodb";
 import { DynamoStores } from "@addressium/adapters-aws";
+import { GSI_NO_ANY, GSI_MULTIPLE_LISTS, type SegmentPredicate } from "@addressium/segment";
 
 const require = createRequire(import.meta.url);
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -76,6 +77,55 @@ after(async () => {
 function claims(role: string, orgs: string) {
   return { sub: "admin-user", "custom:role": role, "custom:orgs": orgs };
 }
+
+test("segment save rejects unsupported GSI audiences before persistence and preserves OpenSearch support", async () => {
+  const previousEngine = process.env.SEGMENT_ENGINE;
+  const stores = new DynamoStores(TABLE);
+  const supported: SegmentPredicate = {
+    match: "all", conditions: [{ field: "list", op: "in", value: "ledger" }],
+  };
+  const save = (segmentId: string, predicate: SegmentPredicate) => api.segmentsHandler({
+    requestContext: {
+      http: { method: "POST" },
+      authorizer: { jwt: { claims: claims("editor", ORG) } },
+    },
+    body: JSON.stringify({ orgId: ORG, segmentId, name: "Audience", predicate }),
+  });
+  const unsupported: [SegmentPredicate, string][] = [
+    [{ match: "any", conditions: [{ field: "plan", op: "eq", value: "gold" }] }, GSI_NO_ANY],
+    [{ match: "any", conditions: [
+      { field: "list", op: "in", value: "ledger" },
+      { field: "plan", op: "eq", value: "gold" },
+    ] }, GSI_NO_ANY],
+    [{ match: "all", conditions: [
+      { field: "list", op: "in", value: "ledger" },
+      { field: "list", op: "in", value: "weekly" },
+    ] }, GSI_MULTIPLE_LISTS],
+  ];
+  try {
+    process.env.SEGMENT_ENGINE = "gsi";
+    assert.equal((await save("existing-audience", supported)).statusCode, 200);
+    assert.equal((await save("explicit-audience", { match: "explicit", subscriberIds: ["s1"] })).statusCode, 200);
+    for (const [i, [predicate, error]] of unsupported.entries()) {
+      for (const segmentId of [`rejected-audience-${i}`, "existing-audience"]) {
+        const response = await save(segmentId, predicate);
+        assert.equal(response.statusCode, 400);
+        assert.equal(JSON.parse(response.body).error, error);
+      }
+      assert.equal(await stores.segments.get(ORG, `rejected-audience-${i}`), undefined);
+      assert.deepEqual((await stores.segments.get(ORG, "existing-audience"))?.predicate, supported);
+    }
+    process.env.SEGMENT_ENGINE = "opensearch";
+    for (const [i, [predicate]] of unsupported.entries()) {
+      const segmentId = `opensearch-audience-${i}`;
+      assert.equal((await save(segmentId, predicate)).statusCode, 200);
+      assert.deepEqual((await stores.segments.get(ORG, segmentId))?.predicate, predicate);
+    }
+  } finally {
+    if (previousEngine === undefined) delete process.env.SEGMENT_ENGINE;
+    else process.env.SEGMENT_ENGINE = previousEngine;
+  }
+});
 
 test("POST /orgs/{org}/import/segment imports dynamic Pinpoint segment", async () => {
   const pinpointSegment = {

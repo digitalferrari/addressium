@@ -76,11 +76,13 @@ export function Newsletters({ org }: { org: string }) {
 
   return (
     <div>
-      <h1 className="h1">Newsletters</h1>
-      <p className="muted">
-        A <strong>closed</strong> newsletter keeps its subscribers and stops accepting new ones —
-        it also disappears from the public directory.
-      </p>
+      <div className="pagehead">
+        <div>
+          <h1>Newsletters</h1>
+          <p>Each newsletter is a list with its own opt-in policy, from-address and compliance footer.</p>
+        </div>
+      </div>
+      <p className="muted">A <strong>closed</strong> newsletter keeps its subscribers and stops accepting new ones — it also disappears from the public directory.</p>
 
       <div className="card">
         <strong>Create a newsletter</strong>

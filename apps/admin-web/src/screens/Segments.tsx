@@ -83,8 +83,8 @@ export function Segments({ org }: { org: string }) {
 
   return (
     <div>
-      <h1 className="h1">Segments · {org || "—"}</h1>
-      <p className="muted" style={{ marginTop: -8 }}>
+      <div className="pagehead"><div><h1>Segments</h1><p>Saved predicates over lists, entitlements and subscriber attributes.</p></div></div>
+      <p className="muted">
         Reusable audience filters that target within a list. Build the rule from conditions —
         the shipped v1 engine ranges over one list, so a “Subscribed to list” condition is the
         base of every <code>ALL</code> rule.

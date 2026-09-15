@@ -6,8 +6,8 @@
  *
  * The nav is a capability-filtered list of the 22 views the console actually
  * has, grouped five ways to match the design. It is NOT the prototype's list:
- * `demo/index.html` advertises screens this build has no code for (Automations,
- * Feeds, Ad tags, API & webhooks), and a nav row that
+ * `demo/index.html` advertises screens this build has no code for (API &
+ * outbound webhooks), and a nav row that
  * leads nowhere is worse than an absent one. Every entry below resolves to a
  * real `View` in App.tsx's switch.
  */
@@ -17,7 +17,7 @@ import { can, type Capability, type Grant } from "./rbac.js";
 export type View =
   | "dashboard" | "setup" | "templates" | "mergetags" | "compose" | "campaigns" | "report" | "usage"
   | "schedules" | "branding" | "presentation" | "subscribers" | "segments" | "import"
-  | "privacy" | "drips" | "costs" | "deliverability" | "importmap" | "team" | "audit"
+  | "privacy" | "suppression" | "feeds" | "adtags" | "apiwebhooks" | "drips" | "costs" | "deliverability" | "importmap" | "team" | "audit"
   | "newsletters" | "addorg" | "analytics" | "settings" | "identity";
 
 interface NavEntry {
@@ -41,6 +41,7 @@ const GROUPS = [
     label: "Overview",
     items: [
       { id: "dashboard", label: "Dashboard", icon: "▤" },
+      { id: "analytics", label: "Analytics", icon: "◔", cap: "reports:view" },
       { id: "setup", label: "Setup", icon: "◇" },
     ],
   },
@@ -50,6 +51,7 @@ const GROUPS = [
       { id: "newsletters", label: "Newsletters", icon: "✉", cap: "newsletters:close" },
       { id: "subscribers", label: "Subscribers", icon: "◎", cap: "subscribers:manage" },
       { id: "segments", label: "Segments", icon: "⧉", cap: "segments:manage" },
+      { id: "suppression", label: "Suppression", icon: "⊘", cap: "suppression:manage" },
       { id: "importmap", label: "Import (mapper)", icon: "⇥", cap: "subscribers:manage" },
       { id: "import", label: "Import (simple)", icon: "⇥", cap: "subscribers:manage" },
     ],
@@ -64,26 +66,28 @@ const GROUPS = [
       // exists to report on. Its lifecycle buttons gate separately inside.
       { id: "campaigns", label: "Campaigns", icon: "≡", cap: "reports:view" },
       { id: "schedules", label: "Schedules", icon: "◷", cap: "campaigns:schedule" },
-      { id: "drips", label: "Drip sequences", icon: "⟳", cap: "campaigns:manage" },
       { id: "templates", label: "Templates", icon: "▦", cap: "campaigns:manage" },
+      { id: "drips", label: "Automations", icon: "⟳", cap: "campaigns:manage" },
       { id: "report", label: "Campaign report", icon: "◔", cap: "reports:view" },
-      { id: "analytics", label: "Analytics", icon: "◑", cap: "reports:view" },
       { id: "deliverability", label: "Deliverability", icon: "⚠", cap: "alerts:manage" },
     ],
   },
   {
     label: "Developer",
     items: [
+      { id: "feeds", label: "Feeds", icon: "⌁", cap: "campaigns:manage" },
       { id: "mergetags", label: "Merge tags", icon: "❴❵", cap: "campaigns:manage" },
+      { id: "adtags", label: "Ad tags", icon: "▱", cap: "campaigns:manage" },
       { id: "identity", label: "Identity & pools", icon: "⚿", cap: "identity:manage" },
-      { id: "privacy", label: "Data & requests", icon: "⇅", cap: "subscribers:manage" },
+      { id: "privacy", label: "Data & exports", icon: "⇅", cap: "subscribers:manage" },
+      { id: "apiwebhooks", label: "API & webhooks", icon: "⚷" },
     ],
   },
   {
     label: "Configure",
     items: [
       { id: "addorg", label: "Organizations", icon: "◈", cap: "identity:manage" },
-      { id: "team", label: "Team & access", icon: "⚑", cap: "team:manage" },
+      { id: "team", label: "Roles & access", icon: "⚑", cap: "team:manage" },
       { id: "branding", label: "Branding", icon: "◐", cap: "branding:manage" },
       { id: "presentation", label: "Presentation", icon: "▱", cap: "branding:manage" },
       { id: "usage", label: "Usage & cost", icon: "◨", cap: "reports:view" },

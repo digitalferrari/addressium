@@ -13,6 +13,9 @@ import userEvent from "@testing-library/user-event";
 import { Compose } from "./screens/Compose.js";
 import { api } from "./api.js";
 
+const compileMjml = vi.hoisted(() => vi.fn((source: string) => ({ html: `<compiled>${source}</compiled>`, errors: [] })));
+vi.mock("mjml-browser", () => ({ default: compileMjml }));
+
 beforeEach(() => {
   vi.spyOn(api, "lists").mockResolvedValue([
     { listId: "ledger", name: "The Ledger" },
@@ -78,4 +81,36 @@ test("a half-finished block still counts as a draft worth warning about", async 
   await user.type(screen.getByPlaceholderText(/merge tags allowed/), "half a paragraph");
   await user.click(modeRadio(/MJML/));
   expect(screen.getByText(/not sent/)).toBeInTheDocument();
+});
+
+test.each(["raw_html", "mjml", "visual"] as const)("%s template loads a copy and schedules the edited snapshot for recurring sends", async (mode) => {
+  const saved = { orgId: "acme", templateId: "daily", name: "Daily", mode, source: "Saved body", version: 1 };
+  vi.mocked(api.templates).mockResolvedValue([saved] as never);
+  const schedule = vi.spyOn(api, "scheduleCampaign").mockResolvedValue({ scheduleId: "daily", status: "active" } as never);
+  const saveTemplate = vi.spyOn(api, "saveTemplate");
+  const user = await openCompose();
+  await user.click(modeRadio(mode === "raw_html" ? /Raw HTML/ : /MJML/));
+  const option = await screen.findByRole("option", { name: "Daily (daily)" });
+  await user.selectOptions(option.closest("select")!, "daily");
+  const body = screen.getByDisplayValue("Saved body");
+  await user.clear(body);
+  await user.type(body, "Campaign edit");
+  expect(saved.source).toBe("Saved body");
+
+  // A later template save cannot change the already copied draft.
+  saved.source = "Later template revision";
+  await user.click(modeRadio(/Blocks/));
+  await user.click(modeRadio(mode === "raw_html" ? /Raw HTML/ : /MJML/));
+  expect(screen.getByDisplayValue("Campaign edit")).toBeInTheDocument();
+  expect(screen.getByText(/later template changes do not update this draft/)).toHaveTextContent(/including for recurring sends/);
+  await user.type(screen.getByPlaceholderText(/daily-2026/), "daily-send");
+  await user.type(screen.getByPlaceholderText("Subject line"), "Daily news");
+  await user.click(screen.getByRole("radio", { name: "Recurring" }));
+  await user.click(screen.getByRole("button", { name: "Schedule" }));
+  await screen.findByText(/Scheduled "daily"/);
+  expect(schedule).toHaveBeenCalledWith(expect.objectContaining({
+    template: mode === "raw_html" ? { html: "Campaign edit" } : { mjmlHtml: "<compiled>Campaign edit</compiled>" },
+    when: { type: "recurring", cron: "cron(0 13 * * ? *)" },
+  }));
+  expect(saveTemplate).not.toHaveBeenCalled();
 });

@@ -187,7 +187,7 @@ function LifecyclePill({ status }: { status: SendScheduleState["status"] }) {
   );
 }
 
-export function Campaigns({ org, grant }: { org: string; grant: Grant | null }) {
+export function Campaigns({ org, grant, onCompose }: { org: string; grant: Grant | null; onCompose?: () => void }) {
   const [filter, setFilter] = useState<Filter>("All sends");
   const [busy, setBusy] = useState("");
   const [actionError, setActionError] = useState("");
@@ -233,8 +233,8 @@ export function Campaigns({ org, grant }: { org: string; grant: Grant | null }) 
 
   return (
     <div>
-      <h1 className="h1">Campaigns · {org || "—"}</h1>
-      <p className="muted" style={{ marginTop: -8 }}>
+      <div className="pagehead"><div><h1>Campaigns</h1><p>One-offs and recurring series. Reporting is per campaign and lifecycle state is authoritative.</p></div>{onCompose && <button className="btn btn-primary" onClick={onCompose}>＋ New campaign</button>}</div>
+      <p className="muted">
         One-offs and recurring series. Reporting is per campaign, on the Campaign report screen.
         Start, pause and archive act on the schedule's lifecycle record — nothing is ever deleted.
       </p>

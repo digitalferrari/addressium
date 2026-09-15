@@ -12,6 +12,8 @@ export function Templates({ org }: { org: string }) {
   const [name, setName] = useState("");
   const [mode, setMode] = useState<TemplateMode>("raw_html");
   const [source, setSource] = useState("");
+  const [adSlots, setAdSlots] = useState("");
+  const [editorRevision, setEditorRevision] = useState(0);
   const [preview, setPreview] = useState<{ html: string; errors: string[] } | null>(null);
   const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState(false);
@@ -26,14 +28,17 @@ export function Templates({ org }: { org: string }) {
     }
   };
   const edit = (t: Template) => {
-    setTemplateId(t.templateId); setName(t.name); setMode(t.mode); setSource(t.source); setMsg(""); setPreview(null);
+    setTemplateId(t.templateId); setName(t.name); setMode(t.mode); setSource(t.source); setAdSlots((t.adSlots ?? []).join(", ")); setMsg(""); setPreview(null);
+    // VisualEditor reads its seed only on mount, including when reloading the same template.
+    setEditorRevision((n) => n + 1);
   };
-  const reset = () => { setTemplateId(""); setName(""); setMode("raw_html"); setSource(""); setMsg(""); setPreview(null); };
+  const reset = () => { setTemplateId(""); setName(""); setMode("raw_html"); setSource(""); setAdSlots(""); setMsg(""); setPreview(null); };
 
   const save = async () => {
     setMsg(""); setBusy(true);
     try {
-      const saved = await api.saveTemplate({ orgId: org, templateId: templateId.trim(), name: name.trim(), mode, source });
+      const slots = adSlots.split(",").map((slot) => slot.trim()).filter(Boolean);
+      const saved = await api.saveTemplate({ orgId: org, templateId: templateId.trim(), name: name.trim(), mode, source, ...(slots.length > 0 ? { adSlots: slots } : {}) });
       setMsg(`Saved "${saved.templateId}" (v${saved.version}).`);
       setRev((n) => n + 1);
     } catch (e) { setMsg(String(e)); }
@@ -46,11 +51,15 @@ export function Templates({ org }: { org: string }) {
 
   return (
     <div>
-      <h1 className="h1">Templates · {org || "—"}</h1>
-      <p className="muted" style={{ marginTop: -8 }}>
+      <div className="pagehead"><div><h1>Templates</h1><p>Three authoring modes — pick the right one for your team.</p></div></div>
+      <p className="muted">
         Reusable message templates. <strong>Raw HTML</strong> is sanitized on save and rendered per
         recipient (merge tags escaped, links tokenized for click tracking). <strong>MJML</strong> and the
         <strong> visual builder</strong> compile to responsive HTML in your browser before scheduling.
+      </p>
+      <p className="muted">
+        Compose loads a copy of a saved template. Saving changes here does not update a body
+        already loaded in Compose or any scheduled campaign, including recurring sends.
       </p>
       {(loading || list.loading) && <div className="card muted">Loading…</div>}
       {(error || list.error) && <p className="err">{error || list.error}</p>}
@@ -85,7 +94,7 @@ export function Templates({ org }: { org: string }) {
         {mode === "visual" ? (
           <div style={{ marginTop: 12 }}>
             <label>Visual builder — drag blocks; outputs MJML on “Apply to template”</label>
-            <VisualEditor initialMjml={source} onApply={(m) => { setSource(m); setPreview(null); }} />
+            <VisualEditor key={editorRevision} initialMjml={source} onApply={(m) => { setSource(m); setPreview(null); }} />
             {source.trim() && <p className="muted" style={{ margin: "6px 0 0" }}>MJML captured ({source.length} chars). Compile &amp; preview or Save below.</p>}
           </div>
         ) : (
@@ -96,6 +105,7 @@ export function Templates({ org }: { org: string }) {
               style={{ width: "100%", fontFamily: "monospace" }} />
           </>
         )}
+        <label style={{ marginTop: 12 }}>Ad slot names <span className="muted">(comma-separated, e.g. ad_top, ad_footer)</span><input value={adSlots} onChange={(e) => setAdSlots(e.target.value)} placeholder="ad_top, ad_footer" style={{ width: "100%" }} /></label>
         {(mode === "mjml" || mode === "visual") && (
           <div style={{ marginTop: 8 }}>
             <button className="btn ghost" onClick={compile} disabled={!source.trim()}>Compile &amp; preview</button>

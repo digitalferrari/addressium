@@ -27,6 +27,7 @@ import type {
   Campaign,
   CampaignSeries,
   DripSequence,
+  Feed,
   EmailArchive,
   EngagementEvent,
   EntitlementSync,
@@ -50,6 +51,7 @@ import type {
   AlertConfigStore,
   ArchiveStore,
   CampaignSeriesStore,
+  FeedStore,
   CampaignStore,
   DripSequenceStore,
   EntitlementStore,
@@ -990,10 +992,28 @@ export class DynamoStores implements Stores {
       }),
   };
 
+  feeds: FeedStore = {
+    get: (orgId, feedId) => this.get<Feed>(org(orgId), `FEED#${feedId}`),
+    put: (feed) => this.put({ pk: org(feed.orgId), sk: `FEED#${feed.feedId}`, data: feed }),
+    list: (orgId) =>
+      this.queryAll<Feed>({
+        TableName: this.tableName,
+        KeyConditionExpression: "pk = :pk AND begins_with(sk, :s)",
+        ExpressionAttributeValues: { ":pk": org(orgId), ":s": "FEED#" },
+      }),
+  };
+
   schedules: SendScheduleStore = {
     get: (orgId, scheduleId) =>
       this.get<SendScheduleState>(org(orgId), `SCHEDULE#${scheduleId}`),
-    put: (s) => this.put({ pk: org(s.orgId), sk: `SCHEDULE#${s.scheduleId}`, data: s }),
+    put: (s, opts) => {
+      const item = { pk: org(s.orgId), sk: `SCHEDULE#${s.scheduleId}`, data: s };
+      if (!opts) return this.put(item);
+      return this.putConditional(item, opts.ifRevision === undefined
+        ? { ConditionExpression: "attribute_not_exists(#d.revision)" }
+        : { ConditionExpression: "#d.revision = :revision", ExpressionAttributeValues: { ":revision": opts.ifRevision } },
+      "schedule");
+    },
     list: (orgId) =>
       this.queryAll<SendScheduleState>({
         TableName: this.tableName,

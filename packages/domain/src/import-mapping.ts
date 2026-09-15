@@ -44,6 +44,8 @@ export type ConsentBasis = "explicit" | "implicit";
 /** What a source column becomes. `discard` is explicit so a dropped column is counted, never silent. */
 export type ColumnMapping =
   | { kind: "email" }
+  /** Stable customer identity from the organization's external system. */
+  | { kind: "externalId" }
   /** Into `Subscriber.attributes` under `key` — an existing key or a new one the operator named. */
   | { kind: "attribute"; key: string }
   /** Subscribes rows whose value reads as subscribed. `list` is an existing id or a name to create. */
@@ -86,6 +88,7 @@ const EMAIL_HEADERS = [
   "primary email",
   "email_address",
 ];
+const EXTERNAL_ID_HEADERS = ["externalid", "external_id", "customerid", "customer_id", "customer external id"];
 
 const PINPOINT_OPT_OUT = "OptOut";
 const PINPOINT_STATUS = "EndpointStatus";
@@ -225,6 +228,11 @@ export function suggestMapping(
       continue;
     }
 
+    if (EXTERNAL_ID_HEADERS.includes(n) || EXTERNAL_ID_HEADERS.includes(nl)) {
+      columns[h] = { kind: "externalId" };
+      continue;
+    }
+
     // Pinpoint's three row-level safety columns. Getting these wrong is the
     // compliance failure in #209, so they are recognised by name and never
     // silently treated as attributes.
@@ -299,6 +307,11 @@ export function validateMapping(plan: MappingPlan, headers: string[]): MappingPr
       if (m.key.trim() === "") problems.push({ column: h, problem: "attribute key is empty" });
       attrKeys.set(norm(m.key), [...(attrKeys.get(norm(m.key)) ?? []), h]);
     }
+    if (m.kind === "externalId") {
+      if (mapped.filter((x) => plan.columns[x]?.kind === "externalId").length > 1) {
+        problems.push({ column: h, problem: "only one external customer id column may be mapped" });
+      }
+    }
     if (m.kind === "audience") {
       const key = "existingId" in m.list ? `id:${m.list.existingId}` : `new:${norm(m.list.createNamed)}`;
       if ("createNamed" in m.list && m.list.createNamed.trim() === "") {
@@ -325,6 +338,7 @@ export function validateMapping(plan: MappingPlan, headers: string[]): MappingPr
 
 export interface MappedRow {
   email: string;
+  externalId?: string;
   attributes: Record<string, string>;
   /** Only `subscribed` columns appear; `declined` and `unknown` never create a subscription. */
   audiences: { list: { existingId: string } | { createNamed: string }; consentBasis: ConsentBasis }[];
@@ -358,6 +372,11 @@ export function applyMapping(plan: MappingPlan, row: Record<string, string>): Ma
       case "email":
         out.email = raw.trim().toLowerCase();
         break;
+      case "externalId": {
+        const v = raw.trim();
+        if (v !== "") out.externalId = v;
+        break;
+      }
       case "attribute": {
         const v = raw.trim();
         if (v !== "") out.attributes[m.key] = v;

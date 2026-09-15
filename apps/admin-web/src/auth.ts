@@ -11,6 +11,11 @@ const CFG = {
   scope: "openid email profile",
 };
 
+/** Local API development has a deterministic dev identity instead of Cognito. */
+export const isLocalDevelopment =
+  (import.meta.env.VITE_API_BASE ?? "").startsWith("http://localhost:") ||
+  (import.meta.env.VITE_API_BASE ?? "").startsWith("http://127.0.0.1:");
+
 /**
  * The admin pool this console authenticates against, for the Identity & pools
  * screen to display.
@@ -69,6 +74,23 @@ async function sha256(input: string): Promise<Uint8Array> {
 
 /** Redirect to the Hosted UI, stashing a PKCE verifier + state. */
 export async function login(): Promise<void> {
+  if (isLocalDevelopment) {
+    const payload = btoa(JSON.stringify({
+      sub: "local-dev-user",
+      token_use: "id",
+      email: "local@example.com",
+      name: "Local Developer",
+      "custom:role": "developer_admin",
+      "custom:orgs": "*",
+    })).replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_");
+    const token = `local.${payload}.dev`;
+    sessionStorage.setItem(KEY, JSON.stringify({
+      idToken: token,
+      accessToken: token,
+      expiresAt: Date.now() + 8 * 60 * 60 * 1000,
+    } satisfies Tokens));
+    return;
+  }
   const verifier = b64url(crypto.getRandomValues(new Uint8Array(32)));
   const state = b64url(crypto.getRandomValues(new Uint8Array(16)));
   sessionStorage.setItem(VERIFIER_KEY, verifier);
@@ -147,7 +169,7 @@ export function logout(): void {
   sessionStorage.removeItem(KEY);
   sessionStorage.removeItem(VERIFIER_KEY);
   sessionStorage.removeItem(STATE_KEY);
-  if (!CFG.domain || !CFG.clientId) return; // unconfigured (tests/local)
+  if (isLocalDevelopment || !CFG.domain || !CFG.clientId) return; // unconfigured (tests/local)
   const url = new URL(`https://${CFG.domain}/logout`);
   url.search = new URLSearchParams({
     client_id: CFG.clientId,

@@ -7,7 +7,7 @@ import { useAsync } from "../useAsync.js";
 import { isValidId } from "../ids.js";
 import { api, type EmailBlock, type ScheduleWhen } from "../api.js";
 
-interface DraftBlock { kind: "text" | "editorial"; html: string; label: string; url: string }
+interface DraftBlock { kind: "text" | "editorial" | "ad"; html: string; label: string; url: string; slot: string }
 
 const MODE_LABELS: Record<"blocks" | "html" | "mjml", string> = {
   blocks: "Blocks",
@@ -19,6 +19,7 @@ export function Compose({ org, onScheduled }: { org: string; onScheduled: () => 
   const lists = useAsync(() => api.lists(org), [org]);
   const templates = useAsync(() => api.templates(org), [org]);
   const segments = useAsync(() => api.segments(org), [org]);
+  const feeds = useAsync(() => api.feeds(org), [org]);
   const [listId, setListId] = useState("");
   const [segmentId, setSegmentId] = useState("");
   const [campaignId, setCampaignId] = useState("");
@@ -26,11 +27,12 @@ export function Compose({ org, onScheduled }: { org: string; onScheduled: () => 
   const [bodyMode, setBodyMode] = useState<"blocks" | "html" | "mjml">("blocks");
   const [html, setHtml] = useState("");
   const [mjml, setMjml] = useState("");
-  const [blocks, setBlocks] = useState<DraftBlock[]>([{ kind: "text", html: "", label: "", url: "" }]);
+  const [blocks, setBlocks] = useState<DraftBlock[]>([{ kind: "text", html: "", label: "", url: "", slot: "" }]);
   const [when, setWhen] = useState<"now" | "at" | "recurring">("now");
   const [at, setAt] = useState("");
   const [cron, setCron] = useState("cron(0 13 * * ? *)");
   const [timezone, setTimezone] = useState("");
+  const [feedId, setFeedId] = useState("");
   const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -41,18 +43,18 @@ export function Compose({ org, onScheduled }: { org: string; onScheduled: () => 
 
   const setBlock = (i: number, patch: Partial<DraftBlock>) =>
     setBlocks((bs) => bs.map((b, j) => (j === i ? { ...b, ...patch } : b)));
-  const addBlock = (kind: "text" | "editorial") =>
-    setBlocks((bs) => [...bs, { kind, html: "", label: "", url: "" }]);
+  const addBlock = (kind: "text" | "editorial" | "ad") =>
+    setBlocks((bs) => [...bs, { kind, html: "", label: "", url: "", slot: "" }]);
   const removeBlock = (i: number) => setBlocks((bs) => bs.filter((_, j) => j !== i));
 
   const blocksValid = blocks.length > 0 && blocks.every((b) =>
-    b.kind === "text" ? b.html.trim() !== "" : b.label.trim() !== "" && /^https?:\/\//.test(b.url.trim()),
+    b.kind === "text" || b.kind === "ad" ? b.html.trim() !== "" && (b.kind === "text" || b.slot.trim() !== "") : b.label.trim() !== "" && /^https?:\/\//.test(b.url.trim()),
   );
   const bodyValid = bodyMode === "blocks" ? blocksValid : bodyMode === "html" ? html.trim() !== "" : mjml.trim() !== "";
   // "Holds something the operator typed", which is not the same as "is valid":
   // a half-finished editorial block is exactly the draft worth warning about.
   const filledBodyModes = ([
-    ["blocks", blocks.some((b) => b.html.trim() !== "" || b.label.trim() !== "" || b.url.trim() !== "")],
+    ["blocks", blocks.some((b) => b.html.trim() !== "" || b.label.trim() !== "" || b.url.trim() !== "" || b.slot.trim() !== "")],
     ["html", html.trim() !== ""],
     ["mjml", mjml.trim() !== ""],
   ] as const).filter(([, filled]) => filled).map(([m]) => m);
@@ -86,11 +88,11 @@ export function Compose({ org, onScheduled }: { org: string; onScheduled: () => 
       } else {
         template = {
           blocks: blocks.map((b): EmailBlock =>
-            b.kind === "text" ? { kind: "text", html: b.html } : { kind: "editorial", label: b.label, url: b.url.trim() },
+            b.kind === "text" ? { kind: "text", html: b.html } : b.kind === "ad" ? { kind: "ad", slot: b.slot.trim(), html: b.html } : { kind: "editorial", label: b.label, url: b.url.trim() },
           ),
         };
       }
-      const res = await api.scheduleCampaign({ orgId: org, campaignId: campaignId.trim(), listId, subject, template, when: whenPayload, ...(segmentId ? { segmentId } : {}) });
+      const res = await api.scheduleCampaign({ orgId: org, campaignId: campaignId.trim(), listId, subject, template, when: whenPayload, ...(segmentId ? { segmentId } : {}), ...(when === "recurring" && feedId ? { feedId } : {}) });
       setMsg(`Scheduled "${res.scheduleId}" (${res.status}${res.at ? ` · ${new Date(res.at).toLocaleString()}` : ""}${res.timezone ? ` · ${res.timezone}` : ""}).`);
       onScheduled();
     } catch (e) {
@@ -170,7 +172,7 @@ export function Compose({ org, onScheduled }: { org: string; onScheduled: () => 
           <div>
             {mjmlTemplates.length > 0 && (
               <div style={{ marginBottom: 8 }}>
-                <label>Load a saved MJML template</label>
+                <label>Load a saved MJML template (copy)</label>
                 <select defaultValue="" onChange={(e) => {
                   const t = mjmlTemplates.find((x) => x.templateId === e.target.value);
                   if (t) setMjml(t.source);
@@ -191,7 +193,7 @@ export function Compose({ org, onScheduled }: { org: string; onScheduled: () => 
           <div>
             {htmlTemplates.length > 0 && (
               <div style={{ marginBottom: 8 }}>
-                <label>Load a saved HTML template</label>
+                <label>Load a saved HTML template (copy)</label>
                 <select
                   defaultValue=""
                   onChange={(e) => {
@@ -219,7 +221,7 @@ export function Compose({ org, onScheduled }: { org: string; onScheduled: () => 
         {blocks.map((b, i) => (
           <div key={i} style={{ borderTop: i ? "1px solid #eee" : "none", paddingTop: i ? 10 : 0, marginTop: i ? 10 : 0 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <span className="muted">{b.kind === "text" ? "Text block" : "Editorial link"}</span>
+              <span className="muted">{b.kind === "text" ? "Text block" : b.kind === "ad" ? "Ad block" : "Editorial link"}</span>
               {blocks.length > 1 && (
                 <button className="btn ghost" onClick={() => removeBlock(i)}>Remove</button>
               )}
@@ -227,6 +229,8 @@ export function Compose({ org, onScheduled }: { org: string; onScheduled: () => 
             {b.kind === "text" ? (
               <textarea value={b.html} onChange={(e) => setBlock(i, { html: e.target.value })}
                 placeholder="HTML — {{first_name}} merge tags allowed" rows={3} style={{ width: "100%" }} />
+            ) : b.kind === "ad" ? (
+              <div style={{ display: "flex", gap: 8 }}><input value={b.slot} onChange={(e) => setBlock(i, { slot: e.target.value })} placeholder="Slot, e.g. ad_top" style={{ flex: 1 }} /><textarea value={b.html} onChange={(e) => setBlock(i, { html: e.target.value })} placeholder="LiveIntent HTML — inserted verbatim" rows={3} style={{ flex: 3, fontFamily: "monospace" }} /></div>
             ) : (
               <div style={{ display: "flex", gap: 8 }}>
                 <input value={b.label} onChange={(e) => setBlock(i, { label: e.target.value })} placeholder="Link label" style={{ flex: 1 }} />
@@ -238,10 +242,19 @@ export function Compose({ org, onScheduled }: { org: string; onScheduled: () => 
         <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
           <button className="btn ghost" onClick={() => addBlock("text")}>+ Text</button>
           <button className="btn ghost" onClick={() => addBlock("editorial")}>+ Editorial link</button>
+          <button className="btn ghost" onClick={() => addBlock("ad")}>+ Ad block</button>
         </div>
           </>
         )}
       </div>
+
+      {bodyMode !== "blocks" && (
+        <p className="muted">
+          Loading a template copies its saved body into this draft. Edits here do not change the
+          saved template, and later template changes do not update this draft. Scheduling stores
+          the current body, including for recurring sends.
+        </p>
+      )}
 
       <div className="card">
         <div className="muted" style={{ marginBottom: 8 }}>When</div>
@@ -265,6 +278,12 @@ export function Compose({ org, onScheduled }: { org: string; onScheduled: () => 
             <input value={cron} onChange={(e) => setCron(e.target.value)} placeholder="cron(0 13 * * ? *)" style={{ width: "100%" }} />
             <label style={{ marginTop: 8 }}>Timezone (blank → org default)</label>
             <input value={timezone} onChange={(e) => setTimezone(e.target.value)} placeholder="America/Denver" style={{ width: "100%" }} />
+            <label style={{ marginTop: 8 }}>Article feed (optional)</label>
+            <select value={feedId} onChange={(e) => setFeedId(e.target.value)} style={{ width: "100%" }}>
+              <option value="">Use the composed body</option>
+              {(feeds.data ?? []).filter((feed) => feed.targetListId === listId).map((feed) => <option key={feed.feedId} value={feed.feedId}>{feed.feedId} ({feed.format})</option>)}
+            </select>
+            <p className="muted">Each firing fetches the selected feed and builds an edition from its latest items.</p>
           </div>
         )}
       </div>

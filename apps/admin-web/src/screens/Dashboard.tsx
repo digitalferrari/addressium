@@ -18,12 +18,12 @@ import { api, type AlertConfig, type AlertRule, type CampaignReport, type Campai
  * it render in the same neutral grey as `sent` is how a halted edition sits
  * unnoticed on the landing page for a day.
  */
-const CAMPAIGN_STATUS_COLOR: Record<string, string> = {
-  sent: "#15803d",
-  sending: "#2563eb",
-  scheduled: "#b45309",
-  halted: "#b91c1c",
-  draft: "#6b7280",
+const CAMPAIGN_STATUS_CLASS: Record<string, string> = {
+  sent: "p-good",
+  sending: "p-accent",
+  scheduled: "p-warn",
+  halted: "p-crit",
+  draft: "p-neutral",
 };
 
 /** Newest first by send time; campaigns with no schedule (drafts) sort last. */
@@ -93,7 +93,12 @@ async function loadDashboardSending(org: string): Promise<{
  * The health badge is rendered by `HealthBadge` as a sibling in the view switch,
  * not from inside this component.
  */
-export function Dashboard({ org, onGoToSetup }: { org: string; onGoToSetup: () => void }) {
+export function Dashboard({ org, onGoToSetup, onCompose, onViewCampaigns }: {
+  org: string;
+  onGoToSetup: () => void;
+  onCompose?: () => void;
+  onViewCampaigns?: () => void;
+}) {
   const lists = useAsync(() => api.lists(org), [org]);
   const setup = useAsync(() => api.setup(org), [org]);
   // Deliberately three independent reads rather than one `Promise.all`. Each
@@ -109,10 +114,16 @@ export function Dashboard({ org, onGoToSetup }: { org: string; onGoToSetup: () =
   );
 
   return (
-    <div>
-      <h1 className="h1">Dashboard · {org || "—"}</h1>
+    <div className="dashboard">
+      <div className="pagehead">
+        <div>
+          <h1>Dashboard</h1>
+          <p>Sending health and recent campaigns at a glance.</p>
+        </div>
+        {onCompose && <button type="button" className="btn btn-primary" onClick={onCompose}><span aria-hidden="true">＋ </span>New campaign</button>}
+      </div>
       {setup.data && !setup.data.complete && (
-        <div className="card" style={{ borderLeft: "3px solid #d99" }}>
+        <div className="card cardpad dashboard-setup note warn">
           <div className="t-strong">Finish setting up this organization</div>
           <p className="muted" style={{ margin: "4px 0 8px" }}>
             {setup.data.requiredDone} of {setup.data.requiredTotal} required steps done — you can't send safely until they're complete.
@@ -121,7 +132,17 @@ export function Dashboard({ org, onGoToSetup }: { org: string; onGoToSetup: () =
         </div>
       )}
 
-      <DeliverabilityPanel
+      <div className="dashboard-grid">
+        <section className="card dashboard-newsletters" aria-labelledby="dashboard-newsletters-title">
+          <div className="cardhead"><h2 id="dashboard-newsletters-title">Newsletters</h2></div>
+          <div className="cardpad">
+            {lists.loading && <div className="skeleton sk-kpi" aria-label="Loading…" />}
+            {lists.error && <p className="err">{lists.error}</p>}
+            {lists.data && <div className="kpi"><span className="val n num">{lists.data.length}</span><span className="lab l">lists</span></div>}
+            <p className="muted">Newsletters in this organization.</p>
+          </div>
+        </section>
+        <DeliverabilityPanel
         latest={sending.data?.latestSent}
         report={sending.data?.report}
         reportError={sending.data?.reportError}
@@ -129,42 +150,39 @@ export function Dashboard({ org, onGoToSetup }: { org: string; onGoToSetup: () =
         setup={setup.data}
         loading={sending.loading}
         error={sending.error}
-      />
+        />
+      </div>
 
-      <div className="card">
-        <div className="muted" style={{ marginBottom: 8 }}>Recent campaigns</div>
-        {sending.loading && <div className="skeleton sk-kpi" aria-label="Loading…" />}
-        {sending.error && <p className="err">{sending.error}</p>}
+      <section className="card dashboard-campaigns" aria-labelledby="dashboard-campaigns-title">
+        <div className="cardhead">
+          <h2 id="dashboard-campaigns-title">Recent campaigns</h2>
+          {onViewCampaigns && <button type="button" className="btn btn-ghost ghost flink" onClick={onViewCampaigns}>View all <span aria-hidden="true">→</span></button>}
+        </div>
+        {sending.loading && <div className="cardpad"><div className="skeleton sk-kpi" aria-label="Loading…" /></div>}
+        {sending.error && <p className="cardpad err">{sending.error}</p>}
         {sending.data && recent.length === 0 && (
-          <p className="muted">This organization has not composed a campaign yet.</p>
+          <p className="cardpad muted">This organization has not composed a campaign yet.</p>
         )}
         {recent.length > 0 && (
-          <table>
-            <thead><tr><th>Campaign</th><th>Status</th><th>Sent to</th><th>When</th></tr></thead>
-            <tbody>
+          <ul className="actlist list-clean" aria-label="Recent campaigns">
               {recent.map((c) => (
-                <tr key={c.campaignId}>
-                  <td className="t-strong">{c.subject} <span className="muted">({c.campaignId})</span></td>
-                  <td style={{ color: CAMPAIGN_STATUS_COLOR[c.status] ?? "#6b7280", fontWeight: 600 }}>{c.status}</td>
+                <li className="actitem" key={c.campaignId} role="row">
+                  <div className="ci" aria-hidden="true">{c.status === "draft" ? "✎" : c.status === "scheduled" ? "◷" : c.status === "halted" ? "!" : "✉"}</div>
+                  <div className="meta">
+                    <b className="t-strong">{c.subject}</b>
+                    <div className="mono">{c.campaignId}</div>
                   {/* `sent` is SES acceptances for this campaign — the counter
                       the row carries. It is NOT an audience size: a draft has
                       never sent and shows 0, which is a fact about the send and
                       not a claim about how many subscribers the list has. */}
-                  <td>{c.sent}</td>
-                  <td>{campaignWhen(c)}</td>
-                </tr>
+                    <div><span className="num">Sent to {c.sent.toLocaleString()}</span> · {campaignWhen(c)}</div>
+                  </div>
+                  <span className={`pill ${CAMPAIGN_STATUS_CLASS[c.status] ?? "p-neutral"}`} style={{ color: c.status === "halted" ? "var(--crit)" : c.status === "sent" ? "var(--good)" : undefined }}><span className="dot" aria-hidden="true" />{c.status}</span>
+                </li>
               ))}
-            </tbody>
-          </table>
+          </ul>
         )}
-      </div>
-
-      <div className="card">
-        <div className="muted">Newsletters</div>
-        {lists.loading && <div className="skeleton sk-kpi" style={{ width: 140, marginTop: 8 }} aria-label="Loading…" />}
-        {lists.error && <p className="err">{lists.error}</p>}
-        {lists.data && <p className="kpi"><span className="n">{lists.data.length}</span> <span className="l">lists</span></p>}
-      </div>
+      </section>
     </div>
   );
 }
