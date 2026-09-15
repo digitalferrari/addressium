@@ -1,4 +1,5 @@
 import { DynamoStores, getSecret, type CustomerSyncEvent } from "@addressium/adapters-aws";
+import { customerSyncWebhookHeaders } from "@addressium/domain";
 
 interface SqsRecord { messageId?: string; body?: string }
 interface SqsEvent { Records?: SqsRecord[] }
@@ -16,6 +17,10 @@ async function deliver(event: CustomerSyncEvent): Promise<void> {
   const config = org?.customerSync;
   if (!config?.enabled || !config.secretRef) return;
   const secret = await getSecret(config.secretRef);
+  // Serialize once. The signature covers these exact bytes, so re-stringifying
+  // separately for signing and fetch would make a future serializer change a
+  // subtle authentication failure at every customer endpoint.
+  const body = JSON.stringify({ ...event, tableName: config.tableName });
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 10_000);
   try {
@@ -23,10 +28,9 @@ async function deliver(event: CustomerSyncEvent): Promise<void> {
       method: "POST",
       headers: {
         "content-type": "application/json",
-        "x-addressium-event-id": event.eventId,
-        "x-addressium-secret": secret,
+        ...customerSyncWebhookHeaders(secret, event.eventId, body),
       },
-      body: JSON.stringify({ ...event, tableName: config.tableName }),
+      body,
       signal: controller.signal,
     });
     if (!response.ok) throw new Error(`customer endpoint returned ${response.status}`);

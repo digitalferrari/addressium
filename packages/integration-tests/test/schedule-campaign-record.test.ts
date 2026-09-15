@@ -55,12 +55,12 @@ let stores: DynamoStores;
 /** Stands in for EventBridge Scheduler, which has no local emulator. */
 class CaptureScheduler implements CampaignScheduler {
   public oneOff: Array<{ name: string; at: Date; descriptor: SendDescriptor }> = [];
-  public recurring: Array<{ name: string; cron: string; timezone: string }> = [];
+  public recurring: Array<{ name: string; cron: string; timezone: string; payload: unknown }> = [];
   async scheduleOneOff(input: { name: string; at: Date; descriptor: SendDescriptor }) {
     this.oneOff.push(input);
   }
   async scheduleRecurring(input: { name: string; cron: string; timezone: string; payload: unknown }) {
-    this.recurring.push({ name: input.name, cron: input.cron, timezone: input.timezone });
+    this.recurring.push({ name: input.name, cron: input.cron, timezone: input.timezone, payload: input.payload });
   }
   async cancel() {}
 }
@@ -242,6 +242,12 @@ test("a recurring series is recorded with no single send time", async () => {
   // No `sendAt` on a series, for the same reason the campaign has no
   // `schedule`: there is no single instant to point at (#248).
   assert.equal(state?.sendAt, undefined);
+  const payload = scheduler.recurring[0]?.payload as { descriptor?: { seriesId?: string } } | undefined;
+  assert.equal(
+    payload?.descriptor?.seriesId,
+    undefined,
+    "an inline recurring campaign is not a CampaignSeries registry row; the sender must not require one",
+  );
 });
 
 test("re-scheduling a campaign that has already sent does not wipe its counters", async () => {

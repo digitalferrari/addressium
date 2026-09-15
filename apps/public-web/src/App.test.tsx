@@ -3,6 +3,8 @@
  * posts a double-opt-in signup and surfaces the "check your inbox" confirmation.
  */
 import { afterEach, expect, test, vi } from "vitest";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { HONEYPOT_FIELD } from "@addressium/core";
@@ -100,4 +102,11 @@ test("a filled trap is still submitted, so the server can silently drop it", asy
   const body = JSON.parse(fetchMock.mock.calls[0]![1].body);
   expect(isHoneypotTripped(body)).toBe(true);
   vi.unstubAllGlobals();
+});
+
+test("the embeddable widget discovers only the unauthenticated filtered directory", () => {
+  const script = readFileSync(resolve(process.cwd(), "apps/public-web/public/embed.js"), "utf8");
+  expect(script).toContain('encodeURIComponent(org) + "/directory"');
+  expect(script).not.toContain('encodeURIComponent(org) + "/lists"');
+  expect(script).not.toContain('"/lists/" + encodeURIComponent');
 });

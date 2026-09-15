@@ -16,11 +16,17 @@ import { afterEach, expect, test, vi } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 import { Dashboard } from "./screens/Dashboard.js";
 import { api, type AlertConfig, type CampaignReport, type CampaignRow, type SetupState } from "./api.js";
+import type { Grant } from "./rbac.js";
+
+const ADMIN: Grant = { role: "developer_admin", orgs: "*" };
+const ANALYST: Grant = { role: "analyst", orgs: ["acme"] };
 
 const SENT: CampaignRow = {
   campaignId: "ledger-2026-07-20",
   subject: "The Morning Ledger — Jul 20",
-  status: "sent",
+  // The production campaign record is never advanced past scheduled yet. Its
+  // counter, rather than this stale field, is the proof that it sent.
+  status: "scheduled",
   type: "series_edition",
   listId: "ledger",
   sent: 96204,
@@ -71,6 +77,7 @@ function mount(opts: {
   report?: CampaignReport | Error;
   alerts?: AlertConfig | null;
   setup?: SetupState;
+  grant?: Grant;
 } = {}) {
   vi.spyOn(api, "lists").mockResolvedValue([] as never);
   vi.spyOn(api, "setup").mockResolvedValue((opts.setup ?? SETUP_DONE) as never);
@@ -84,7 +91,7 @@ function mount(opts: {
     orgId: "acme", from: "2026-06-22", through: "2026-07-21", days: 30, points: [],
     summary: { subscriberCount: 1200, current: { emailsSent: 1000, openRate: 0.31, clickRate: 0.12 }, previous: { emailsSent: 900, openRate: 0.25, clickRate: 0.1 } },
   });
-  render(<Dashboard org="acme" onGoToSetup={() => {}} />);
+  render(<Dashboard org="acme" grant={opts.grant ?? ADMIN} onGoToSetup={() => {}} />);
 }
 
 test("the latest sent edition's own rates are shown, against the org's halt thresholds", async () => {
@@ -137,6 +144,14 @@ test("an org with no thresholds reads as unprotected, never as 0%", async () => 
   // rather than `> 0`: the delivered row renders a dash, so a loose count would
   // survive a regression where a configured threshold silently reappeared.
   expect(screen.getAllByText("none set")).toHaveLength(2);
+});
+
+test("a caller without alerts:manage does not request thresholds or claim none are set", async () => {
+  mount({ grant: ANALYST });
+  expect(await screen.findByText(/do not have permission to view alert thresholds/)).toBeInTheDocument();
+  expect(api.alertConfig).not.toHaveBeenCalled();
+  expect(screen.getAllByText("unknown")).toHaveLength(2);
+  expect(screen.queryByText("none set")).not.toBeInTheDocument();
 });
 
 test("thresholds that exist but are all disabled are not 'Armed' either", async () => {

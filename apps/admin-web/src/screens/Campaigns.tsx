@@ -22,13 +22,14 @@ import { api, scheduleHasSent, type CampaignRow, type SendScheduleState } from "
 /**
  * The two state machines this screen shows at once.
  *
- * `Campaign.status` (draft → scheduled → sending → sent, or halted) says what
- * happened to the SEND. `SendScheduleState.status` (active/paused/archived)
+ * `Campaign.status` is intended to say what happened to the send, but is not
+ * advanced after scheduling until B3 lands. `SendScheduleState.status`
+ * (active/paused/archived)
  * says whether the schedule MAY FIRE — it is the source of truth the launch
  * handler and the sender both gate on. They are not the same fact and neither
- * subsumes the other: a `sent` one-off can sit on an `archived` lifecycle row,
- * and a series whose parent is forever `scheduled` is paused or not entirely
- * according to its lifecycle record. The design's table shows both columns for
+ * subsumes the other: the lifecycle record and `counters.sent` establish that a
+ * one-off has sent, while a series parent remains `scheduled` and is paused or
+ * active according to its lifecycle record. The table shows both columns for
  * that reason, and the Pause/Resume/Archive buttons act on the second one.
  */
 export interface CampaignListRow {
@@ -44,6 +45,19 @@ const CAMPAIGN_STATUS_COLOR: Record<string, string> = {
   halted: "#b91c1c",
   draft: "#6b7280",
 };
+
+/**
+ * Present a send status from records that the server actually maintains.
+ *
+ * B3 will eventually write `Campaign.status = sent`; until then, a completed
+ * one-off or a non-zero send counter is the truthful signal. Keep real terminal
+ * and in-progress statuses intact so this remains correct after B3 lands.
+ */
+function campaignStatus(r: CampaignListRow): string {
+  const status = r.campaign.status;
+  if (status === "draft" || status === "halted" || status === "sending" || status === "sent") return status;
+  return r.campaign.sent > 0 || (r.schedule?.kind === "one_off" && scheduleHasSent(r.schedule)) ? "sent" : status;
+}
 
 /**
  * Newest first by send time; rows with no send time (drafts, and every
@@ -165,7 +179,9 @@ function matchesFilter(r: CampaignListRow, filter: Filter): boolean {
   switch (filter) {
     case "Series": return campaignKind(r) === "series";
     case "One-off": return campaignKind(r) === "one-off";
-    case "Scheduled": return r.campaign.status === "scheduled";
+    // `Campaign.status` is frozen at scheduled until B3. The lifecycle state is
+    // what answers the operator's actual question: which sends are still pending?
+    case "Scheduled": return r.schedule?.status === "active" && !scheduleHasSent(r.schedule);
     case "Paused": return r.schedule?.status === "paused";
     default: return true;
   }
@@ -320,7 +336,7 @@ export function Campaigns({ org, grant, onCompose }: { org: string; grant: Grant
                       {r.campaign.subject} <span className="muted">({r.campaign.campaignId})</span>
                     </td>
                     <td>{kind}</td>
-                    <td><StatusPill status={r.campaign.status} /></td>
+                    <td><StatusPill status={campaignStatus(r)} /></td>
                     <td>
                       {/* `useAsync` clears `data` on every deps change, so a
                           lifecycle action — which bumps `reloadKey` — leaves

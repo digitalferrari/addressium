@@ -81,3 +81,13 @@ test("a role without suppression:manage is not shown a button that would 403", a
   expect(screen.queryByRole("button", { name: /Dry run/ })).toBeNull();
   expect(screen.queryByRole("button", { name: /^Import$/ })).toBeNull();
 });
+
+test("a global suppression is labelled and has no per-org Lift action", async () => {
+  vi.spyOn(api, "suppressions").mockResolvedValue([{
+    orgId: "acme", email: "bounced@example.test", source: "bounce", scope: "global", addedAt: "2026-09-15T00:00:00.000Z",
+  }] as never);
+  render(<Subscribers org="acme" grant={ADMIN} />);
+  expect(await screen.findByText("bounced@example.test")).toBeInTheDocument();
+  expect(screen.getAllByText("global")).toHaveLength(2);
+  expect(screen.queryByRole("button", { name: "Lift" })).toBeNull();
+});

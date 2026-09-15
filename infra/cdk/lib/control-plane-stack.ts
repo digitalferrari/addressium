@@ -15,7 +15,7 @@
  */
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
-import { Stack, type StackProps, RemovalPolicy, Duration, CfnOutput, Lazy, ArnFormat } from "aws-cdk-lib";
+import { Stack, type StackProps, RemovalPolicy, Duration, CfnOutput, Lazy, ArnFormat, CustomResource } from "aws-cdk-lib";
 import type { Construct } from "constructs";
 import { AttributeType, BillingMode, StreamViewType, Table, TableEncryption } from "aws-cdk-lib/aws-dynamodb";
 import { Key } from "aws-cdk-lib/aws-kms";
@@ -80,6 +80,8 @@ import {
 import { LambdaInvoke } from "aws-cdk-lib/aws-stepfunctions-tasks";
 import { CfnWebACLAssociation } from "aws-cdk-lib/aws-wafv2";
 import { Stream, StreamMode } from "aws-cdk-lib/aws-kinesis";
+import { Provider } from "aws-cdk-lib/custom-resources";
+import { APP_VERSION, EXPECTED_SCHEMA_VERSION } from "@addressium/core";
 import { StaticSite } from "./static-site.js";
 import { wireAnalytics } from "./analytics.js";
 
@@ -124,6 +126,10 @@ export interface ControlPlaneStackProps extends StackProps {
   adminAppUrl?: string;
   /** Public URL of the subscriber/public site. Defaults to its distribution. */
   publicAppUrl?: string;
+  /** Staged custom hostname for the admin SPA; DNS is managed outside AWS. */
+  adminCustomDomain?: { domainName: string };
+  /** Staged custom hostname for the public/subscriber SPA; DNS is managed outside AWS. */
+  publicCustomDomain?: { domainName: string };
   /**
    * Public origin of the HTTP API, used as the `connect-src` entry in the SPAs'
    * CSP (#197). It cannot default to `api.apiEndpoint`: the API's CORS allowlist
@@ -191,6 +197,11 @@ export class ControlPlaneStack extends Stack {
     // decision below keys off this value, and a mistyped one used to produce a
     // stack that looked deployed-to-prod and behaved like a scratch environment.
     const stage = parseStage(props.stage);
+    // The custom-domain objects own certificate validation and alias records.
+    // Preserve the explicit URL fields for an externally-managed domain, but a
+    // managed domain is its own source of truth for Cognito/CORS/link origins.
+    const adminAppUrl = props.adminAppUrl ?? (props.adminCustomDomain ? `https://${props.adminCustomDomain.domainName}` : undefined);
+    const publicAppUrl = props.publicAppUrl ?? (props.publicCustomDomain ? `https://${props.publicCustomDomain.domainName}` : undefined);
     const analyticsCtx = this.node.tryGetContext("enableAnalytics") as boolean | string | undefined;
     const enableAnalytics = analyticsCtx === true || analyticsCtx === "true";
     // Must match `LAKE_RETENTION_DAYS` in packages/domain/src/privacy.ts, which
@@ -383,7 +394,7 @@ export class ControlPlaneStack extends Stack {
       // permission layer; the URL remains scoped to one derived object and
       // expires after 15 minutes.
       cors: [{
-        allowedOrigins: [props.adminAppUrl ? props.adminAppUrl.replace(/\/+$/, "") : "*"],
+        allowedOrigins: [adminAppUrl ? adminAppUrl.replace(/\/+$/, "") : "*"],
         allowedMethods: [HttpMethods.PUT],
         allowedHeaders: ["*"],
         exposedHeaders: ["ETag"],
@@ -577,8 +588,8 @@ export class ControlPlaneStack extends Stack {
         },
       });
     const stripSlash = (u: string) => u.replace(/\/+$/, "");
-    const adminOrigin = props.adminAppUrl ? stripSlash(props.adminAppUrl) : siteOrigin(() => adminSite, "AdminSite");
-    const publicOrigin = props.publicAppUrl ? stripSlash(props.publicAppUrl) : siteOrigin(() => publicSite, "PublicSite");
+    const adminOrigin = adminAppUrl ? stripSlash(adminAppUrl) : siteOrigin(() => adminSite, "AdminSite");
+    const publicOrigin = publicAppUrl ? stripSlash(publicAppUrl) : siteOrigin(() => publicSite, "PublicSite");
     // Token-safe concatenation: this resolves to an Fn::Join at synth.
     const adminCallbackUrl = `${adminOrigin}/`;
 
@@ -733,8 +744,9 @@ export class ControlPlaneStack extends Stack {
 
     // ---- handler functions ----
     const baseEnv = { TABLE_NAME: table.tableName };
-    const fn = (id: string, entry: string, handler: string, extraEnv: Record<string, string> = {}) =>
-      new NodejsFunction(this, id, {
+    let versionMarker: CustomResource | undefined;
+    const fn = (id: string, entry: string, handler: string, extraEnv: Record<string, string> = {}) => {
+      const result = new NodejsFunction(this, id, {
         entry,
         handler,
         // nodejs22.x (#235). AWS disabled CREATION of nodejs20.x functions on
@@ -814,6 +826,12 @@ export class ControlPlaneStack extends Stack {
           removalPolicy: RemovalPolicy.DESTROY,
         }),
       });
+      // The migration function itself creates the marker. Every application
+      // handler is ordered after it, so an update cannot expose code expecting
+      // a new shape before its migration has completed.
+      if (versionMarker) result.node.addDependency(versionMarker);
+      return result;
+    };
 
     // ses:SendEmail scoped to *this account's* SES identities + configuration
     // sets (#93). Per-org identities/config-sets are created by provisioning at
@@ -895,6 +913,30 @@ export class ControlPlaneStack extends Stack {
         n,
       );
     };
+
+    // A real install/upgrade boundary (#213). The custom-resource properties
+    // make CloudFormation invoke it on every release/schema change; its handler
+    // executes ordered migrations and writes the singleton marker only on
+    // success. Existing installs with no marker are recognized as schema 1,
+    // whose table shape was already created by this stack.
+    const migrationFn = fn(
+      "MigrationFn",
+      svc("services/api/src/migrations.ts"),
+      "migrationHandler",
+      { APP_VERSION, EXPECTED_SCHEMA_VERSION: String(EXPECTED_SCHEMA_VERSION) },
+    );
+    table.grantReadWriteData(migrationFn);
+    const migrationProvider = new Provider(this, "MigrationProvider", {
+      onEventHandler: migrationFn,
+      logRetention: stage === "prod" ? RetentionDays.THREE_MONTHS : RetentionDays.ONE_WEEK,
+    });
+    versionMarker = new CustomResource(this, "VersionMarker", {
+      serviceToken: migrationProvider.serviceToken,
+      properties: {
+        ApplicationVersion: APP_VERSION,
+        SchemaVersion: EXPECTED_SCHEMA_VERSION,
+      },
+    });
 
     const apiEntry = svc("services/api/src/index.ts");
     const apiEnv = {
@@ -1511,6 +1553,10 @@ export class ControlPlaneStack extends Stack {
         conditions: { StringLike: { "secretsmanager:Name": "addressium/*" } },
       }),
     );
+    // A replacement customer-sync secret retains the old key for a tightly
+    // bounded HMAC rollover window. Read is confined to the same per-org
+    // namespace as every other runtime secret; it never reaches stack secrets.
+    adminApiFn.addToRolePolicy(orgSecretsScoped());
     adminApiFn.addToRolePolicy(
       new PolicyStatement({
         actions: ["secretsmanager:PutSecretValue", "secretsmanager:TagResource"],
@@ -2385,6 +2431,9 @@ export class ControlPlaneStack extends Stack {
       prod,
       ...webAcl,
       connectOrigins: [apiOrigin, adminHostedUi.baseUrl()],
+      ...(props.adminCustomDomain
+        ? { domainName: props.adminCustomDomain.domainName }
+        : {}),
     }); // apps/admin-web
     publicSite = new StaticSite(this, "PublicSite", {
       prod,
@@ -2392,6 +2441,9 @@ export class ControlPlaneStack extends Stack {
       // The subscriber and public sites are unauthenticated — they never touch
       // the admin pool, so the Hosted UI is deliberately not reachable from here.
       connectOrigins: [apiOrigin],
+      ...(props.publicCustomDomain
+        ? { domainName: props.publicCustomDomain.domainName }
+        : {}),
     }); // apps/subscriber-web + public-web
 
     // ---- outputs ----
@@ -2406,10 +2458,22 @@ export class ControlPlaneStack extends Stack {
       new CfnOutput(this, "OpsAlertsTopicArn", { value: ownedOpsTopic.topicArn });
     }
     new CfnOutput(this, "SendDlqUrl", { value: sendDlq.queueUrl });
-    new CfnOutput(this, "AdminSiteUrl", { value: adminSite.distribution.domainName });
+    new CfnOutput(this, "AdminSiteUrl", { value: props.adminCustomDomain?.domainName ?? adminSite.distribution.domainName });
     new CfnOutput(this, "AdminSiteBucket", { value: adminSite.bucket.bucketName });
-    new CfnOutput(this, "PublicSiteUrl", { value: publicSite.distribution.domainName });
+    new CfnOutput(this, "PublicSiteUrl", { value: props.publicCustomDomain?.domainName ?? publicSite.distribution.domainName });
     new CfnOutput(this, "PublicSiteBucket", { value: publicSite.bucket.bucketName });
+    // Cloudflare stays authoritative. These values are exactly the inputs for
+    // its DNS UI: add the ACM-provided validation CNAME for each ARN, then CNAME
+    // the hostname to the matching CloudFront target. No Route 53 zone access
+    // or record mutation is required from Addressium.
+    if (adminSite.certificate) {
+      new CfnOutput(this, "AdminCertificateArn", { value: adminSite.certificate.certificateArn });
+      new CfnOutput(this, "AdminCloudFrontTarget", { value: adminSite.distribution.domainName });
+    }
+    if (publicSite.certificate) {
+      new CfnOutput(this, "PublicCertificateArn", { value: publicSite.certificate.certificateArn });
+      new CfnOutput(this, "PublicCloudFrontTarget", { value: publicSite.distribution.domainName });
+    }
     new CfnOutput(this, "AuditBucketName", { value: auditBucket.bucketName });
 
     // ---- operational dashboard (#229, compendium #29) ----

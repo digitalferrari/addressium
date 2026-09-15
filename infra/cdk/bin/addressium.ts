@@ -21,6 +21,10 @@ interface BootstrapConfig {
   region: string;
   adminEmails: string[];
   adminHostedUiDomainPrefix: string;
+  /** Optional Cloudflare/external-DNS hostname for the operator console. */
+  adminCustomDomain?: CustomDomainConfig;
+  /** Optional Cloudflare/external-DNS hostname for subscriber/public pages. */
+  publicCustomDomain?: CustomDomainConfig;
   /**
    * An SNS topic YOU already own, for infrastructure alarms (#222, compendium
    * #22/#32). Alert routing is account-wide plumbing — addressium should not
@@ -52,6 +56,21 @@ interface BootstrapConfig {
   cloudfrontWebAclArn?: string;
 }
 
+interface CustomDomainConfig {
+  domainName: string;
+}
+
+function validateCustomDomain(value: CustomDomainConfig | undefined, name: string): CustomDomainConfig | undefined {
+  if (!value) return undefined;
+  if (!value.domainName) {
+    throw new Error(`${name} requires domainName.`);
+  }
+  if (!/^[a-z0-9.-]+$/i.test(value.domainName) || value.domainName.includes("..")) {
+    throw new Error(`${name}.domainName must be a DNS hostname, without https:// or a path.`);
+  }
+  return value;
+}
+
 function loadConfig(): BootstrapConfig {
   const path = resolve(process.cwd(), "addressium.config.json");
   // Only the READ and the PARSE are wrapped. A validation failure below is a
@@ -81,6 +100,8 @@ function loadConfig(): BootstrapConfig {
     region: cfg.region ?? "us-east-1",
     adminEmails: cfg.adminEmails,
     adminHostedUiDomainPrefix: cfg.adminHostedUiDomainPrefix ?? "addressium-admin",
+    adminCustomDomain: validateCustomDomain(cfg.adminCustomDomain, "adminCustomDomain"),
+    publicCustomDomain: validateCustomDomain(cfg.publicCustomDomain, "publicCustomDomain"),
     opsAlertTopicArn: cfg.opsAlertTopicArn,
     opsAlertEmail: cfg.opsAlertEmail,
     adminFromEmail: cfg.adminFromEmail,
@@ -130,6 +151,8 @@ new ControlPlaneStack(app, `addressium-${config.stage}`, {
   stage: config.stage,
   adminEmails: config.adminEmails,
   adminHostedUiDomainPrefix: config.adminHostedUiDomainPrefix,
+  adminCustomDomain: config.adminCustomDomain,
+  publicCustomDomain: config.publicCustomDomain,
   opsAlertTopicArn: config.opsAlertTopicArn,
   opsAlertEmail: config.opsAlertEmail,
   adminFromEmail: config.adminFromEmail,

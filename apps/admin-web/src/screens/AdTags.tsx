@@ -93,6 +93,8 @@ export function AdTags({ org }: { org: string }) {
       <p className="muted" style={{ marginBottom: 0 }}>Structured ad blocks are replaced by matching series fills at send time. In raw HTML or MJML, place the declared slot marker such as <code>{"{{ad_top}}"}</code>; the fill is inserted verbatim and is never tokenized or click-tracked.</p>
     </div>
     {message && <p className="muted">{message}</p>}
+    {reportId && seriesReport.loading && <p className="muted">Loading series report…</p>}
+    {reportId && seriesReport.error && <p className="err">Could not load series report: {seriesReport.error}</p>}
     {reportId && seriesReport.data && <div className="card">
       <div className="cardhead" style={{ margin: "-18px -18px 16px" }}><h2>Series reporting · {reportId}</h2></div>
       <div className="kpi-grid">
@@ -114,7 +116,8 @@ export function AdTags({ org }: { org: string }) {
       <div style={{ display: "flex", gap: 8 }}><button className="btn" onClick={() => void save()}>Save ad tags</button><button className="btn ghost" onClick={() => setEditing(false)}>Cancel</button></div>
     </div>}
     {series.loading && <p className="muted">Loading series…</p>}
-    {!series.loading && rows.length === 0 && !editing && <div className="card muted">No recurring series yet. Create one here, then bind its template’s declared slots.</div>}
+    {series.error && <p className="err">Could not load recurring series: {series.error}</p>}
+    {!series.loading && !series.error && rows.length === 0 && !editing && <div className="card muted">No recurring series yet. Create one here, then bind its template’s declared slots.</div>}
     {rows.map((item) => <div className="card" key={item.seriesId}><div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}><div><h2 style={{ marginTop: 0 }}>{item.name}</h2><p className="muted">{item.seriesId} · {item.cadence} · template <code>{item.templateId}</code></p></div><div style={{ display: "flex", gap: 8 }}><button className="btn ghost" onClick={() => setReportId(item.seriesId)}>Report</button><button className="btn ghost" onClick={() => begin(item)}>Edit</button></div></div><p>{item.adSlotFills.length ? item.adSlotFills.map((fill) => <code key={fill.slot} style={{ marginRight: 8 }}>{fill.slot}</code>) : <span className="muted">No filled slots</span>}</p></div>)}
   </div>;
 }

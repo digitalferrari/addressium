@@ -77,7 +77,35 @@ jobs:
           cache: "npm"
       - run: npm ci
       - run: npm run build
+      - name: Write deployment configuration
+        if: vars.DEPLOY_ROLE_ARN != ''
+        env:
+          ADDRESSIUM_CONFIG_JSON: ${{ secrets.ADDRESSIUM_CONFIG_JSON }}
+        run: |
+          test -n "$ADDRESSIUM_CONFIG_JSON" || (echo "Set the ADDRESSIUM_CONFIG_JSON repository secret before deploying." && exit 1)
+          printf '%s' "$ADDRESSIUM_CONFIG_JSON" > infra/cdk/addressium.config.json
       - name: Deploy the control-plane stack
         if: vars.DEPLOY_ROLE_ARN != ''
         run: npx cdk deploy --require-approval never
         working-directory: infra/cdk
+      - name: Publish the operator and subscriber SPAs
+        if: vars.DEPLOY_ROLE_ARN != ''
+        env:
+          ADDRESSIUM_PUBLIC_ORG_ID: ${{ vars.ADDRESSIUM_PUBLIC_ORG_ID }}
+        run: node scripts/publish-spas.mjs
+
+  # A published GitHub release is the notification channel for self-hosted
+  # operators: watchers receive GitHub's release notification, and the notes
+  # describe the exact tagged upgrade rather than an unversioned branch push.
+  release:
+    needs: [build]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Publish GitHub release and notify watchers
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || gh release create "$GITHUB_REF_NAME" --generate-notes --verify-tag

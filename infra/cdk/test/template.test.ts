@@ -68,6 +68,34 @@ test("the audit bucket's Object Lock is GOVERNANCE, never COMPLIANCE (#219)", ()
   });
 });
 
+test("the version marker is a deploy-time custom resource with an ordered migration boundary", () => {
+  const resources = Object.values(template().toJSON().Resources ?? {}) as Array<{
+    Type?: string;
+    Properties?: Record<string, unknown>;
+  }>;
+  const marker = resources.find((resource) => resource.Properties?.ApplicationVersion === "0.1.0");
+  assert.ok(marker, "a deploy must invoke the marker/migration custom resource");
+  assert.equal(marker.Properties?.SchemaVersion, 1);
+  assert.equal(marker.Type, "AWS::CloudFormation::CustomResource");
+});
+
+test("Cloudflare-managed custom domains stage ACM certificates without Route 53 writes", () => {
+  const t = template({
+    adminCustomDomain: { domainName: "console.example.com" },
+    publicCustomDomain: { domainName: "email.example.com" },
+  });
+  const distributions = Object.values(t.findResources("AWS::CloudFront::Distribution"));
+  assert.ok(distributions.some((d) => JSON.stringify(d).includes("console.example.com")));
+  assert.ok(distributions.some((d) => JSON.stringify(d).includes("email.example.com")));
+  const certificates = t.findResources("AWS::CertificateManager::Certificate");
+  assert.equal(Object.keys(certificates).length, 2);
+  assert.equal(Object.keys(t.findResources("AWS::Route53::RecordSet")).length, 0);
+  const outputs = t.toJSON().Outputs ?? {};
+  for (const output of ["AdminCertificateArn", "AdminCloudFrontTarget", "PublicCertificateArn", "PublicCloudFrontTarget"]) {
+    assert.ok(output in outputs, `missing Cloudflare handoff output ${output}`);
+  }
+});
+
 test("SES events are buffered through SQS, never invoked directly (#218)", () => {
   const t = template();
   // An SNS->Lambda subscription is an async invoke: two retries then the event
@@ -1345,7 +1373,7 @@ test("every Lambda runs a supported runtime (#235)", () => {
     // runtime the framework picks and upgrades on its own schedule. They still
     // must not be RETIRED — asserted above — but pinning them to ours would mean
     // forking library code, so they are excluded from the single-runtime check.
-    if (id.startsWith("Custom") || id.startsWith("LogRetention")) continue;
+    if (id.startsWith("Custom") || id.startsWith("LogRetention") || id.includes("MigrationProvider")) continue;
     if (rt.startsWith("nodejs")) runtimes.add(rt);
   }
   // One runtime across OUR functions. A mixed set means some handler runs code

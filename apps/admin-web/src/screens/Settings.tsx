@@ -109,6 +109,7 @@ function CustomerSyncTab({ org }: { org: string }) {
   const [tableName, setTableName] = useState("");
   const [secret, setSecret] = useState("");
   const [enabled, setEnabled] = useState(true);
+  const [configured, setConfigured] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
 
@@ -117,17 +118,16 @@ function CustomerSyncTab({ org }: { org: string }) {
     setEndpoint(loaded.data.endpoint ?? "");
     setTableName(loaded.data.tableName ?? "");
     setEnabled(loaded.data.enabled ?? true);
+    setConfigured(loaded.data.configured);
   }, [loaded.data]);
 
   if (loaded.loading) return <div className="muted">Loading…</div>;
   if (loaded.error) return <div className="error">{loaded.error}</div>;
-  const configured = loaded.data?.configured ?? false;
-
   const save = async () => {
     setBusy(true); setMessage("");
     try {
       const result = await api.saveCustomerSync({ orgId: org, endpoint: endpoint.trim(), tableName: tableName.trim(), secret, enabled });
-      setEndpoint(result.endpoint); setSecret(""); setMessage("Customer sync saved. The secret is not shown again.");
+      setEndpoint(result.endpoint); setConfigured(result.configured); setSecret(""); setMessage("Customer sync saved. The secret is not shown again.");
     } catch (e) { setMessage((e as Error).message); }
     finally { setBusy(false); }
   };

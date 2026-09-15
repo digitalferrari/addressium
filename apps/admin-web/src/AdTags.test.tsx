@@ -30,6 +30,24 @@ test("says plainly that series fills are active and explains both render paths",
   expect(banner).toHaveTextContent(/\{\{ad_top\}\}/);
 });
 
+test("a failed series load is shown as a failure, not as an empty organization", async () => {
+  vi.spyOn(api, "series").mockRejectedValue(new Error("network unavailable"));
+  vi.spyOn(api, "templates").mockResolvedValue([template]);
+  render(<AdTags org="acme" />);
+  expect(await screen.findByText(/Could not load recurring series/)).toHaveTextContent("network unavailable");
+  expect(screen.queryByText(/No recurring series yet/)).toBeNull();
+});
+
+test("a failed series report remains visible as a failure", async () => {
+  vi.spyOn(api, "series").mockResolvedValue([seriesRow]);
+  vi.spyOn(api, "templates").mockResolvedValue([template]);
+  vi.spyOn(api, "seriesReport").mockRejectedValue(new Error("report unavailable"));
+  const user = userEvent.setup();
+  render(<AdTags org="acme" />);
+  await user.click(await screen.findByRole("button", { name: "Report" }));
+  expect(await screen.findByText(/Could not load series report/)).toHaveTextContent("report unavailable");
+});
+
 test("edits a series and round-trips its fills through saveSeries", async () => {
   vi.spyOn(api, "series").mockResolvedValue([seriesRow]);
   vi.spyOn(api, "templates").mockResolvedValue([template]);

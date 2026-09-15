@@ -48,4 +48,5 @@ export * from "./audit.js";
 export * from "./preferences.js";
 export * from "./merge-tags.js";
 export * from "./api-keys.js";
+export * from "./customer-sync-webhook.js";
 export * from "./series.js";

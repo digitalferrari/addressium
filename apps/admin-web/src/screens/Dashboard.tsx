@@ -8,6 +8,7 @@
 import { useMemo } from "react";
 import { useAsync } from "../useAsync.js";
 import { relativeTime } from "../time.js";
+import { can, type Grant } from "../rbac.js";
 import { api, type AlertConfig, type AlertRule, type CampaignReport, type CampaignRow, type SetupState } from "../api.js";
 import { TrendsPanel } from "./Analytics.js";
 
@@ -27,6 +28,14 @@ const CAMPAIGN_STATUS_CLASS: Record<string, string> = {
   draft: "p-neutral",
 };
 
+/** `Campaign.status` is not advanced after scheduling yet (B3). Counters are. */
+function campaignStatus(campaign: CampaignRow): string {
+  if (campaign.status === "draft" || campaign.status === "halted" || campaign.status === "sending" || campaign.status === "sent") {
+    return campaign.status;
+  }
+  return campaign.sent > 0 ? "sent" : campaign.status;
+}
+
 /** Newest first by send time; campaigns with no schedule (drafts) sort last. */
 function byMostRecentSend(a: CampaignRow, b: CampaignRow): number {
   const at = a.sendAt ? new Date(a.sendAt).getTime() : NaN;
@@ -39,7 +48,7 @@ function byMostRecentSend(a: CampaignRow, b: CampaignRow): number {
 /**
  * What the Dashboard needs that takes more than one call (#261).
  *
- * The deliverability panel reports on the LATEST SENT edition, and which
+ * The deliverability panel reports on the latest campaign with recorded sends, and which
  * campaign that is only becomes known once `campaigns` has resolved — so the
  * two reads are genuinely sequential and live in one `useAsync`. Splitting them
  * would mean a second `useAsync` firing `api.report(org, "")` on the first
@@ -61,7 +70,7 @@ async function loadDashboardSending(org: string): Promise<{
   // The route sorts by `campaignId.localeCompare` descending, which is id order
   // and not time order — ids are operator-chosen stems, so "latest" has to be
   // re-derived from `sendAt` here rather than trusted from the response.
-  const latestSent = [...campaigns].filter((c) => c.status === "sent").sort(byMostRecentSend)[0];
+  const latestSent = [...campaigns].filter((c) => c.sent > 0).sort(byMostRecentSend)[0];
   if (!latestSent) return { campaigns };
   try {
     return { campaigns, latestSent, report: await api.report(org, latestSent.campaignId) };
@@ -85,8 +94,9 @@ async function loadDashboardSending(org: string): Promise<{
  * The health badge is rendered by `HealthBadge` as a sibling in the view switch,
  * not from inside this component.
  */
-export function Dashboard({ org, onGoToSetup, onCompose, onViewCampaigns }: {
+export function Dashboard({ org, grant, onGoToSetup, onCompose, onViewCampaigns }: {
   org: string;
+  grant: Grant | null;
   onGoToSetup: () => void;
   onCompose?: () => void;
   onViewCampaigns?: () => void;
@@ -97,7 +107,11 @@ export function Dashboard({ org, onGoToSetup, onCompose, onViewCampaigns }: {
   // panel fails on its own: an org with no alert config must not blank the
   // campaign list, and a campaigns route the caller lacks `reports:view` for
   // must not hide the setup nag that tells them why the org cannot send.
-  const alerts = useAsync(() => api.alertConfig(org), [org]);
+  const canManageAlerts = can(grant, "alerts:manage", org);
+  const alerts = useAsync<AlertConfig | null | undefined>(
+    () => canManageAlerts ? api.alertConfig(org) : Promise.resolve(undefined),
+    [org, canManageAlerts],
+  );
   const trends = useAsync(() => api.analyticsTrends(org, 30), [org]);
   const sending = useAsync(() => loadDashboardSending(org), [org]);
 
@@ -140,6 +154,7 @@ export function Dashboard({ org, onGoToSetup, onCompose, onViewCampaigns }: {
         report={sending.data?.report}
         reportError={sending.data?.reportError}
         alerts={alerts}
+        canManageAlerts={canManageAlerts}
         setup={setup.data}
         loading={sending.loading}
         error={sending.error}
@@ -158,9 +173,10 @@ export function Dashboard({ org, onGoToSetup, onCompose, onViewCampaigns }: {
         )}
         {recent.length > 0 && (
           <ul className="actlist list-clean" aria-label="Recent campaigns">
-              {recent.map((c) => (
-                <li className="actitem" key={c.campaignId} role="row">
-                  <div className="ci" aria-hidden="true">{c.status === "draft" ? "✎" : c.status === "scheduled" ? "◷" : c.status === "halted" ? "!" : "✉"}</div>
+              {recent.map((c) => {
+                const status = campaignStatus(c);
+                return <li className="actitem" key={c.campaignId} role="row">
+                  <div className="ci" aria-hidden="true">{status === "draft" ? "✎" : status === "scheduled" ? "◷" : status === "halted" ? "!" : "✉"}</div>
                   <div className="meta">
                     <b className="t-strong">{c.subject}</b>
                     <div className="mono">{c.campaignId}</div>
@@ -170,9 +186,9 @@ export function Dashboard({ org, onGoToSetup, onCompose, onViewCampaigns }: {
                       not a claim about how many subscribers the list has. */}
                     <div><span className="num">Sent to {c.sent.toLocaleString()}</span> · {campaignWhen(c)}</div>
                   </div>
-                  <span className={`pill ${CAMPAIGN_STATUS_CLASS[c.status] ?? "p-neutral"}`} style={{ color: c.status === "halted" ? "var(--crit)" : c.status === "sent" ? "var(--good)" : undefined }}><span className="dot" aria-hidden="true" />{c.status}</span>
+                  <span className={`pill ${CAMPAIGN_STATUS_CLASS[status] ?? "p-neutral"}`} style={{ color: status === "halted" ? "var(--crit)" : status === "sent" ? "var(--good)" : undefined }}><span className="dot" aria-hidden="true" />{status}</span>
                 </li>
-              ))}
+              })}
           </ul>
         )}
       </section>
@@ -204,18 +220,20 @@ function campaignWhen(c: CampaignRow): string {
  * will actually stop their next campaign.
  */
 function DeliverabilityPanel({
-  latest, report, reportError, alerts, setup, loading, error,
+  latest, report, reportError, alerts, canManageAlerts, setup, loading, error,
 }: {
   latest?: CampaignRow;
   report?: CampaignReport;
   reportError?: string;
   alerts: { data?: AlertConfig | null; error?: string; loading: boolean };
+  canManageAlerts: boolean;
   setup?: SetupState;
   loading: boolean;
   error?: string;
 }) {
+  const alertThresholdsKnown = canManageAlerts && !alerts.error;
   const rule = (metric: AlertRule["metric"]) =>
-    (alerts.data?.rules ?? []).find((r) => r.metric === metric);
+    alertThresholdsKnown ? (alerts.data?.rules ?? []).find((r) => r.metric === metric) : undefined;
 
   return (
     <div className="card">
@@ -252,8 +270,8 @@ function DeliverabilityPanel({
                 // configuration an operator could supply and had not.
                 thresholdApplies={false}
               />
-              <RateRow label="Bounces" rate={report.rates.bounceRate} color="#b45309" rule={rule("bounce_rate")} />
-              <RateRow label="Complaints" rate={report.rates.complaintRate} color="#b91c1c" rule={rule("complaint_rate")} />
+              <RateRow label="Bounces" rate={report.rates.bounceRate} color="#b45309" rule={rule("bounce_rate")} thresholdKnown={alertThresholdsKnown} />
+              <RateRow label="Complaints" rate={report.rates.complaintRate} color="#b91c1c" rule={rule("complaint_rate")} thresholdKnown={alertThresholdsKnown} />
             </tbody>
           </table>
           <dl className="muted" style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: "4px 12px", margin: "12px 0 0" }}>
@@ -264,7 +282,8 @@ function DeliverabilityPanel({
                   Rendering that as zeros, or as a quiet blank, is how an
                   unprotected org looks identical to a protected one (#217). */}
               {alerts.loading ? "…"
-                : alerts.error ? `Unknown — ${alerts.error}`
+                : !canManageAlerts ? "Unknown — you do not have permission to view alert thresholds."
+                : alerts.error ? "Unknown — alert configuration could not be loaded."
                 : !alerts.data ? "Not armed — this organization has no thresholds."
                 : alerts.data.rules.some((r) => r.enabled) ? "Armed"
                 : "Not armed — every threshold is disabled."}
@@ -314,8 +333,8 @@ function ratePct(x: number): string {
  * no delivered-rate metric in `AlertRule`. That is a different statement from
  * "none set", which says an operator could configure one and has not.
  */
-function RateRow({ label, rate, color, rule, thresholdApplies = true }: {
-  label: string; rate?: number; color: string; rule?: AlertRule; thresholdApplies?: boolean;
+function RateRow({ label, rate, color, rule, thresholdApplies = true, thresholdKnown = true }: {
+  label: string; rate?: number; color: string; rule?: AlertRule; thresholdApplies?: boolean; thresholdKnown?: boolean;
 }) {
   const halt = rule?.enabled ? rule.haltAt : undefined;
   return (
@@ -330,7 +349,7 @@ function RateRow({ label, rate, color, rule, thresholdApplies = true }: {
         )}
       </td>
       <td className="muted">
-        {!thresholdApplies ? "—" : halt === undefined ? "none set" : ratePct(halt)}
+        {!thresholdApplies ? "—" : !thresholdKnown ? "unknown" : halt === undefined ? "none set" : ratePct(halt)}
       </td>
     </tr>
   );

@@ -10,7 +10,8 @@
  * Renders a self-contained form: an email field, a multi-select checkbox list of
  * the org's newsletters, a hidden honeypot, and a submit button. Posts to
  * /signup/batch so ONE double opt-in email covers every selected list. No account
- * or login required. If data-list is set, it renders a single-list form instead.
+ * or login required. The public directory is the source of truth even when
+ * data-list is set: an embed must never expose or accept a closed/private list.
  */
 (function () {
   var mounts = document.querySelectorAll("[data-addressium]:not([data-mounted])");
@@ -44,6 +45,7 @@
     var msg = el("div", "margin-top:8px;font-size:13px;color:#5a6473");
 
     var checks = {}; // listId -> checkbox
+    var singleEligible = false;
 
     if (siteKey && !window.__addressiumRecaptcha) {
       window.__addressiumRecaptcha = true;
@@ -75,7 +77,7 @@
     }
 
     function submit() {
-      var ids = singleList ? [singleList] : selected();
+      var ids = singleList ? (singleEligible ? [singleList] : []) : selected();
       if (!email.value || ids.length === 0) { msg.textContent = "Pick at least one newsletter and enter your email."; return; }
       msg.textContent = "…";
       withToken(function (token) {
@@ -99,22 +101,23 @@
     wrap.appendChild(msg);
     root.appendChild(wrap);
 
-    // Load the org's newsletters for the multi-select (skipped for single-list mode).
-    if (!singleList) {
-      fetch(api + "/orgs/" + encodeURIComponent(org) + "/lists")
-        .then(function (r) { return r.json(); })
-        .then(function (rows) {
-          return Promise.all((rows || []).map(function (row) {
-            return fetch(api + "/orgs/" + encodeURIComponent(org) + "/lists/" + encodeURIComponent(row.listId) + "/public")
-              .then(function (r) { return r.ok ? r.json() : { listId: row.listId, name: row.listId }; })
-              .catch(function () { return { listId: row.listId, name: row.listId }; });
-          }));
-        })
-        .then(function (lists) {
-          if (!lists.length) { listBox.appendChild(el("div", "font-size:13px;color:#5a6473", "No newsletters available.")); return; }
-          lists.forEach(function (l) { addRow(l.listId, l.name); });
-        })
-        .catch(function () { listBox.appendChild(el("div", "font-size:13px;color:#c3372f", "Could not load newsletters.")); });
-    }
+    // This public, filtered endpoint is intentionally the ONLY list discovery
+    // request. `/orgs/{org}/lists` is the authenticated console route and would
+    // leak closed/private list metadata if it were ever made public for embeds.
+    fetch(api + "/orgs/" + encodeURIComponent(org) + "/directory")
+      .then(function (r) { if (!r.ok) throw new Error("directory failed"); return r.json(); })
+      .then(function (lists) {
+        lists = Array.isArray(lists) ? lists : [];
+        if (singleList) {
+          var list = lists.filter(function (l) { return l.listId === singleList; })[0];
+          singleEligible = !!list;
+          if (list) title.textContent = "Subscribe to " + (list.name || list.listId);
+          else msg.textContent = "This newsletter is not available.";
+          return;
+        }
+        if (!lists.length) { listBox.appendChild(el("div", "font-size:13px;color:#5a6473", "No newsletters available.")); return; }
+        lists.forEach(function (l) { addRow(l.listId, l.name); });
+      })
+      .catch(function () { msg.textContent = "Could not load newsletters."; });
   }
 })();

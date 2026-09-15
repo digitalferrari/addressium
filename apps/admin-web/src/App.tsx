@@ -170,7 +170,7 @@ function Console() {
       <main className="main">
         <Topbar orgName={orgName} org={org} view={view} orgEnv={orgEnv} claims={claims} onNavigate={setView} />
         <div className="view" key={view}>
-        {view === "dashboard" && (<><HealthBadge org={org} /><Dashboard org={org} onGoToSetup={() => setView("setup")} onCompose={() => setView("compose")} onViewCampaigns={() => setView("campaigns")} /></>)}
+        {view === "dashboard" && (<><HealthBadge org={org} /><Dashboard org={org} grant={grant} onGoToSetup={() => setView("setup")} onCompose={() => setView("compose")} onViewCampaigns={() => setView("campaigns")} /></>)}
         {view === "setup" && <Setup org={org} />}
         {view === "newsletters" && <Newsletters org={org} />}
         {view === "templates" && <Templates org={org} />}

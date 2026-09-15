@@ -129,6 +129,36 @@ test("webhook signatures verify and reject tampering (constant-time)", () => {
   assert.equal(verifyWebhookSignature("whsec", body, "not-hex-zz"), false);
 });
 
+test("the Stripe relay contract accepts only a canonical entitlement shape", async () => {
+  const h = await harness();
+  const signupResult = await signup(h.stores, h.confirmSigner, h.clock, {
+    orgId: ORG,
+    email: "reader@example.com",
+    listId: LIST,
+  });
+  await confirmOptIn(h.stores, h.confirmSigner, h.clock, signupResult.confirmationToken);
+
+  // Stripe itself never calls Addressium. The website-side relay canonicalizes
+  // the reader email and signs this exact JSON with Addressium's HMAC secret.
+  const relay = {
+    orgId: ORG,
+    subscriberEmail: "READER@EXAMPLE.COM",
+    entitlement: "paid" as const,
+    source: "stripe-relay",
+    version: "42",
+  };
+  const raw = JSON.stringify(relay);
+  assert.equal(verifyWebhookSignature("addressium-relay-secret", raw, signWebhook("addressium-relay-secret", raw)), true);
+  const updated = await applyEntitlementSync(h.stores, h.clock, relay);
+  assert.equal(updated.email, "reader@example.com");
+  assert.equal(updated.entitlement, "paid");
+
+  await assert.rejects(
+    applyEntitlementSync(h.stores, h.clock, { ...relay, entitlement: "free", version: "41" }),
+    /not newer/,
+  );
+});
+
 test("KMS-style DER->JOSE JWS assembly produces a valid ES256 token", async () => {
   // Simulate KMS: a signer that returns a DER ECDSA signature. Here we use a
   // local EC P-256 key (node:crypto emits DER by default) — the exact same

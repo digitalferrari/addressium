@@ -6,6 +6,8 @@
   "adminEmails": ["you@example.com"],
   "adminHostedUiDomainPrefix": "addressium-admin",
 
+  "$comment_domains": "Optional branded SPA hostnames are omitted here. Add adminCustomDomain and/or publicCustomDomain objects with only domainName, then deploy in us-east-1. Addressium requests the ACM certificate but never writes DNS: copy ACM's validation CNAME and the Admin/PublicCloudFrontTarget outputs into Cloudflare after the hostname choice is final.",
+
   "$comment_alerts": "Where infrastructure alarms go (DLQ depth, queue age, Lambda errors/throttles, DynamoDB throttles). Set opsAlertTopicArn to an SNS topic you already own — alert routing is your infrastructure, not ours. If you have no topic yet, set opsAlertEmail instead and addressium will create one and subscribe that address. Set NEITHER and every alarm fires into a void: `npm run deploy:check` will warn you.",
   "opsAlertTopicArn": "",
   "opsAlertEmail": "",

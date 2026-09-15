@@ -27,7 +27,12 @@ import {
 import { gsiEngineLimitation, type SegmentPredicate } from "@addressium/segment";
 import { randomUUID } from "node:crypto";
 import { InvokeCommand, LambdaClient } from "@aws-sdk/client-lambda";
-import { CreateSecretCommand, PutSecretValueCommand, SecretsManagerClient } from "@aws-sdk/client-secrets-manager";
+import {
+  CreateSecretCommand,
+  GetSecretValueCommand,
+  PutSecretValueCommand,
+  SecretsManagerClient,
+} from "@aws-sdk/client-secrets-manager";
 import {
   schemas,
   APP_VERSION,
@@ -39,6 +44,7 @@ import {
 import {
   HmacConfirmationSigner,
   InvalidInputError,
+  StaleEntitlementError,
   InvalidTokenError,
   applyPreferences,
   buildPreferenceLinkEmail,
@@ -131,6 +137,8 @@ import {
   type SuppressionChecker,
   type SuppressionListReader,
   type Stores,
+  rotateCustomerSyncSigningSecret,
+  serializeCustomerSyncSigningSecret,
 } from "@addressium/domain";
 import {
   ForbiddenError,
@@ -216,6 +224,10 @@ const INVALID_LINK =
  */
 const fail = (e: unknown): HttpResult => {
   if (e instanceof ForbiddenError) return json(403, { error: e.message });
+  // A signed billing relay may redeliver or arrive out of order. It is a valid
+  // request that lost to a later monotonic version, not malformed input; 409
+  // tells the relay to record/drop it rather than retry it indefinitely.
+  if (e instanceof StaleEntitlementError) return json(409, { error: e.message });
   // `instanceof` plus a name check: the re-export from core keeps a single zod
   // in the tree, but a hoisting accident that produced two copies would fail
   // `instanceof` silently and downgrade every validation error to a 500.
@@ -262,6 +274,15 @@ function zodMessage(e: ZodError): string {
           ? "is too long"
           : "is not valid";
   return path ? `${path} ${reason}.` : `The request ${reason}.`;
+}
+
+/** API Gateway normally lowercases headers, but local adapters need not. */
+function header(headers: HttpEvent["headers"], name: string): string {
+  const wanted = name.toLowerCase();
+  for (const [key, value] of Object.entries(headers ?? {})) {
+    if (key.toLowerCase() === wanted) return value ?? "";
+  }
+  return "";
 }
 
 /** Server-side RBAC: derive the caller's grant from JWT claims and check it. */
@@ -348,12 +369,21 @@ const customerSyncSecrets = new SecretsManagerClient({});
 
 async function saveCustomerSyncSecret(orgId: string, value: string): Promise<string> {
   const name = `addressium/${orgId}/customer-sync`;
-  if (process.env.ADDRESSIUM_LOCAL === "1") return value;
+  if (process.env.ADDRESSIUM_LOCAL === "1") return serializeCustomerSyncSigningSecret({ version: 1, current: value });
   try {
-    await customerSyncSecrets.send(new CreateSecretCommand({ Name: name, SecretString: value }));
+    const existing = await customerSyncSecrets.send(new GetSecretValueCommand({ SecretId: name }));
+    const next = rotateCustomerSyncSigningSecret(existing.SecretString ?? "", value);
+    await customerSyncSecrets.send(
+      new PutSecretValueCommand({ SecretId: name, SecretString: serializeCustomerSyncSigningSecret(next) }),
+    );
   } catch (e) {
-    if ((e as { name?: string }).name !== "ResourceExistsException") throw e;
-    await customerSyncSecrets.send(new PutSecretValueCommand({ SecretId: name, SecretString: value }));
+    if ((e as { name?: string }).name !== "ResourceNotFoundException") throw e;
+    await customerSyncSecrets.send(
+      new CreateSecretCommand({
+        Name: name,
+        SecretString: serializeCustomerSyncSigningSecret({ version: 1, current: value }),
+      }),
+    );
   }
   return name;
 }
@@ -775,7 +805,6 @@ export async function scheduleCampaignHandler(
       // segment picker whose value was dropped here, so a "send to my test
       // cohort" campaign mailed the entire list.
       ...(body.segmentId ? { segmentId: body.segmentId } : {}),
-      ...(body.when.type === "recurring" ? { seriesId: body.campaignId } : {}),
     };
     const feed = body.feedId ? await stores().feeds.get(body.orgId, body.feedId) : undefined;
     if (body.feedId && !feed) return json(400, { error: `unknown feed "${body.feedId}"` });
@@ -855,11 +884,17 @@ export async function scheduleCampaignHandler(
             editionKey: "<aws.scheduler.scheduled-time>",
           },
         });
-        // The series PARENT gets a record too, with no `schedule.sendAt` — a
+        // The recurring PARENT gets a record too, with no `schedule.sendAt` — a
         // recurring series has no single send time, and its cron already lives on
         // the lifecycle record the Schedules view reads. Each launch creates a
         // separate `series_edition` row tied to this parent, so reports can
         // aggregate actual stored counters without guessing from an id prefix.
+        //
+        // Do NOT stamp `descriptor.seriesId` here. `CampaignSeries` is the
+        // separate opt-in registry that owns reusable, series-wide ad fills;
+        // this inline recurring campaign has no such row. Stamping its campaign
+        // id made the sender require a nonexistent registry record and every
+        // ordinary recurring schedule dead-lettered before its first recipient.
         await recordScheduledCampaign(stores(), {
           orgId: body.orgId,
           campaignId: body.campaignId,
@@ -2931,7 +2966,7 @@ export async function publicDirectoryHandler(event: HttpEvent): Promise<HttpResu
 export async function entitlementSyncHandler(event: HttpEvent): Promise<HttpResult> {
   try {
     const raw = event.body ?? "";
-    const sig = event.headers?.["x-addressium-signature"] ?? "";
+    const sig = header(event.headers, "x-addressium-signature");
     const secret = await getSecret(env("WEBHOOK_SECRET_ARN"));
     if (!verifyWebhookSignature(secret, raw, sig)) {
       return json(401, { error: "bad signature" });
@@ -2951,7 +2986,7 @@ export async function entitlementSyncHandler(event: HttpEvent): Promise<HttpResu
 export async function identitySyncHandler(event: HttpEvent): Promise<HttpResult> {
   try {
     const raw = event.body ?? "";
-    const sig = event.headers?.["x-addressium-signature"] ?? "";
+    const sig = header(event.headers, "x-addressium-signature");
     const secret = await getSecret(env("WEBHOOK_SECRET_ARN"));
     if (!verifyWebhookSignature(secret, raw, sig)) {
       return json(401, { error: "bad signature" });
@@ -3183,6 +3218,8 @@ export const adminRouter = (event: HttpEvent): Promise<HttpResult> =>
   dispatch(ADMIN_ROUTES, event);
 export const publicRouter = (event: HttpEvent): Promise<HttpResult> =>
   dispatch(PUBLIC_ROUTES, event);
+
+export { applyMigrations, type Migration } from "./migrations.js";
 
 /** Exported so the route-parity test can assert against the CDK route list. */
 export const ROUTE_KEYS = {

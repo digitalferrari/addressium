@@ -28,7 +28,9 @@ const ANALYST: Grant = { role: "analyst", orgs: ["acme"] };
 const SENT: CampaignRow = {
   campaignId: "ledger-2026-07-20",
   subject: "The Morning Ledger — Jul 20",
-  status: "sent",
+  // The actual writer leaves this as scheduled; lifecycle/counters prove the
+  // send completed until B3 advances the campaign state machine.
+  status: "scheduled",
   type: "one_off",
   listId: "daily",
   sent: 96204,
@@ -131,12 +133,22 @@ test("a one-off shows its real send counter", async () => {
 });
 
 test("campaign status and lifecycle status are shown as the separate facts they are", async () => {
-  // A SENT campaign on an ARCHIVED schedule: neither value implies the other,
-  // and collapsing them into one column loses whichever is shown second.
+  // A completed one-off on an ARCHIVED schedule: lifecycle/counters derive the
+  // sent label, while archive remains a separate operator decision.
   mount([SENT], [SENT_SCHEDULE]);
   const row = await rowFor("ledger-2026-07-20");
   expect(within(row).getByText("sent")).toBeTruthy();
   expect(within(row).getByText("ARCHIVED")).toBeTruthy();
+});
+
+test("Scheduled means a lifecycle send is still pending, not every historical campaign", async () => {
+  const waiting: CampaignRow = { ...SENT, campaignId: "waiting", subject: "Waiting", sent: 0 };
+  const waitingSchedule: SendScheduleState = { ...SENT_SCHEDULE, scheduleId: "waiting", status: "active", completedRanges: [] };
+  mount([SENT, waiting], [SENT_SCHEDULE, waitingSchedule]);
+  await screen.findByText("The Morning Ledger — Jul 20");
+  await screen.getByRole("button", { name: "Scheduled" }).click();
+  expect(screen.getByText("Waiting")).toBeTruthy();
+  expect(screen.queryByText("The Morning Ledger — Jul 20")).toBeNull();
 });
 
 test("a draft with no lifecycle record still lists, with no actions offered", async () => {

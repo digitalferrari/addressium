@@ -5,12 +5,11 @@
 > domain, and run email lists, signup forms, broadcasts, and drip automations —
 > all serverless, at near-zero idle cost.
 
-- **Status:** Built; deployed once, to a dev account (#212). Most of §4 and all
-  of §6 ships in the repo and is tested, and the stack now stands up in a real
-  account with its handlers loading and an organization provisioned — but
-  **nothing has sent a campaign**, and the counts and wiring claims below are
-  still read from a synthesized template rather than from a running system. See
-  §13 for the honest list of what is not yet proven.
+- **Status:** Built; deployed to a dev account (#212). Most of §4 and all of §6
+  ships in the repo and is tested, and the stack stands up in a real account
+  with its handlers loading, an organization provisioned, and mail delivered to
+  a controlled inbox. Counts and most wiring claims below remain synthesized
+  template facts; see §13 for what is not yet proven.
 - **Audience:** Contributors and operators evaluating or building addressium
 - **Scope of this document:** the canonical system design, aligned to
   [`DESIGN-COMPENDIUM.md`](./DESIGN-COMPENDIUM.md) (revision 2), which is the
@@ -47,9 +46,8 @@ every org in a deployment is operated by the same owner.
    operator's account; email is sent through the operator's own SES identity.
 3. **Deliverability is a feature, not an afterthought** — DKIM/SPF/DMARC,
    one-click unsubscribe, and suppression handling are built in and enforced.
-4. **Channel-agnostic core, email-first build** — the domain model and pipeline
-   are designed so SMS/push can be added later without a rewrite, but only the
-   email path is built and tested for v1.
+4. **Email-only core** — the domain model and pipeline are built and tested for
+   email. Non-email channels are out of scope.
 5. **A deploy an operator can trust** — a one-time bootstrap stack and a
    permissions boundary, then a single gated `npm run deploy` (§9). An operator
    should get to "verified domain, first list, first send" quickly, without ever
@@ -127,17 +125,15 @@ every org in a deployment is operated by the same owner.
 - **Infrastructure as code** via AWS CDK (TypeScript), behind a one-time
   bootstrap stack and a permissions boundary (§9)
 
-### Out of scope (v1, designed for later)
+### Out of scope
 
-- SMS, push, voice, in-app channels (seams exist; not built)
+- Non-email channels
 - Ad-hoc arbitrary segmentation at scale (the OpenSearch mirror is a documented
   drop-in, **opt-in and off by default** — §5)
 - Deep ad-hoc analytics (the Kinesis/Firehose/Glue/Athena read-model is
   **opt-in and off by default** — §4.23)
-- Full visual journey builder (v1 ships code/config-defined drip automations)
 - **Public multi-tenant SaaS** (renting addressium to unrelated third parties);
   multi-**org silos** for a single owner *are* supported (§4.11)
-- SSO / SAML for the admin pool (deferred; Cognito + MFA for now)
 
 ### Key decisions (locked)
 
@@ -295,13 +291,24 @@ API Gateway HTTP API → Lambda. Two authorizer scopes:
 Handlers are thin: validate (zod schemas from `packages/core`), authorize,
 mutate DynamoDB, enqueue async work. No business logic in the frontend.
 
-- **Entitlement sync endpoint**: a dedicated, authenticated **operator API /
-  webhook** receives entitlement updates from the operator's billing /
+- **Entitlement sync endpoint**: a dedicated, HMAC-authenticated **website-side
+  relay webhook** receives entitlement updates from the operator's billing /
   subscription **system of record** and writes `entitlement` + `entitlement_asof`
   onto the subscriber. This keeps the value addressium mints into magic-link
-  tokens near-real-time. Authenticated with a scoped machine credential (API
-  key / signed webhook), separate from the Cognito operator auth. Idempotent by
+  tokens near-real-time. It is separate from Cognito operator auth. Idempotent by
   `(subscriber, source, version)`.
+
+  **Stripe relay contract.** Stripe never has network access to Addressium and
+  no Stripe signing secret is configured here. The operator's website verifies
+  Stripe, canonicalizes the subscriber email (trim + lowercase), then `POST`s
+  its own JSON to `/webhooks/entitlement` with
+  `x-addressium-signature: <HMAC-SHA-256 of exact body>`. The body is
+  `{ orgId, subscriberEmail, entitlement, source, version }`, where
+  `entitlement` is exactly `free` or `paid`, `source` identifies the relay
+  (for example `stripe-relay`), and `version` strictly increases for that
+  subscriber/source. Addressium rejects a bad signature with 401 and an equal
+  or older version with 409; a relay must treat the latter as delivered rather
+  than retrying it.
 
 **WAF is operator-supplied, not created here** (compendium #30/#31/#66, #225). A
 production AWS account very likely already runs a WebACL with tuned rules;
@@ -878,10 +885,15 @@ subscriptions, the entitlement, and the `sub` claim in every magic-link token
   subscriberId, externalId, email, listId, occurredAt }`; `type` is
   `subscribed` or `unsubscribed`, and `eventId` is the idempotency key. The
   external endpoint is responsible for applying the update to the other
-  DynamoDB table; the table name is never hard-coded in addressium. This path
-  currently uses the configured secret as a basic header credential;
-  HMAC signing, rotation, and replay protection are deliberately deferred in
-  #267.
+  DynamoDB table; the table name is never hard-coded in addressium. The worker
+  signs the exact posted JSON with HMAC-SHA-256 and sends
+  `x-addressium-event-id`, `x-addressium-timestamp`, and
+  `x-addressium-signature: v1=<hex>`. Receivers must reject timestamps outside
+  their replay window and durably deduplicate `eventId`; SQS retries preserve
+  that ID. Rotating the configured secret emits a second
+  `x-addressium-previous-signature` for a 24-hour grace period, so a receiver
+  can accept either key while it rolls forward. This implementation is locally
+  tested but awaits a dev deployment/end-to-end webhook receiver test.
 - **Two session tiers, owned by different systems.** A **lite** session
   (magic-link origin → content read + reg/paywall bypass, no profile) versus a
   **full** session (a real login). The lite half is built and enforced end to
@@ -2198,13 +2210,6 @@ signing secret".
   click overlay remain (§4.8). Also the **drip starter** (§4.6, #245): the
   machine had been provisioned with no caller, so signup and manual triggers now
   start executions.
-- **v2 — Extensibility**: visual automation/journey builder, SSO/SAML for the
-  admin pool. (The OpenSearch segmentation drop-in already ships behind
-  `enableOpenSearchMirror` — the v2 work is making it a supported posture rather
-  than an escape hatch, not writing it.)
-- **v3 — Multichannel**: activate the channel-agnostic seams for SMS
-  (SNS / AWS End User Messaging) and push.
-
 ---
 
 ## 11. Open questions for later phases
@@ -2352,11 +2357,11 @@ A design document that reads "done" is worse than useless. Everything above
 describes the target; this is the part that is still unearned. It mirrors
 [`DESIGN-COMPENDIUM.md`](./DESIGN-COMPENDIUM.md) §9.
 
-- **Deployed once, to a dev account** (#212); never to production, and never for
-  longer than a session. Every count, every alarm and every wiring claim in this
-  document is still read from a **synthesized CloudFormation template** rather
-  than from a running system — the deployment confirmed that the template
-  *applies*, which is a narrower fact than the template being *right*. It
+- **Deployed to a dev account** (#212); never to production. The deployment
+  confirmed that the stack applies, its handlers load, and mail can reach a
+  controlled inbox. Every count, alarm, and most wiring claim in this document
+  is still read from a **synthesized CloudFormation template** rather than from
+  a running system — a narrower fact than the template being *right*. It
   surfaced ten defects invisible to both `npm test` and `cdk synth`; two of them
   produced a stack at `CREATE_COMPLETE` in which none of the 29 handlers could
   load, so even "it deployed" does not imply "it runs".
@@ -2365,26 +2370,24 @@ describes the target; this is the part that is still unearned. It mirrors
   nothing, so publishing to the **encrypted** `SesEventsTopic` failed at the
   encryption step even though `sns:Publish` was correctly granted (#208). Two
   grants are needed, not one. The fix is verified against a live account for org
-  provisioning but **not against real SES traffic** — until a real bounce arrives
-  from a real mailbox provider, treat §4.5 as designed rather than demonstrated.
-- **Custom domains do not exist.** There is not one Route 53 or ACM resource in
-  the stack; every URL it emits is a `*.cloudfront.net` or
-  `*.execute-api.<region>.amazonaws.com` name, and those are what land in the
-  Cognito callback, the CORS allow-list and outgoing mail links.
-  `ControlPlaneStackProps.adminAppUrl` / `.publicAppUrl` are wired into both, but
-  `BootstrapConfig` declares neither and nothing passes them — dead code, not an
-  unset option. Anywhere this document implies an operator-chosen hostname, read
-  a CloudFront name instead.
+  provisioning and controlled mail delivery but **not against real bounce or
+  complaint traffic** — until a real bounce arrives from a real mailbox provider,
+  treat that portion of §4.5 as designed rather than demonstrated.
+- **Custom SPA domains are implemented but unconfigured.** Optional
+  `adminCustomDomain` / `publicCustomDomain` config supplies a hostname and
+  existing Route 53 zone; CDK validates a CloudFront certificate in us-east-1,
+  creates A/AAAA aliases, and uses the hostname for Cognito callbacks and CORS.
+  No dev hostname/zone has been supplied or deployed yet.
 - **`deploy-check.sh` has faced exactly one live change set**, and it was a
   *create* — where there is no existing data-holding resource to be replaced, so
   the branch it exists for did not execute. That branch is still fixture-only. It
   is the one thing standing between a key-schema change and an empty table (§9).
   Worse, until that same deploy it had never run **at all**: it hung off an npm
   `predeploy` hook, which `ignore-scripts=true` silently suppresses.
-- **The version marker is readable, but nothing writes it on deploy.** `GET
-  /version` returns the running version and a `deployed` of `null` on every real
-  install, forever, so it cannot yet confirm that a deploy landed. There is no
-  migration runner either, despite what a couple of source comments imply.
+- **Version marker and migrations are implemented but unproven live.** A
+  deploy-time custom resource executes ordered migrations before application
+  Lambdas update and writes the marker after success; the next dev deploy must
+  prove `/version` reports it correctly.
 - **GDPR erasure reaches the lake by tombstone, not by rewriting** (#164, §4.19).
   Rows bearing a pseudonymous subscriber id survive in `events/` until their
   lifecycle rule expires them — anti-joined out of every query, resolvable by

@@ -7,10 +7,11 @@ there is no addressium-hosted control plane.
 > ### ⚠️ Status: run once, to a dev account
 > §1–§6 have now been walked end to end against a real AWS account (#212), and
 > the corrections that run produced are folded in below — the boundary
-> permissions, the Hosted-UI domain, the SPA publish step. §7 onward is still
-> written against the source and the synthesized template rather than against
-> something that happened, and **no campaign has been sent**. That run surfaced
-> ten bugs no test could see; expect the sections it did not reach to hold more.
+> permissions, the Hosted-UI domain, the SPA publish step, and a confirmed mail
+> delivery to a controlled inbox. §7 onward is still written against the source
+> and the synthesized template rather than against something that happened. That
+> run surfaced ten bugs no test could see; expect the sections it did not reach
+> to hold more.
 > Read [Status](../README.md#status) before you point this at a domain you care
 > about.
 
@@ -340,18 +341,17 @@ name gets you a Cognito error page that does not say why, which is a poor first
 impression of your own deployment. The suffix is also why the *full* string, not
 the prefix, is what has to be globally unique in the region.
 
-> **Custom domains are not implemented, and this is the section where that
-> becomes visible.** The stack contains zero Route 53 and zero ACM resources. The
-> only names it emits are `*.cloudfront.net` and
-> `*.execute-api.<region>.amazonaws.com`, and those are the names baked into the
-> Cognito callback URL, the API's CORS allow-list, and every link in outgoing
-> mail. `ControlPlaneStackProps` declares `adminAppUrl` and `publicAppUrl`, and
-> they are genuinely wired into both of those — but `BootstrapConfig` has no
-> matching fields and nothing passes them, so they are **dead code** rather than
-> a setting you have missed. Putting this behind your own domain means a hosted
-> zone, a certificate in `us-east-1` for the CloudFront distributions, and
-> rebuilding the SPAs against the new origin. Plan for `*.cloudfront.net` in the
-> meantime, including in anything you print on a subscriber-facing page.
+> **Custom domains are staged, not required for dev proof.** Add
+> `adminCustomDomain: { "domainName": "console.example.com" }` and/or
+> `publicCustomDomain: { "domainName": "news.example.com" }` to the bootstrap
+> config when the final hostnames are known, and deploy that stack in
+> `us-east-1`. ACM requests DNS validation but Addressium does not own or change
+> DNS: copy the ACM validation CNAME (from `AdminCertificateArn` or
+> `PublicCertificateArn`) into Cloudflare, then point each hostname at its
+> corresponding `*CloudFrontTarget` output. `HttpApiUrl` remains the generated
+> API target until an API custom domain is separately chosen. The staged origins
+> are used for Cognito callback/CORS and SPA builds; generated AWS hosts remain
+> the correct dev default.
 
 ## 5. Build & publish the web apps
 
@@ -373,10 +373,10 @@ build time:
 > `POST /preferences/request`, `GET`/`POST /preferences`); its management page
 > is `/preferences` in the subscriber SPA.
 
-**There is no npm script that publishes an SPA.** Building and syncing are two
-separate manual steps, and the second one is plain `aws s3 sync` against the
-bucket names from §4 — nothing in `npm run deploy` touches the site buckets, so a
-deploy that succeeds still leaves the console unreachable until you do this:
+`node scripts/publish-spas.mjs` builds and publishes all three SPAs from the
+deployed stack outputs; tagged CI runs it immediately after a successful stack
+deploy. It requires `ADDRESSIUM_PUBLIC_ORG_ID` and is also usable from an
+operator workstation. The equivalent manual procedure is:
 
 ```bash
 VITE_API_BASE="https://<api-id>.execute-api.<region>.amazonaws.com" \
@@ -438,8 +438,8 @@ invalidation matters because `index.html` is the file you will keep replacing.
 > aws s3 sync apps/public-web/dist     "s3://<PublicSiteBucket>/signup"  --delete
 > ```
 >
-> Only subscriber-web has actually been published; the second line is written
-> from the config rather than from a run.
+> The automated publisher uses these exact scoped syncs, so no root-level
+> `--delete` can remove the other public app.
 
 The public site also ships `apps/public-web/public/embed.js` — a self-contained
 widget operators paste into any page:
@@ -759,11 +759,10 @@ npm run deploy                                   # roll forward (§4)
 curl $API/version                                # running vs deployed
 ```
 
-> `GET /version` returns `deployed: null` and `inSync: false` on every real
-> install: the `SCHEMA#VERSION` marker is readable but **nothing writes it on
-> deploy yet**, and `VersionFn` holds read-only access to the table. Treat the
-> `running` value as the only meaningful field for now.
-> **[Decided r2 — not yet built]**
+> The deploy-time migration custom resource writes `SCHEMA#VERSION` only after
+> ordered migrations complete. `GET /version` reports `inSync: true` when that
+> marker matches the serving build. This support is awaiting its first dev
+> deployment; until then the currently deployed stack still reports no marker.
 
 To tear a deployment down, use the teardown script — **not** `cdk destroy`:
 
@@ -794,13 +793,13 @@ doing anything.
 
 ## 11. The first live deployment
 
-The stack has now been deployed once, to a disposable dev account (#212) — but
-the 1.0 gate is `npm run test:e2e` **passing**, and that suite has still never
-been run. So this section is half-earned: the deploy steps below have been walked
-and their corrections are folded into §1–§6, while everything from "The run"
-onward remains written rather than observed. Everything below is the operator's
-part; the code side — the smoke suite, the deploy guard, the scoped policy — is
-written and waiting.
+The stack is deployed to a disposable dev account (#212), has loaded its
+handlers, and has delivered mail to a controlled inbox. The 1.0 gate remains
+`npm run test:e2e` **passing**, and that suite has still never been run. The
+deploy steps below have been walked and their corrections are folded into §1–§6;
+the broader sender, event, and mailbox-provider paths remain written rather than
+observed. Everything below is the operator's part; the code side — the smoke
+suite, the deploy guard, the scoped policy — is written and waiting.
 
 > **What that first run cost, so you can budget for the second.** Ten bugs, none
 > visible to `npm test` or `cdk synth`, because they fail only against real AWS
@@ -861,12 +860,11 @@ in a chat message (it lands in transcript history) and not in Secrets Manager
 
 ### Region and DNS
 
-`us-east-1`. It matches the config default and supports **SES inbound receipt
-rules**, which exist only in `us-east-1`, `us-west-2` and `eu-west-1` — and the
-smoke suite reads delivered mail out of S3 via an inbound rule rather than a
-third-party mailbox, because that preserves full headers. `List-Unsubscribe` /
-`List-Unsubscribe-Post` correctness is precisely what needs checking, and a
-friendly webmail API hides exactly that.
+`us-east-1`. It matches the config default, is the region CloudFront requires
+for ACM certificates, and avoids cross-region staging surprises. The smoke suite
+does **not** require SES inbound receipt rules or an inbound S3 bucket: a
+controlled, verified mailbox receives the actual messages and supplies its
+confirmation/unsubscribe links to the runner.
 
 ```
 MX  @             10 inbound-smtp.us-east-1.amazonaws.com
@@ -882,9 +880,16 @@ every record with a "why" note for this reason.
 
 ```bash
 npm run deploy        # deploy:check runs first — an && chain, not a hook
-npm run test:e2e      # the ten steps
+AWS_REGION=us-east-1 SMOKE_STACK=addressium-dev \
+  SMOKE_RECIPIENT=addressium-test@identithing.com \
+  SMOKE_ADMIN_TOKEN='<short-lived Cognito token>' npm run test:e2e
 npm run teardown:aws  # NOT `cdk destroy` — see below
 ```
+
+The runner pauses for the confirmation and unsubscribe links delivered to the
+controlled mailbox. A non-interactive mailbox harness can instead set
+`SMOKE_CONFIRM_URL` and `SMOKE_UNSUBSCRIBE_URL`; no inbound-S3 access or stored
+admin credential is used.
 
 > **Do not reach for `npx cdk destroy`, even in dev.** The DynamoDB table is
 > `RemovalPolicy.RETAIN` **and** `deletionProtection: true` in *every* stage

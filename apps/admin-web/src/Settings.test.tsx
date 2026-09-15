@@ -41,3 +41,25 @@ test("magic-link Settings displays the deployed org-scoped JWKS route", async ()
   await userEvent.setup().click(screen.getByRole("tab", { name: "Magic-link & entitlement" }));
   expect(await screen.findByText("/orgs/acme/.well-known/jwks.json")).toBeInTheDocument();
 });
+
+test("first customer-sync save keeps the safe blank-secret path available", async () => {
+  meta();
+  vi.spyOn(api, "sendingIdentity").mockResolvedValue({ orgId: "acme", domains: [], account: {} } as never);
+  vi.spyOn(api, "customerSync").mockResolvedValue({ configured: false } as never);
+  const save = vi.spyOn(api, "saveCustomerSync").mockResolvedValue({
+    configured: true, endpoint: "https://customers.example.test/events", tableName: "customers", enabled: true,
+  } as never);
+  const user = userEvent.setup();
+  render(<Settings org="acme" grant={{ role: "developer_admin", orgs: "*" }} />);
+  await user.click(screen.getByRole("tab", { name: "Customer sync" }));
+  await user.type(await screen.findByLabelText("HTTPS endpoint"), "https://customers.example.test/events");
+  await user.type(screen.getByLabelText("External table name"), "customers");
+  await user.type(screen.getByLabelText("Endpoint secret"), "initial-secret");
+  await user.click(screen.getByRole("button", { name: "Save customer sync" }));
+
+  expect(await screen.findByText(/Customer sync saved/)).toBeInTheDocument();
+  expect(save).toHaveBeenCalledTimes(1);
+  expect(screen.getByText(/leave blank only to keep the existing secret/)).toBeInTheDocument();
+  expect(screen.getByLabelText(/Endpoint secret/)).toHaveValue("");
+  expect(screen.getByRole("button", { name: "Save customer sync" })).not.toBeDisabled();
+});

@@ -15,10 +15,11 @@ the same owner.
 > with sample data.
 
 > ### ⚠️ Status: pre-1.0, not production-ready
-> This has now been **deployed once, to a disposable dev account** (#212). It
-> stands up, all 29 handlers load, and an organization provisions. It has not
-> sent a campaign, `npm run test:e2e` has still never been run, and no install
-> has run for a day. See [Status](#status) before putting a real list near it.
+> This is deployed to a disposable dev account (#212). The stack stands up, all
+> 29 handlers load, an organization provisions, and mail has reached a
+> developer-controlled inbox. `npm run test:e2e` has still never run, and no
+> install has run for a day. See [Status](#status) before putting a real list
+> near it.
 
 ---
 
@@ -193,32 +194,18 @@ Details: [`scripts/README.md`](scripts/README.md) ·
 npm test                # 724 tests; 720 pass, 4 skip without LocalStack
 npm run deploy:check    # dry run — refuses anything that would destroy data
 npm run deploy          # in place; CloudFormation rolls back on failure
-curl $API/version       # running build; nothing writes the deploy marker yet
+curl $API/version       # running build and the marker written by the deploy migration
 ```
 
 ### How you find out a fix exists
 
-You do not, yet, and that is worth stating plainly rather than leaving as an
-implied capability. An install today is "clone the repo and deploy", so it is
-pinned to whatever commit was cloned, there is no notification channel, and
-`curl $API/version` compares a running build against a marker nothing writes.
-
-The intended shape is designed and **deliberately not built yet** (#213):
-versioned, immutable release artifacts rather than a git checkout; a schema
-version marker with ordered idempotent migrations run by a deploy-time custom
-resource, refusing to skip a major version; and a CLI whose `status`, `doctor`
-and `upgrade` are the whole user-facing surface — `doctor` mattering most,
-because nearly everything that has broken in this repo was *configuration* no
-test could see (a missing event destination, an unverified identity, an absent
-MX record).
-
-Why not before now: the argument for building a migration framework early is
-that shapes accumulate in the wild, and building an upgrade path for installs
-that do not exist is designing against guesses. There were zero installs and
-zero shapes, which made right after the first real deployment (#212) the moment
-this is worth most. **That deployment has now happened**, so this is the point
-the argument was deferring to — the reason it is still unbuilt is sequencing,
-not the original objection.
+Tagged releases publish GitHub release notes, which notifies repository watchers.
+Every deploy invokes a custom resource before application Lambdas are updated;
+it runs ordered, idempotent schema migrations and writes `SCHEMA#VERSION` only
+on success. `GET /version` then distinguishes the running build from the last
+completed deployment. This is implemented and covered by synthesis/unit tests,
+but has **not yet been deployed to the dev stack**, so the live marker remains
+unproven.
 Explicitly rejected either way: Terraform (a second IaC tool and a state
 distribution problem, for no gain over CDK), SAM (overlaps CDK), and storing
 deploy credentials in Secrets Manager (circular — reading it needs credentials).
@@ -363,18 +350,18 @@ call.
 
 **Honest state, because a README that reads "done" is worse than useless:**
 
-- **It has been deployed once, to a dev account** (#212) — not to production,
-  and not for longer than the session that deployed it. That first deploy is
-  worth reading as evidence of exactly one thing: the stack stands up, its 29
-  handlers load, and `POST /orgs` provisions a real SES identity. It surfaced
+- **It is deployed to a dev account** (#212) — not to production. The stack
+  stands up, its 29 handlers load, `POST /orgs` provisions a real SES identity,
+  and a developer has received mail sent through it. It surfaced
   **ten bugs that neither `npm test` nor `cdk synth` could see**, because they
   fail only against real AWS APIs. Two of them produced a stack reporting
   CREATE_COMPLETE with every handler dead on arrival — the ESM bundling pair in
   commit `401b64f`. Assume the same class of defect still hides behind every
   step this deployment did not reach.
-- **What that deployment did *not* do:** send a campaign, receive a real bounce,
-  serve a mailbox provider's one-click POST, or run `npm run test:e2e`. The SES
-  identity it created is still DKIM-pending.
+- **What that deployment has not yet proven:** a recurring campaign, a real
+  bounce, a mailbox provider's one-click POST, or `npm run test:e2e`. Reaching
+  one controlled inbox does not establish the broader DNS and deliverability
+  posture.
 - What `npm test` *can* now see is much wider than it was: `npm run dev` runs the
   full public journey — signup → confirmation mail → confirm → send → one-click
   unsubscribe — against the **real** SES/SQS/Scheduler adapters, over local
@@ -391,20 +378,16 @@ call.
   that deploy: it was wired as an npm `predeploy` hook, which does not fire under
   `ignore-scripts=true`, and npm reports nothing when it skips one. It is an `&&`
   chain in the `deploy` script now, which no config can disable.
-- The version marker is readable, but nothing writes it on deploy yet, so
-  `GET /version` cannot tell you whether you are running the build you deployed.
-- There is **no upgrade path**. An install is pinned to whatever commit was
-  cloned, and there is no channel to tell anyone a fix exists. Designed, not
-  built — see Upgrades above; the first real install it was waiting on now
-  exists, so the deferral has run out of reason rather than been re-argued.
-- **Custom domains are not implemented.** There is not one Route 53 or ACM
-  resource anywhere in the stack. Every URL it emits is a `*.cloudfront.net` or
-  `*.execute-api.<region>.amazonaws.com` name, and those are what go into the
-  Cognito callback, the API CORS allow-list, and every link in outgoing mail.
-  `ControlPlaneStackProps` accepts `adminAppUrl` / `publicAppUrl`, but
-  `BootstrapConfig` has no such fields and nothing passes them — dead code, not
-  a switch to flip. Doing this properly means a hosted zone, a us-east-1
-  certificate for CloudFront, and a redeploy of both SPAs.
+- **Migration/version and release notification support is implemented but not
+  deployed.** The deploy-time runner writes the marker after successful ordered
+  migrations, and a tagged CI release publishes GitHub release notes. Live
+  confirmation awaits the next dev deployment.
+- **Custom domains and automated SPA publishing are implemented but not
+  configured.** `adminCustomDomain` / `publicCustomDomain` accept a hostname;
+  CDK requests ACM DNS validation and outputs the CloudFront targets for
+  Cloudflare. CI builds and publishes all three SPAs from stack outputs after
+  deploy. Actual hostnames and the operator's Cloudflare record changes are
+  intentionally still required.
 - **`apps/subscriber-web` and `apps/public-web` share one bucket**, kept apart
   only by a Vite `base`: subscriber-web owns `/` because outgoing mail links at
   `/confirm` and `/unsubscribe` resolve there, and public-web lives under
@@ -426,21 +409,20 @@ call.
   asked*. A Pinpoint export JOB's **gzipped JSON Lines** is also read (#239) —
   flattened to the same dotted columns, so one mapper serves both — and a saved
   mapping is not yet re-offered on the next file with the same headers.
-- The audit log is still dead code: the WORM bucket is provisioned and correctly
-  moded, and nothing has ever written an object to it.
+- The audit writer is implemented (WORM-safe `Put` only) and privileged routes
+  call it, but the current dev deployment predates it; a real audit object is
+  still part of the next deployment verification.
 
 **1.0 is gated on** `npm run test:e2e` passing against a real AWS account and one
-install running for 30 days. Neither has happened; deploying is a third,
-separate thing and it is the only one of the three that is done. What that first
-deployment bought is narrower than "proven" and wider than nothing: the claims in
-this README about **standing the stack up** moved from asserted to observed, and
-the claims about **sending mail** did not move at all.
+install running for 30 days. Neither has happened. The dev deployment established
+that the stack stands up and can deliver mail to a controlled inbox; it does not
+yet establish the real-AWS paths the smoke suite covers.
 
 The runbook, now amended by what that deployment actually hit, is in
 [`docs/DEPLOYMENT.md` §11](docs/DEPLOYMENT.md).
 
-Do not migrate a real list onto this yet. A mail system that has never sent an
-email can cost you a sending reputation that takes months to rebuild.
+Do not migrate a real list onto this yet. A mail system with only controlled dev
+sends can still cost you a sending reputation that takes months to rebuild.
 
 ## License
 

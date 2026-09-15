@@ -10,6 +10,7 @@ import { Duration, RemovalPolicy, Stack } from "aws-cdk-lib";
 import { PolicyStatement, ServicePrincipal } from "aws-cdk-lib/aws-iam";
 import { Construct } from "constructs";
 import { Bucket, BlockPublicAccess } from "aws-cdk-lib/aws-s3";
+import { Certificate, CertificateValidation, type ICertificate } from "aws-cdk-lib/aws-certificatemanager";
 import {
   Distribution,
   Function,
@@ -34,6 +35,11 @@ export interface StaticSiteProps {
    * an injected script cannot post the operator's tokens to its own collector.
    */
   connectOrigins?: string[];
+  /**
+   * Optional staged hostname. DNS stays with the operator (for example,
+   * Cloudflare); ACM's validation CNAME is deliberately not created here.
+   */
+  domainName?: string;
 }
 
 /**
@@ -75,6 +81,8 @@ function buildCsp(connectOrigins: string[]): string {
 export class StaticSite extends Construct {
   public readonly bucket: Bucket;
   public readonly distribution: Distribution;
+  /** Present only for a staged custom hostname; its ARN identifies ACM's DNS validation record. */
+  public readonly certificate?: ICertificate;
 
   constructor(scope: Construct, id: string, props: StaticSiteProps) {
     super(scope, id);
@@ -156,9 +164,21 @@ function handler(event) {
       `),
     });
 
+    // DNS is Cloudflare-managed for this installation. Leaving the zone out of
+    // `fromDns` makes ACM expose its validation CNAME rather than giving CDK
+    // Route 53 permissions or silently taking over DNS. CloudFront certificates
+    // must be requested in us-east-1; deploy custom domains from that region.
+    this.certificate = props.domainName
+      ? new Certificate(this, "Certificate", {
+          domainName: props.domainName,
+          validation: CertificateValidation.fromDns(),
+        })
+      : undefined;
+
     this.distribution = new Distribution(this, "Dist", {
       defaultRootObject: "index.html",
       webAclId: props.webAclId,
+      ...(this.certificate ? { certificate: this.certificate, domainNames: [props.domainName!] } : {}),
       defaultBehavior: {
         origin: S3BucketOrigin.withOriginAccessControl(this.bucket),
         viewerProtocolPolicy: ViewerProtocolPolicy.REDIRECT_TO_HTTPS,

@@ -362,6 +362,16 @@ vector.
   **HMAC-sign outbound** webhooks; always **timing-safe** comparison.
 - Scheduled key/secret rotation with a JWKS overlap window.
 
+**Public-repository exposure audit (2026-09-15).** We scanned tracked source,
+documentation, configuration, generated code, reachable Git history, and local
+unreachable Git objects for private-key blocks and common AWS, Stripe, GitHub,
+Google, and Slack credential formats. No live credential was found. The only
+credential-like literals are deliberately non-live test fixtures (for example
+`local`, `example-secret`, `AKIAEXAMPLE`, and `ID.TOKEN.VALUE`), and CI references
+GitHub Actions secret *names* rather than values. `.env`, `.env.*`, and
+`addressium.config.json` are ignored. This is a point-in-time review, not a
+replacement for GitHub secret scanning/push protection and CI secret scanning.
+
 **`ConfirmSecret` rotates by APPENDING (#234).** This one secret HMAC-signs two
 things that live in strangers' inboxes for years: the double opt-in confirmation
 link, clicked days after signup, and the RFC 8058 one-click unsubscribe link,
