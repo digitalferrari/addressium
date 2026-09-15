@@ -23,8 +23,79 @@ npx tsc -b     exit 0
 Frontend tests are `npm run test:web`. Run both.
 
 The earlier handoff's "root test run did not terminate cleanly / 723 passing"
-was a pre-Docker artifact. With Docker up the suite exits 0. There are no
+was an environment artifact, not a code defect. The suite exits 0. There are no
 lingering-handle tests to fix; that item is closed.
+
+---
+
+## Running the test suite — you do not need Docker
+
+**Short answer: nothing in the test suite requires a Docker container, and
+there is nothing for you to `docker exec` into.** There are no Dockerfiles and
+no compose files in this repo. Verified empirically on 2026-09-15 with
+`docker ps` reporting **zero containers running**:
+
+```
+node --test infra/cdk/dist/test/*.test.js    77 pass / 77, 0 fail
+npm test                                     1024 pass / 1028, 0 fail, exit 0
+npm run test:web                             189 pass / 189
+```
+
+Just run the npm scripts directly. Two things make that work, and both are
+worth knowing because they are easy to break:
+
+### 1. Integration tests use dynalite, in-process
+
+`packages/integration-tests` runs DynamoDB **in the same Node process** via
+`dynalite` (`dynalite({ createTableMs: 0 })`), not a container. Same for
+`scripts/dev-server.mjs`, which serves every route handler verbatim against
+dynalite plus an on-disk mail outbox — no AWS, no daemon. So `npm run dev`
+needs nothing running either.
+
+If you see `ETIMEDOUT 127.0.0.1` from these tests, it is not Docker — it is a
+port or a leaked server handle from a previous run.
+
+### 2. CDK template tests bundle locally — do not undo this
+
+This one has a sharp edge you should understand before touching
+`infra/cdk/test/template.test.ts`.
+
+`esbuild` is installed **only** in the CDK workspace
+(`infra/cdk/node_modules/.bin/esbuild`); there is **no** esbuild at the repo
+root. CDK discovers local bundling by looking on `PATH`. The root `npm test`
+launches Node from the repository root, so without help CDK cannot see that
+binary and **silently falls back to Docker for every Lambda asset** — which is
+why the suite used to need a daemon and took ~15 minutes or timed out.
+
+`infra/cdk/test/template.test.ts` fixes this at the top of the file:
+
+```js
+const cdkBin = resolve(dirname(fileURLToPath(import.meta.url)), "../../node_modules/.bin");
+process.env.PATH = `${cdkBin}:${process.env.PATH ?? ""}`;
+```
+
+Keep those lines. Deleting them does not fail the test — it makes it slow, or
+makes it demand a daemon you do not have. The failure mode is a timeout, not a
+clear error, so it is easy to misdiagnose.
+
+The asset that forces bundling work at all is
+`nodeModules: ["@cedar-policy/cedar-wasm"]`
+(`infra/cdk/lib/control-plane-stack.ts:788`) — a wasm-pack build whose binary
+sidecar esbuild cannot inline, so it gets a real npm install during bundling.
+Note that `aws:cdk:bundling-stacks: []` does **not** skip that install.
+
+### When Docker *is* actually needed
+
+Only for a real `cdk deploy` / `cdk synth` of the Lambda assets on a machine
+without the local esbuild — i.e. the deployment path, which is not yours (see
+Deployment at the end). For everything in the Frontend section below, you can
+ignore Docker entirely.
+
+### If you do need to inspect a container
+
+There are none to inspect, so there is no `docker exec` workflow here. If you
+find yourself reaching for one, something has gone wrong with the PATH fix
+above — check that before starting a daemon.
 
 ---
 
