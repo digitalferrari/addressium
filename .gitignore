@@ -13,3 +13,7 @@ coverage/
 .dev-outbox/
 graphify*
 addressium.code-workspace
+
+# local persona test credentials — never commit
+persona-logins.txt
+**/persona-logins.txt
