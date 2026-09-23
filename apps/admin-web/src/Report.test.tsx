@@ -49,8 +49,8 @@ afterEach(() => {
 async function loadReport() {
   const user = userEvent.setup();
   render(<Report org="acme" grant={GRANT} />);
-  await user.selectOptions(await screen.findByRole("combobox"), "daily-2026-07-21");
-  await user.click(screen.getByRole("button", { name: /Load/ }));
+  await user.selectOptions(await screen.findByLabelText("Campaign"), "daily-2026-07-21");
+  await user.click(screen.getByRole("button", { name: "Load" }));
   await screen.findByText("1000");
 }
 
