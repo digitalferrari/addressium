@@ -20,7 +20,6 @@ import {
   SystemClock,
   TokenBucket,
   fanOutCampaign,
-  requireSiteUrl,
   sendCampaign,
   type SendDescriptor,
 } from "@addressium/domain";
@@ -131,9 +130,10 @@ let _unsubInit = false;
 async function unsubscribeLink() {
   if (_unsubInit) return _unsub;
   _unsubInit = true;
+  const base = process.env.UNSUBSCRIBE_URL_BASE;
   const secretArn = process.env.CONFIRM_SECRET_ARN;
-  if (!secretArn) {
-    console.warn("sender: CONFIRM_SECRET_ARN unset — falling back to mailto");
+  if (!base || !secretArn) {
+    console.warn("sender: UNSUBSCRIBE_URL_BASE/CONFIRM_SECRET_ARN unset — falling back to mailto");
     return undefined;
   }
   const signer = new HmacConfirmationSigner(await getSecret(secretArn));
@@ -145,19 +145,24 @@ async function unsubscribeLink() {
       // enumerated the way the old bare ?sub=&list= URL could.
       const exp = Math.floor(clock.now().getTime() / 1000) + UNSUB_TOKEN_TTL_SECONDS;
       const token = signer.sign({ orgId, sub: subscriberId, listId, exp });
-      // PER-ORG (#294). Orgs are siloed: each one's subscriber portal lives on a
-      // subdomain of ITS OWN domain, so an unsubscribe link must resolve there
-      // and not on a shared hostname. A subscriber of publication A receiving a
-      // link on publication B's domain is a mismatch between the From domain and
-      // the unsubscribe link, which reads as phishing to a person and to a spam
-      // filter alike.
+      // The API ROUTE, deliberately — NOT the org's subscriber site.
       //
-      // `requireSiteUrl` THROWS when the org has none. Deliberate: a silent
-      // fallback to a shared host is how `your-site.example` shipped and broke
-      // double opt-in with no error anywhere.
-      const org = await stores().organizations.get(orgId);
-      if (!org) throw new Error(`unknown org ${orgId}`);
-      return `${requireSiteUrl(org)}/unsubscribe?token=${encodeURIComponent(token)}`;
+      // This URL is also the `List-Unsubscribe` header value, and
+      // `SesEmailSender` pairs it with `List-Unsubscribe-Post: One-Click`. So
+      // Gmail and Yahoo POST to it without a browser. The subscriber site is
+      // CloudFront in front of S3, which answers a POST with 403 — measured, not
+      // assumed: pointing this at the org host returned `HTTP/2 403 server:
+      // CloudFront` while the API route returned 400 (a real handler rejecting a
+      // bad token).
+      //
+      // So one-click unsubscribe silently stops working the moment this moves to
+      // a static origin, and the only visible symptom is subscribers who cannot
+      // leave — which is a CAN-SPAM problem, not a cosmetic one.
+      //
+      // Confirm and preference links ARE per-org (#294): those are pages a human
+      // opens in a browser with GET. Moving THIS one to the org's domain needs an
+      // API behaviour on that org's distribution first.
+      return `${base.replace(/\/+$/, "")}?token=${encodeURIComponent(token)}`;
     },
   };
   return _unsub;
