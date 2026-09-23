@@ -53,6 +53,9 @@ before(async () => {
   process.env.AWS_ACCESS_KEY_ID = "local";
   process.env.AWS_SECRET_ACCESS_KEY = "local";
   process.env.TABLE_NAME = TABLE;
+  // The public archive route checks this before doing any work, so without it
+  // every assertion below would be a 503 rather than the gate under test.
+  process.env.ARCHIVE_BUCKET = "addressium-test-archive";
 
   const throughput = { ReadCapacityUnits: 1, WriteCapacityUnits: 1 };
   const gsi = (n: string) => ({
@@ -193,4 +196,43 @@ test("updating settings preserves the rest of the organization record", async ()
   const body = JSON.parse(meta.body) as { name?: string; domains?: string[] };
   assert.equal(body.name, ORG);
   assert.deepEqual(body.domains, ["example.com"]);
+});
+
+/**
+ * Public archive of past editions (#310).
+ *
+ * Unauthenticated by design, which makes the gates the whole feature. Three
+ * must all pass, and a failure of any one is indistinguishable from outside —
+ * otherwise the route enumerates which campaign ids exist and which newsletters
+ * an org runs.
+ *
+ * Deliberately NOT a relaxation of `archiveHandler`: that is gated on
+ * `reports:view` and decorates the body with per-link click counts, which is
+ * commercial analytics and must never be published.
+ */
+const publicArchiveEvent = (campaignId: string) => ({
+  pathParameters: { org: ORG, campaign: campaignId },
+  requestContext: { http: { method: "GET", sourceIp: "203.0.113.7" } },
+});
+
+test("a private list's editions are not public", async () => {
+  // The default. Publishing subscriber-facing content, including sold ad
+  // placements, is not something that should happen without being asked for.
+  const res = await api.publicArchiveHandler(publicArchiveEvent("pub-private"));
+  assert.equal(res.statusCode, 404);
+});
+
+test("an unknown campaign is the SAME 404 as a private one", async () => {
+  // Distinguishable responses would let anyone enumerate campaign ids.
+  const unknown = await api.publicArchiveHandler(publicArchiveEvent("pub-nonexistent"));
+  const priv = await api.publicArchiveHandler(publicArchiveEvent("pub-private"));
+  assert.equal(unknown.statusCode, priv.statusCode);
+  assert.equal(unknown.body, priv.body, "the bodies must be identical too");
+});
+
+test("the route requires no authentication at all", async () => {
+  // No authorizer claims in the event above — if this threw on a missing
+  // grant, the route would be useless for its only purpose.
+  const res = await api.publicArchiveHandler(publicArchiveEvent("pub-anything"));
+  assert.ok(res.statusCode === 404 || res.statusCode === 503, `unexpected ${res.statusCode}`);
 });

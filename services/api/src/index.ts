@@ -17,6 +17,7 @@ import {
   SesEmailSender,
   S3ImportFileStore,
   SesIdentityStatusReader,
+  S3ArchiveWriter,
   SesSuppressionListReader,
   SfnDripStarter,
   SqsSendQueue,
@@ -3354,6 +3355,71 @@ const ADMIN_ROUTES: Record<string, RouteHandler> = {
 };
 
 /** Unauthenticated. Deliberately excludes every admin handler. */
+/**
+ * PUBLIC archive of one past edition (#310) — no authentication.
+ *
+ * Deliberately a separate handler rather than relaxing `archiveHandler`. That
+ * one is gated on `reports:view` and returns the body DECORATED WITH CLICK
+ * COUNTS, which is commercial analytics; widening its grant would publish how
+ * many people clicked each link. This returns the body and nothing else.
+ *
+ * Three gates, all of which must pass:
+ *
+ *  1. The list has `publicArchive` explicitly set. Publishing subscriber-facing
+ *     content — including sold ad placements — is not a default, and it is a
+ *     separate decision from `visibility`, which governs the signup form.
+ *  2. The campaign belongs to that list. Otherwise the campaign id alone would
+ *     be enough to read any edition of any newsletter in the org.
+ *  3. The edition actually sent, evidenced by an archive row existing. A
+ *     scheduled-but-unsent campaign is not a past edition.
+ */
+export async function publicArchiveHandler(event: HttpEvent): Promise<HttpResult> {
+  const orgId = event.pathParameters?.org ?? "";
+  const campaignId = event.pathParameters?.campaign ?? "";
+  if (!orgId || !campaignId) {
+    return { statusCode: 400, headers: {}, body: JSON.stringify({ error: "org and campaign required" }) };
+  }
+  const bucket = process.env.ARCHIVE_BUCKET;
+  if (!bucket) return { statusCode: 503, headers: {}, body: JSON.stringify({ error: "archive unavailable" }) };
+
+  const s = stores();
+  const campaign = await s.campaigns.get(orgId, campaignId);
+  // One 404 for every miss — an unknown campaign, a private list and an unsent
+  // edition are indistinguishable from outside. Otherwise this enumerates which
+  // campaign ids exist and which newsletters an org runs.
+  const notFound = { statusCode: 404, headers: {}, body: JSON.stringify({ error: "not found" }) };
+  if (!campaign?.audience?.listId) return notFound;
+  const list = await s.lists.get(orgId, campaign.audience.listId);
+  if (!list?.publicArchive) return notFound;
+
+  const archive = await s.archive.get(orgId, campaignId);
+  if (!archive) return notFound;
+  const html = await new S3ArchiveWriter(bucket).get(archive.s3Key);
+  if (html === undefined) return notFound;
+
+  return {
+    statusCode: 200,
+    headers: {
+      "content-type": "text/html; charset=utf-8",
+      // The body is operator and advertiser HTML with remote images. Scripts,
+      // frames and form posts are all refused; images and styles are what an
+      // email legitimately needs.
+      "content-security-policy":
+        "default-src 'none'; img-src https: data:; style-src 'unsafe-inline'; " +
+        "font-src https: data:; frame-ancestors 'none'; form-action 'none'",
+      "referrer-policy": "no-referrer",
+      "x-content-type-options": "nosniff",
+      // A past edition never changes, so it caches hard — this is the one
+      // route that may be linked publicly and hit by crawlers.
+      "cache-control": "public, max-age=3600",
+    },
+    // NOT `decorateArchive`: click counts are commercial analytics and have no
+    // business on a public page.
+    body: html,
+  };
+}
+
+
 const PUBLIC_ROUTES: Record<string, RouteHandler> = {
   "POST /signup": signupHandler,
   "POST /signup/batch": signupBatchHandler,
@@ -3367,6 +3433,7 @@ const PUBLIC_ROUTES: Record<string, RouteHandler> = {
   "POST /preferences": preferencesHandler,
   "GET /orgs/{org}/lists/{list}/public": publicListHandler,
   "GET /orgs/{org}/directory": publicDirectoryHandler,
+  "GET /public/orgs/{org}/editions/{campaign}": publicArchiveHandler,
   // The subscriber site reads branding to theme itself, unauthenticated. It was
   // registered in CDK and missing from this manifest (#238) — so it worked in
   // the deployed stack and was unreachable in `npm run dev`, which is exactly

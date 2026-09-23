@@ -2073,6 +2073,29 @@ export class ControlPlaneStack extends Stack {
       integration: new HttpLambdaIntegration("PublicListInt", publicListFn),
     });
 
+    // Public archive of past editions (#310). Its OWN function, not another
+    // route on the admin one: the unauthenticated surface stays exactly one
+    // handler, so nothing the admin function can do is reachable from here even
+    // if a route were misconfigured later.
+    //
+    // Deliberately not a relaxation of `archiveHandler`, which is gated on
+    // `reports:view` and decorates the body with per-link click counts —
+    // commercial analytics that must not be published.
+    const publicArchiveFn = fn("PublicArchiveFn", apiEntry, "publicArchiveHandler", {
+      ...apiEnv,
+      ARCHIVE_BUCKET: archiveBucket.bucketName,
+    });
+    table.grantReadData(publicArchiveFn);
+    archiveBucket.grantRead(publicArchiveFn);
+    reservePublic(publicArchiveFn);
+    api.addRoutes({
+      // No `authorizer` — that is the point. The handler enforces the list's own
+      // `publicArchive` opt-in instead.
+      path: "/public/orgs/{org}/editions/{campaign}",
+      methods: [HttpMethod.GET],
+      integration: new HttpLambdaIntegration("PublicArchiveInt", publicArchiveFn),
+    });
+
     // ---- reporting (report, usage, AI analysis) — §4.8, #13/#26/#32 ----
     const reportingEntry = svc("services/reporting/src/index.ts");
     const reportFn = fn("ReportFn", reportingEntry, "handler", apiEnv);
@@ -2084,6 +2107,7 @@ export class ControlPlaneStack extends Stack {
     const archiveFn = fn("ArchiveFn", reportingEntry, "archiveHandler", { ...apiEnv, ARCHIVE_BUCKET: archiveBucket.bucketName });
     table.grantReadData(archiveFn);
     archiveBucket.grantRead(archiveFn);
+
     api.addRoutes({
       path: "/orgs/{org}/campaigns/{campaign}/report",
       methods: [HttpMethod.GET],

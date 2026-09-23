@@ -394,6 +394,19 @@ export interface List {
   access: ListAccess;
   /** Whether the list appears on the public opt-in page and accepts signups. */
   visibility: ListVisibility;
+  /**
+   * Whether past editions of this newsletter are readable without signing in
+   * (#310).
+   *
+   * Deliberately SEPARATE from `visibility`, which governs signup. A list can
+   * accept public signups while keeping its archive private — a paid or
+   * members-only newsletter is exactly that — and conflating the two would
+   * publish body content, including sold ad placements, on the strength of a
+   * decision the operator made about a signup form.
+   *
+   * Off unless set. Publishing subscriber-facing content is not a default.
+   */
+  publicArchive?: boolean;
   complianceFooter: string;
   physicalAddress: string;
   /** Subscriber-site presentation toggles (§4.10, #33). */
