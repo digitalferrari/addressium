@@ -257,6 +257,22 @@ export interface Organization {
    * and "whose paywall is this"; this answers "where do our links point".
    */
   siteUrl?: string;
+  /**
+   * Does this org's subscriber distribution forward `/api/*` to the HTTP API?
+   * (#294)
+   *
+   * Set by the operator AFTER adding that cache behaviour, and verified by the
+   * console's "check" before it is trusted. It moves the one-click unsubscribe
+   * URL onto the org's own domain, which is better for deliverability — the
+   * `List-Unsubscribe` host then matches the From domain.
+   *
+   * Default false, and deliberately so: `List-Unsubscribe-Post: One-Click` means
+   * Gmail and Yahoo POST to that URL with no browser, and a CloudFront
+   * distribution with no `/api/*` behaviour answers POST with 403. Claiming this
+   * before the behaviour exists silently breaks unsubscribe for the clients that
+   * use it most, which is a CAN-SPAM problem with no visible symptom.
+   */
+  apiViaSite?: boolean;
   defaultTimezone: string;
   /** Subscriber-site branding/theme (§4.10, #31). */
   branding?: Branding;

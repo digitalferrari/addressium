@@ -266,6 +266,7 @@ function OrganizationCard({ org, grant }: { org: string; grant: Grant | null }) 
   const [timezone, setTimezone] = useState("");
   const [addDomain, setAddDomain] = useState("");
   const [siteUrl, setSiteUrl] = useState("");
+  const [apiViaSite, setApiViaSite] = useState(false);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
   const [dns, setDns] = useState<Array<{ type: string; name: string; value: string; note?: string }>>([]);
@@ -278,6 +279,7 @@ function OrganizationCard({ org, grant }: { org: string; grant: Grant | null }) 
       setName(loaded.data.name ?? "");
       setTimezone(loaded.data.defaultTimezone ?? "");
       setSiteUrl(loaded.data.siteUrl ?? "");
+      setApiViaSite(loaded.data.apiViaSite === true);
     }
   }, [loaded.data]);
 
@@ -293,6 +295,7 @@ function OrganizationCard({ org, grant }: { org: string; grant: Grant | null }) 
         defaultTimezone: timezone,
         ...(addDomain.trim() ? { addDomain: addDomain.trim() } : {}),
         ...(siteUrl.trim() ? { siteUrl: siteUrl.trim() } : {}),
+        apiViaSite,
       });
       if (res.changed.length === 0) {
         setMsg("No changes to save.");
@@ -350,6 +353,20 @@ function OrganizationCard({ org, grant }: { org: string; grant: Grant | null }) 
         "Adds a verified SES identity and makes it primary. Existing domains are KEPT and stay verified — they may still be carrying mail.",
         "news.example.com",
       )}
+      <label style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 10 }}>
+        <input
+          type="checkbox"
+          checked={apiViaSite}
+          disabled={!canManage || busy}
+          onChange={(e) => setApiViaSite(e.target.checked)}
+        />
+        This site&rsquo;s distribution forwards <code>/api/*</code> to the API
+      </label>
+      <p className="muted" style={{ fontSize: 12, marginTop: -4 }}>
+        Tick only AFTER adding that cache behaviour. It moves the one-click unsubscribe link onto
+        this org&rsquo;s domain, which mailbox providers prefer — but they POST to that link, and a
+        distribution without the behaviour answers POST with 403, silently breaking unsubscribe.
+      </p>
       {canManage ? (
         <button className="btn" disabled={busy} onClick={save}>
           {busy ? "Saving…" : "Save organization"}

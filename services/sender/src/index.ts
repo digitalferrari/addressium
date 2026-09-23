@@ -162,6 +162,19 @@ async function unsubscribeLink() {
       // Confirm and preference links ARE per-org (#294): those are pages a human
       // opens in a browser with GET. Moving THIS one to the org's domain needs an
       // API behaviour on that org's distribution first.
+      // On the ORG's own domain when its distribution forwards `/api/*` to the
+      // API (#294) — the List-Unsubscribe host then matches the From domain,
+      // which is what mailbox providers want to see.
+      //
+      // Gated on `apiViaSite` because this URL is POSTed to by Gmail and Yahoo
+      // (`List-Unsubscribe-Post: One-Click`), and a distribution WITHOUT that
+      // behaviour answers POST with 403 — measured on the live stack. So the
+      // org's domain is used only once the operator has confirmed the behaviour
+      // exists; otherwise the shared API host, which always works.
+      const org = await stores().organizations.get(orgId);
+      if (org?.apiViaSite && org.siteUrl) {
+        return `${org.siteUrl.replace(/\/+$/, "")}/api/unsubscribe?token=${encodeURIComponent(token)}`;
+      }
       return `${base.replace(/\/+$/, "")}?token=${encodeURIComponent(token)}`;
     },
   };

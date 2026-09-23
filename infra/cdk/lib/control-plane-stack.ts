@@ -1885,6 +1885,9 @@ export class ControlPlaneStack extends Stack {
       PUBLIC_SITE_DOMAIN: Lazy.string({
         produce: () => publicSite?.distribution.domainName ?? "",
       }),
+      // The API's own hostname, so the setup instructions can name the origin an
+      // org's distribution must forward /api/* to (#294).
+      API_HOST: Lazy.string({ produce: () => api.apiEndpoint.replace(/^https:\/\//, "") }),
     });
     table.grantReadWriteData(provisioningFn);
     // Org creation is a privileged, audited action (§4.19) — the sink is already

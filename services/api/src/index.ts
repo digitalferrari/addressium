@@ -1313,6 +1313,7 @@ export async function orgMetaHandler(event: HttpEvent): Promise<HttpResult> {
       // Settings → Organization edits this, and a send refuses without it, so
       // the console has to be able to show whether it is set (#294).
       ...(org.siteUrl ? { siteUrl: org.siteUrl } : {}),
+      ...(org.apiViaSite ? { apiViaSite: true } : {}),
       ...(org.domains?.[0] ? { primaryDomain: org.domains[0] } : {}),
       // The whole list, on the same reasoning that already admits
       // `primaryDomain` above: this route is scoped to one org by

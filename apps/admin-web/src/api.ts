@@ -170,6 +170,8 @@ export interface OrgMeta {
    * not a shared addressium host. Required before the org can send.
    */
   siteUrl?: string;
+  /** This org's distribution forwards `/api/*` to the API (#294). */
+  apiViaSite?: boolean;
   environment: "prod" | "dev";
   setupComplete: boolean;
   /**
@@ -1155,7 +1157,10 @@ export const api = {
    */
   updateOrganization: (
     orgId: string,
-    update: { name?: string; defaultTimezone?: string; addDomain?: string; siteUrl?: string },
+    update: {
+      name?: string; defaultTimezone?: string; addDomain?: string;
+      siteUrl?: string; apiViaSite?: boolean;
+    },
   ) =>
     call<{
       orgId: string;

@@ -87,3 +87,35 @@ test("setup steps name the host, the target and the consequence", () => {
   // domain that silently cannot confirm or unsubscribe anyone.
   assert.ok(/cannot confirm or unsubscribe/.test(all));
 });
+
+/**
+ * The `/api/*` behaviour gate (#294).
+ *
+ * An org's own domain is the better home for the one-click unsubscribe URL —
+ * the `List-Unsubscribe` host then matches the From domain, which is what
+ * mailbox providers want to see. But it only works once that distribution
+ * forwards `/api/*` to the API: `List-Unsubscribe-Post: One-Click` means Gmail
+ * and Yahoo POST to the URL with no browser, and CloudFront-over-S3 answers a
+ * POST with 403 (measured on the live dev stack).
+ *
+ * So the flag is the operator's confirmation that the behaviour exists, and it
+ * defaults to false. Claiming it early breaks unsubscribe for exactly the
+ * clients that use it most, with no visible symptom.
+ */
+test("setup steps name the /api behaviour and say why it matters", () => {
+  const steps = siteUrlSetupSteps("https://news.acme.example", "d123.cloudfront.net", "api.example.com");
+  const all = steps.join(" ");
+  assert.ok(/\/api\/\*/.test(all), "the behaviour's path pattern is named");
+  assert.ok(/api\.example\.com/.test(all), "the origin to point it at is named");
+  assert.ok(/POST/.test(all), "the verbs matter — a GET-only behaviour breaks one-click");
+  // The consequence, not just the instruction.
+  assert.ok(/one-click|403/i.test(all), "says what breaks without it");
+});
+
+test("without an API host the steps omit the behaviour entirely", () => {
+  // A deployment that has not told the instructions where its API lives must
+  // not print a step naming `undefined` as the origin.
+  const steps = siteUrlSetupSteps("https://news.acme.example", "d123.cloudfront.net");
+  assert.ok(!steps.join(" ").includes("undefined"));
+  assert.ok(!steps.some((s) => s.includes("/api/*")));
+});

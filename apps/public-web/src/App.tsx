@@ -7,7 +7,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { HONEYPOT_ATTRS, HONEYPOT_FIELD } from "@addressium/core";
 
-const BASE = import.meta.env.VITE_API_BASE ?? "";
+import { apiBase } from "./api-base.js";
 
 /**
  * Which org this page belongs to, resolved at RUNTIME from the hostname (#294).
@@ -41,7 +41,7 @@ function useOrgId(): { orgId: string | undefined; error: string | undefined } {
     let cancelled = false;
     void (async () => {
       try {
-        const res = await fetch(`${BASE}/public/site?host=${encodeURIComponent(window.location.host)}`);
+        const res = await fetch(`${await apiBase()}/public/site?host=${encodeURIComponent(window.location.host)}`);
         if (cancelled) return;
         if (res.status === 404) {
           // NOT a fallback to some default org: serving the wrong org's signup
@@ -103,7 +103,7 @@ export function SignupForm({ orgId, defaultList }: { orgId: string; defaultList?
   const submit = async () => {
     setMsg(""); setErr("");
     try {
-      const res = await fetch(`${BASE}/signup`, {
+      const res = await fetch(`${await apiBase()}/signup`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ orgId, email, listId, [HONEYPOT_FIELD]: trap }),

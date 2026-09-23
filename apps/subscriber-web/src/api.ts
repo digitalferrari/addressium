@@ -2,11 +2,12 @@
  * Subscriber-site API client (public + preference centre + confirm/unsubscribe). Branding + list
  * presentation are read from the public endpoints; signup posts to the API.
  */
-const BASE = import.meta.env.VITE_API_BASE ?? "";
+import { apiBase } from "./api-base.js";
+
 export const ORG = import.meta.env.VITE_ORG_ID ?? "";
 
 async function j<T>(method: string, path: string, body?: unknown): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, {
+  const res = await fetch(`${await apiBase()}${path}`, {
     method,
     headers: { "content-type": "application/json" },
     body: body === undefined ? undefined : JSON.stringify(body),

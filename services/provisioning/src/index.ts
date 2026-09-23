@@ -111,7 +111,7 @@ export async function handler(event: ProvisionEvent) {
     const org = await stores().organizations.get(parsedOrg.data);
     if (!org) return { statusCode: 404, headers: {}, body: JSON.stringify({ error: "unknown org" }) };
 
-    const input = raw as { name?: string; defaultTimezone?: string; addDomain?: string; siteUrl?: string };
+    const input = raw as { name?: string; defaultTimezone?: string; addDomain?: string; siteUrl?: string; apiViaSite?: boolean };
     let planned;
     try {
       planned = planOrgUpdate(org, {
@@ -119,6 +119,7 @@ export async function handler(event: ProvisionEvent) {
         ...(input.defaultTimezone !== undefined ? { defaultTimezone: input.defaultTimezone } : {}),
         ...(input.addDomain !== undefined ? { addDomain: input.addDomain } : {}),
         ...(input.siteUrl !== undefined ? { siteUrl: input.siteUrl } : {}),
+        ...(input.apiViaSite !== undefined ? { apiViaSite: input.apiViaSite } : {}),
       });
     } catch (e) {
       return { statusCode: 400, headers: {}, body: JSON.stringify({ error: (e as Error).message }) };
@@ -158,6 +159,7 @@ export async function handler(event: ProvisionEvent) {
       if (c.field === "defaultTimezone") merged.defaultTimezone = planned.org.defaultTimezone;
       if (c.field === "primaryDomain") merged.domains = planned.org.domains;
       if (c.field === "siteUrl") merged.siteUrl = planned.org.siteUrl;
+      if (c.field === "apiViaSite") merged.apiViaSite = planned.org.apiViaSite;
     }
     await stores().organizations.put(merged);
 
@@ -189,7 +191,11 @@ export async function handler(event: ProvisionEvent) {
     // zone that is not ours is the wrong trade. Shown as steps instead.
     const siteUrlChange = planned.changed.find((c) => c.field === "siteUrl");
     const setupSteps = siteUrlChange
-      ? siteUrlSetupSteps(siteUrlChange.to, process.env.PUBLIC_SITE_DOMAIN ?? "the public CloudFront distribution")
+      ? siteUrlSetupSteps(
+          siteUrlChange.to,
+          process.env.PUBLIC_SITE_DOMAIN ?? "the public CloudFront distribution",
+          process.env.API_HOST,
+        )
       : [];
 
     return {

@@ -100,12 +100,31 @@ export const preferencesUrl = (org: Pick<Organization, "orgId" | "siteUrl"> | un
  * holding credentials for a zone that is not ours. The operator is shown what
  * to create instead.
  */
-export function siteUrlSetupSteps(siteUrl: string, distributionDomain: string): string[] {
+export function siteUrlSetupSteps(
+  siteUrl: string,
+  distributionDomain: string,
+  apiHost?: string,
+): string[] {
   const host = new URL(siteUrl).host;
-  return [
-    `Request an ACM certificate for ${host} in us-east-1 (CloudFront requires that region), and publish the CNAME it gives you for validation.`,
-    `Add a CNAME (or ALIAS/ANAME at the zone apex) pointing ${host} at ${distributionDomain}.`,
-    `Attach ${host} and the validated certificate to CloudFront distribution ${distributionDomain} as an alternate domain name.`,
-    `Until all three are done, links on ${host} will not resolve — subscribers cannot confirm or unsubscribe.`,
+  const steps = [
+    `Create a CloudFront distribution for ${host} with the addressium subscriber bucket as its default origin (or reuse ${distributionDomain} if this is the only org).`,
+    `Request an ACM certificate for ${host} in us-east-1 — CloudFront only accepts certificates from that region — and publish the CNAME it gives you for validation.`,
+    `Attach ${host} and the validated certificate to that distribution as an alternate domain name.`,
+    `Add a CNAME pointing ${host} at the distribution's own *.cloudfront.net hostname.`,
   ];
+  if (apiHost) {
+    steps.push(
+      // Not optional, and not only a CORS convenience: the `List-Unsubscribe`
+      // header carries `List-Unsubscribe-Post: One-Click`, so Gmail and Yahoo
+      // POST to it with no browser. CloudFront-over-S3 answers a POST with 403,
+      // so without this behaviour the unsubscribe link on this domain is dead
+      // to exactly the clients that use it most.
+      `Add a second origin on that distribution pointing at ${apiHost} (HTTPS only, and do NOT forward the Host header — the API rejects it), then a cache behaviour for path pattern /api/* using that origin, allowing GET, HEAD, OPTIONS, PUT, POST, PATCH, DELETE with caching disabled.`,
+      `The /api/* behaviour is what lets one-click unsubscribe work on ${host}: mailbox providers POST to the List-Unsubscribe URL, and a static origin answers POST with 403.`,
+    );
+  }
+  steps.push(
+    `Until the certificate, the alias and the CNAME are all in place, links on ${host} will not resolve — subscribers cannot confirm or unsubscribe.`,
+  );
+  return steps;
 }

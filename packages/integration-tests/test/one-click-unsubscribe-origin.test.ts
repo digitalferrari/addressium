@@ -37,17 +37,27 @@ function workspaceRoot(): string {
 
 const SENDER = resolve(workspaceRoot(), "services/sender/src/index.ts");
 
-test("the unsubscribe link is built from the API base, not the org site", () => {
+test("the org's own domain is used ONLY behind the apiViaSite gate", () => {
+  // The org's domain is better — the List-Unsubscribe host then matches the
+  // From domain — but only once that distribution actually forwards `/api/*`.
+  // Without the behaviour a one-click POST hits CloudFront-over-S3 and gets 403.
   const src = readFileSync(SENDER, "utf8");
   const builder = src.slice(src.indexOf("async function unsubscribeLink"), src.indexOf("export async function handler"));
 
   assert.ok(
     /UNSUBSCRIBE_URL_BASE/.test(builder),
-    "the unsubscribe builder no longer reads UNSUBSCRIBE_URL_BASE — a mailbox provider's one-click POST would hit a static origin and 403",
+    "the API base must remain the fallback — it is the origin that always accepts POST",
   );
   assert.ok(
-    !/requireSiteUrl|siteUrl/.test(builder),
-    "the unsubscribe link must NOT come from the org's subscriber site: that origin answers POST with 403",
+    /apiViaSite/.test(builder),
+    "the org's domain must be gated on apiViaSite, not used unconditionally",
+  );
+  // The gate and the site URL must appear together: a `siteUrl` read with no
+  // `apiViaSite` check beside it is the regression this guards.
+  const siteBranch = builder.slice(builder.indexOf("apiViaSite"));
+  assert.ok(
+    /\/api\/unsubscribe/.test(siteBranch),
+    "when the org's domain IS used it must go through /api/, which is the behaviour that accepts POST",
   );
 });
 

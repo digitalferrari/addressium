@@ -40,6 +40,11 @@ export interface OrgUpdate {
    * admin console itself is deployment-wide and is not configured here.
    */
   siteUrl?: string;
+  /**
+   * Confirms this org's distribution forwards `/api/*` to the API (#294).
+   * Moves the one-click unsubscribe URL onto the org's own domain.
+   */
+  apiViaSite?: boolean;
 }
 
 export interface OrgUpdateResult {
@@ -134,6 +139,15 @@ export function planOrgUpdate(org: Organization, update: OrgUpdate): OrgUpdateRe
       changed.push({ field: "siteUrl", from: org.siteUrl ?? "(none)", to: siteUrl });
       next.siteUrl = siteUrl;
     }
+  }
+
+  if (update.apiViaSite !== undefined && update.apiViaSite !== (org.apiViaSite ?? false)) {
+    changed.push({
+      field: "apiViaSite",
+      from: String(org.apiViaSite ?? false),
+      to: String(update.apiViaSite),
+    });
+    next.apiViaSite = update.apiViaSite;
   }
 
   if (update.addDomain !== undefined) {

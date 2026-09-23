@@ -25,8 +25,12 @@ test("submitting the form posts a signup and shows the confirmation message", as
   await userEvent.type(screen.getByPlaceholderText("you@example.com"), "reader@example.com");
   await userEvent.click(screen.getByRole("button", { name: /subscribe/i }));
 
-  await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
-  const [url, init] = fetchMock.mock.calls[0];
+  // Two calls now: the `/api/version` probe that learns whether this
+  // distribution forwards `/api/*` (#294), then the signup itself.
+  await waitFor(() => expect(fetchMock.mock.calls.length).toBeGreaterThanOrEqual(1));
+  const signupCall = fetchMock.mock.calls.find(([u]: [unknown]) => String(u).endsWith("/signup"));
+  expect(signupCall, "no POST to /signup was made").toBeTruthy();
+  const [url, init] = signupCall!;
   expect(String(url)).toMatch(/\/signup$/);
   expect(init.method).toBe("POST");
   const body = JSON.parse(init.body);
