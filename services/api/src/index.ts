@@ -823,6 +823,49 @@ export async function scheduleCampaignHandler(
     // Nothing reads this yet. It is written now so that by the time the JIT read
     // (#303), duplicate (#307) and revise (#312) paths land, the population is
     // already there rather than starting empty.
+    // Superseding a pending one-off (#308): archive the old FIRST, then create
+    // the new. A failure between the two leaves nothing sending and the operator
+    // retries; the reverse order risks both going out.
+    let supersededRoot: string | undefined;
+    let supersededVersion = 0;
+    if (body.supersedes) {
+      const old = await stores().schedules.get(body.orgId, body.supersedes);
+      if (!old) return json(404, { error: `unknown schedule "${body.supersedes}"` });
+      if (old.kind !== "one_off") {
+        return json(400, { error: "only a one-off can be superseded; edit a series in place" });
+      }
+      // Already sending or sent. The gate runs per SLICE, so a campaign mid
+      // fan-out may have delivered some recipients already — replacing it now
+      // would mail those people twice.
+      if (old.completedRanges && old.completedRanges.length > 0) {
+        return json(409, { error: "this send has already started; it cannot be replaced" });
+      }
+      // Inside the last minute the race is unwinnable: the sender may pick the
+      // message up between this check and the archive write. The console
+      // disables Edit here and offers Cancel instead.
+      const MARGIN_MS = 60_000;
+      if (old.sendAt && new Date(old.sendAt).getTime() - clock.now().getTime() < MARGIN_MS) {
+        return json(409, {
+          error: "less than a minute until this sends — cancel it instead",
+          reason: "too-close-to-send",
+        });
+      }
+      const oldCampaign = await stores().campaigns.get(body.orgId, body.supersedes);
+      // A halted campaign must not be revivable under a new id: the halt exists
+      // precisely to stop an operator re-sending past a bounce or complaint gate.
+      if (oldCampaign?.status === "halted") {
+        return json(409, { error: "this campaign is halted; a revision would bypass the halt" });
+      }
+      await transitionSchedule(stores(), clock, {
+        orgId: body.orgId,
+        scheduleId: body.supersedes,
+        action: "archive",
+      });
+      const oldBody = await stores().campaignBodies.get(body.orgId, body.supersedes);
+      supersededRoot = oldBody?.rootCampaignId ?? body.supersedes;
+      supersededVersion = oldBody?.version ?? 1;
+    }
+
     const existingBody = await stores().campaignBodies.get(body.orgId, body.campaignId);
     await stores().campaignBodies.put({
       orgId: body.orgId,
@@ -838,8 +881,10 @@ export async function scheduleCampaignHandler(
       ...(body.editorSource ? { editorSource: body.editorSource } : {}),
       // Re-scheduling the same id keeps its lineage; a fresh campaign roots at
       // itself. Revise (#312) is what increments the version.
-      rootCampaignId: existingBody?.rootCampaignId ?? body.campaignId,
-      version: existingBody?.version ?? 1,
+      // A revision inherits its predecessor's lineage and bumps the version;
+      // an ordinary re-schedule of the same id keeps what it had.
+      rootCampaignId: supersededRoot ?? existingBody?.rootCampaignId ?? body.campaignId,
+      version: supersededRoot ? supersededVersion + 1 : (existingBody?.version ?? 1),
       savedAt: clock.now().toISOString(),
     });
     const feed = body.feedId ? await stores().feeds.get(body.orgId, body.feedId) : undefined;

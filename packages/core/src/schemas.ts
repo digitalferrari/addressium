@@ -327,6 +327,14 @@ export const scheduleCampaignSchema = z.object({
       mjml: z.string().max(400_000).optional(),
     })
     .optional(),
+  /**
+   * Replace a pending one-off with this campaign (#308).
+   *
+   * The old schedule is ARCHIVED, not paused: a paused one-off used to be
+   * parked and re-enqueued on resume, so an operator resuming later would send
+   * both versions. Archive is terminal and the sender's gate skips it.
+   */
+  supersedes: idSchema.optional(),
   when: z.union([
     z.object({ type: z.literal("now") }),
     z.object({ type: z.literal("at"), at: z.string().min(1) }),

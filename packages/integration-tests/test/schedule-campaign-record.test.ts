@@ -822,3 +822,147 @@ test("two send-nows produce two distinct editions", async () => {
   const b = JSON.parse((await api.sendNowHandler(sendNowEvent("sn-twice"), { queue })).body) as { campaignId: string };
   assert.notEqual(a.campaignId, b.campaignId);
 });
+
+/**
+ * Replacing a pending one-off (#308).
+ *
+ * Archive-then-create, in that order: a failure between the two leaves nothing
+ * sending and the operator retries, whereas the reverse order risks both going
+ * out.
+ *
+ * Archive rather than pause, deliberately. A paused one-off used to be parked
+ * and re-enqueued on resume (#179), so an operator resuming later would send
+ * BOTH versions. #304 made pause a skip, but archive is still the right verb:
+ * it is terminal, and the sender's gate skips it permanently.
+ */
+test("superseding archives the old schedule and creates the new", async () => {
+  const scheduler = new CaptureScheduler();
+  await api.scheduleCampaignHandler(
+    scheduleEvent(composeBody("sup-v1", { when: { type: "at", at: "2027-01-01T12:00:00.000Z" } })),
+    { scheduler },
+  );
+
+  const res = await api.scheduleCampaignHandler(
+    scheduleEvent(
+      composeBody("sup-v2", {
+        supersedes: "sup-v1",
+        subject: "Corrected",
+        when: { type: "at", at: "2027-01-01T12:00:00.000Z" },
+      }),
+    ),
+    { scheduler },
+  );
+  assert.equal(res.statusCode, 202);
+
+  const oldState = await stores.schedules.get(ORG, "sup-v1");
+  assert.equal(oldState?.status, "archived", "the old send must be terminally stopped");
+  const newState = await stores.schedules.get(ORG, "sup-v2");
+  assert.equal(newState?.status, "active");
+});
+
+test("a revision inherits the lineage and bumps the version", async () => {
+  const scheduler = new CaptureScheduler();
+  await api.scheduleCampaignHandler(
+    scheduleEvent(composeBody("lin-v1", { when: { type: "at", at: "2027-01-01T12:00:00.000Z" } })),
+    { scheduler },
+  );
+  await api.scheduleCampaignHandler(
+    scheduleEvent(
+      composeBody("lin-v2", { supersedes: "lin-v1", when: { type: "at", at: "2027-01-01T12:00:00.000Z" } }),
+    ),
+    { scheduler },
+  );
+
+  const body = await stores.campaignBodies.get(ORG, "lin-v2");
+  assert.equal(body?.rootCampaignId, "lin-v1", "lineage follows the original, not the new id");
+  assert.equal(body?.version, 2);
+});
+
+test("a send that has already started cannot be replaced", async () => {
+  // The gate runs per SLICE, so a campaign mid fan-out may have delivered some
+  // recipients. Replacing it would mail those people twice.
+  const scheduler = new CaptureScheduler();
+  await api.scheduleCampaignHandler(
+    scheduleEvent(composeBody("started", { when: { type: "at", at: "2027-01-01T12:00:00.000Z" } })),
+    { scheduler },
+  );
+  const state = await stores.schedules.get(ORG, "started");
+  await stores.schedules.put({ ...state!, completedRanges: [{ until: "s500" }] });
+
+  const res = await api.scheduleCampaignHandler(
+    scheduleEvent(
+      composeBody("started-v2", { supersedes: "started", when: { type: "now" } }),
+    ),
+    { scheduler },
+  );
+  assert.equal(res.statusCode, 409);
+});
+
+test("a halted campaign cannot be revived under a new id", async () => {
+  // The halt exists precisely to stop an operator re-sending past a bounce or
+  // complaint gate, so a revision must not be the way around it.
+  const scheduler = new CaptureScheduler();
+  await api.scheduleCampaignHandler(
+    scheduleEvent(composeBody("halted", { when: { type: "at", at: "2027-01-01T12:00:00.000Z" } })),
+    { scheduler },
+  );
+  const c = await stores.campaigns.get(ORG, "halted");
+  await stores.campaigns.put({ ...c!, status: "halted" });
+
+  const res = await api.scheduleCampaignHandler(
+    scheduleEvent(composeBody("halted-v2", { supersedes: "halted", when: { type: "now" } })),
+    { scheduler },
+  );
+  assert.equal(res.statusCode, 409);
+});
+
+test("superseding an unknown or recurring schedule is refused", async () => {
+  const scheduler = new CaptureScheduler();
+  const unknown = await api.scheduleCampaignHandler(
+    scheduleEvent(composeBody("sup-unknown", { supersedes: "nope", when: { type: "now" } })),
+    { scheduler },
+  );
+  assert.equal(unknown.statusCode, 404);
+
+  await api.scheduleCampaignHandler(
+    scheduleEvent(composeBody("sup-series", { when: { type: "recurring", cron: "cron(0 6 * * ? *)" } })),
+    { scheduler },
+  );
+  const series = await api.scheduleCampaignHandler(
+    scheduleEvent(composeBody("sup-series-v2", { supersedes: "sup-series", when: { type: "now" } })),
+    { scheduler },
+  );
+  assert.equal(series.statusCode, 400, "a series is edited in place, not superseded");
+});
+
+test("inside the last minute, replacing is refused and cancelling is the answer", async () => {
+  // The race is unwinnable there: the sender may pick the message up between
+  // the check and the archive write. The console disables Edit at this point
+  // and leaves Cancel, which is what the operator actually needs — they are in
+  // a hurry and want to know whether it went out.
+  const scheduler = new CaptureScheduler();
+  const soon = new Date(Date.now() + 30_000).toISOString();
+  await api.scheduleCampaignHandler(
+    scheduleEvent(composeBody("imminent", { when: { type: "at", at: soon } })),
+    { scheduler },
+  );
+  // effectiveOneOffTime floors a one-off at now + 5 minutes, so force the
+  // stored sendAt to the imminent value this test is about.
+  const state = await stores.schedules.get(ORG, "imminent");
+  await stores.schedules.put({ ...state!, sendAt: soon });
+
+  const res = await api.scheduleCampaignHandler(
+    scheduleEvent(composeBody("imminent-v2", { supersedes: "imminent", when: { type: "now" } })),
+    { scheduler },
+  );
+  assert.equal(res.statusCode, 409);
+  assert.equal(
+    JSON.parse(res.body).reason,
+    "too-close-to-send",
+    "the console keys its Edit/Cancel switch on this",
+  );
+
+  // And the original is untouched — a refused revision must not have archived it.
+  const after = await stores.schedules.get(ORG, "imminent");
+  assert.equal(after?.status, "active", "a refusal must leave the original sending");
+});
