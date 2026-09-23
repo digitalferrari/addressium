@@ -217,3 +217,16 @@ test("deploy-check.sh runs cdk where cdk.json lives", async () => {
   assert.deepEqual(bare, [], `cdk must run from infra/cdk; bare invocations:\n${bare.join("\n")}`);
   assert.match(sh, /CFG="\$CDK_DIR\/addressium\.config\.json"/);
 });
+
+test("tagged CI releases run the guard before deploying the same stage and region", () => {
+  const workflow = readFileSync(resolve(here, "../../../../.github/workflows/ci.yml"), "utf8");
+  const guard = workflow.indexOf('run: ./scripts/deploy-check.sh --stage "$STAGE" --region "$AWS_REGION"');
+  const deploy = workflow.indexOf("run: npx cdk deploy --require-approval never");
+
+  assert.match(workflow, /tags:\s*\["v\*"\]/, "version tags must trigger the release workflow");
+  assert.ok(guard >= 0, "the release workflow must invoke deploy-check.sh");
+  assert.ok(deploy > guard, "the destructive-change guard must run before cdk deploy");
+  assert.match(workflow, /STAGE: \$\{\{ steps\.deployment-config\.outputs\.stage \}\}/);
+  assert.match(workflow, /AWS_REGION: \$\{\{ steps\.deployment-config\.outputs\.region \}\}/);
+  assert.match(workflow, /aws-region: \$\{\{ steps\.deployment-config\.outputs\.region \}\}/);
+});

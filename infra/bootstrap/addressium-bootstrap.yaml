@@ -67,10 +67,30 @@ Parameters:
       Must match the qualifier used by `cdk bootstrap`. Only change this if you
       also set @aws-cdk/core:bootstrapQualifier in infra/cdk/cdk.json.
 
+  GitHubRepo:
+    Type: String
+    Default: ""
+    AllowedPattern: "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$|^$"
+    Description: >-
+      owner/repo allowed to deploy through GitHub Actions via OIDC, e.g.
+      digitalferrari/addressium. Leave blank to create no CI deploy role.
+      Trust is scoped to tags (refs/tags/v*), matching the release workflow.
+
+  GitHubOidcProviderArn:
+    Type: String
+    Default: ""
+    Description: >-
+      ARN of an existing token.actions.githubusercontent.com OIDC provider.
+      Leave blank and this stack creates the provider (one per account).
+
 Conditions:
   UseRole: !Equals [!Ref DeployPrincipalType, "Role"]
   UseUser: !Equals [!Ref DeployPrincipalType, "User"]
   HasTrustedPrincipal: !Not [!Equals [!Ref TrustedPrincipalArn, ""]]
+  HasGitHubRepo: !Not [!Equals [!Ref GitHubRepo, ""]]
+  CreateOidcProvider: !And
+    - !Condition HasGitHubRepo
+    - !Equals [!Ref GitHubOidcProviderArn, ""]
 
 Resources:
   # --------------------------------------------------------------------------
@@ -89,6 +109,26 @@ Resources:
       PolicyDocument:
         Version: "2012-10-17"
         Statement:
+          # The deploy gate (scripts/deploy-check.sh) calls CloudFormation
+          # DIRECTLY — not through the CDK deploy role — to read the stack and
+          # inspect/clean up a change set. A permissions boundary is an
+          # intersection, so without these the gate dies at
+          # cloudformation:DescribeStacks and `npm run deploy` fails BEFORE
+          # `cdk deploy` runs, which is why every deploy so far had to be made as
+          # the account root. Deliberately excluded: ExecuteChangeSet — the CDK
+          # deploy role performs the actual apply, so a bounded principal can
+          # inspect a change set but not apply one.
+          - Sid: DeployGateChangeSetInspection
+            Effect: Allow
+            Action:
+              - cloudformation:DescribeStacks
+              - cloudformation:DescribeStackEvents
+              - cloudformation:DescribeStackResources
+              - cloudformation:GetTemplate
+              - cloudformation:ListStacks
+              - cloudformation:DescribeChangeSet
+              - cloudformation:DeleteChangeSet
+            Resource: "*"
           - Sid: ServicesTheApplicationNeeds
             Effect: Allow
             Action:
@@ -319,6 +359,10 @@ Resources:
               - cloudformation:DescribeStackResources
               - cloudformation:GetTemplate
               - cloudformation:ListStacks
+              # deploy-check.sh reads the change set it created and deletes it on
+              # exit. Creating it goes through the CDK deploy role.
+              - cloudformation:DescribeChangeSet
+              - cloudformation:DeleteChangeSet
             Resource: "*"
           - Sid: OperateAndSmokeTest
             # Read-only plus the narrow writes an end-to-end test needs. Notably
@@ -334,6 +378,9 @@ Resources:
               - ses:GetAccount
               - ses:ListEmailIdentities
               - ses:GetEmailIdentity
+              # deploy-check.sh verifies alerting actually reaches someone by
+              # reading the ops topic's subscription counts.
+              - sns:GetTopicAttributes
               - logs:FilterLogEvents
               - logs:GetLogEvents
               - logs:DescribeLogGroups
@@ -410,6 +457,50 @@ Resources:
             - SubscriptionType: EMAIL
               Address: !Ref AdminEmail
 
+  # --------------------------------------------------------------------------
+  # GitHub Actions OIDC. Lets CI deploy with no long-lived AWS secret in GitHub:
+  # the workflow exchanges a short-lived, GitHub-signed token for temporary STS
+  # credentials. One OIDC provider per URL per account, so an existing one can
+  # be passed in rather than created.
+  # --------------------------------------------------------------------------
+  GitHubOidcProvider:
+    Type: AWS::IAM::OIDCProvider
+    Condition: CreateOidcProvider
+    Properties:
+      Url: https://token.actions.githubusercontent.com
+      ClientIdList:
+        - sts.amazonaws.com
+      ThumbprintList:
+        - 6938fd4d98bab03faadb97b34396831e3780aea1
+
+  CiDeployRole:
+    Type: AWS::IAM::Role
+    Condition: HasGitHubRepo
+    Properties:
+      RoleName: !Sub "addressium-${Stage}-ci-deployer"
+      Description: Assumed by GitHub Actions via OIDC. No static credentials.
+      MaxSessionDuration: 3600
+      PermissionsBoundary: !Ref DeploymentBoundary
+      ManagedPolicyArns: [!Ref DeployPolicy]
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !If
+                - CreateOidcProvider
+                - !Ref GitHubOidcProvider
+                - !Ref GitHubOidcProviderArn
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+              # Tag builds only. Without the sub condition any repository that
+              # can mint a token for this account's provider could deploy; the
+              # aud check alone is not a boundary.
+              StringLike:
+                token.actions.githubusercontent.com:sub: !Sub "repo:${GitHubRepo}:ref:refs/tags/v*"
+
 Outputs:
   BoundaryArn:
     Description: Pass to `cdk bootstrap --custom-permissions-boundary`
@@ -443,3 +534,10 @@ Outputs:
       Copy once, store as an environment variable, never commit. Rotate by
       updating this stack. Prefer DeployPrincipalType=Role instead.
     Value: !GetAtt DeployUserKey.SecretAccessKey
+
+  CiDeployRoleArn:
+    Condition: HasGitHubRepo
+    Description: >-
+      Set as the DEPLOY_ROLE_ARN repository variable so the release workflow can
+      assume it: gh variable set DEPLOY_ROLE_ARN --repo <owner>/<repo> --body <this>
+    Value: !GetAtt CiDeployRole.Arn

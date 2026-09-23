@@ -7,6 +7,7 @@ import { useEffect, useState } from "react";
 import { relativeTime } from "../time.js";
 import { can, type Grant } from "../rbac.js";
 import { api, scheduleHasSent, type SendScheduleState } from "../api.js";
+import { describeSchedule } from "@addressium/domain";
 
 /**
  * When a row fires: a one-off's send time, a series' cron (#248).
@@ -28,7 +29,10 @@ function scheduleWhen(r: SendScheduleState, now?: number): string {
     const relative = relativeTime(r.sendAt, now);
     return `${at.toLocaleString()}${relative ? ` (${relative})` : ""}`;
   }
-  if (r.cron) return `${r.cron}${r.timezone ? ` (${r.timezone})` : ""}`;
+  if (r.cron) {
+    const desc = describeSchedule(r.cron, r.timezone);
+    return `${desc} (${r.cron})`;
+  }
   return "—";
 }
 

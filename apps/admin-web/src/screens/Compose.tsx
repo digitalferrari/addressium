@@ -6,6 +6,13 @@ import { useEffect, useState } from "react";
 import { useAsync } from "../useAsync.js";
 import { isValidId } from "../ids.js";
 import { api, type EmailBlock, type ScheduleWhen } from "../api.js";
+import {
+  describeSchedule,
+  buildEventBridgeCron,
+  DAYS_OF_WEEK,
+  type DayOfWeek,
+  type RecurringFrequency
+} from "@addressium/domain";
 
 interface DraftBlock { kind: "text" | "editorial" | "ad"; html: string; label: string; url: string; slot: string }
 
@@ -35,6 +42,19 @@ export function Compose({ org, onScheduled }: { org: string; onScheduled: () => 
   const [feedId, setFeedId] = useState("");
   const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState(false);
+
+  const [frequency, setFrequency] = useState<RecurringFrequency>("daily");
+  const [selectedDays, setSelectedDays] = useState<DayOfWeek[]>([]);
+  const [timeOfDay, setTimeOfDay] = useState("13:00");
+
+  useEffect(() => {
+    const nextCron = buildEventBridgeCron({
+      frequency,
+      daysOfWeek: selectedDays,
+      timeOfDay,
+    });
+    setCron(nextCron);
+  }, [frequency, selectedDays, timeOfDay]);
 
   useEffect(() => {
     if (lists.data && lists.data.length > 0 && !listId) setListId(lists.data[0]!.listId);
@@ -273,17 +293,135 @@ export function Compose({ org, onScheduled }: { org: string; onScheduled: () => 
           </div>
         )}
         {when === "recurring" && (
-          <div style={{ marginTop: 10 }}>
-            <label>Cron expression</label>
-            <input value={cron} onChange={(e) => setCron(e.target.value)} placeholder="cron(0 13 * * ? *)" style={{ width: "100%" }} />
-            <label style={{ marginTop: 8 }}>Timezone (blank → org default)</label>
-            <input value={timezone} onChange={(e) => setTimezone(e.target.value)} placeholder="America/Denver" style={{ width: "100%" }} />
-            <label style={{ marginTop: 8 }}>Article feed (optional)</label>
-            <select value={feedId} onChange={(e) => setFeedId(e.target.value)} style={{ width: "100%" }}>
-              <option value="">Use the composed body</option>
-              {(feeds.data ?? []).filter((feed) => feed.targetListId === listId).map((feed) => <option key={feed.feedId} value={feed.feedId}>{feed.feedId} ({feed.format})</option>)}
-            </select>
-            <p className="muted">Each firing fetches the selected feed and builds an edition from its latest items.</p>
+          <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 12 }}>
+            <div>
+              <label style={{ fontWeight: 600, display: "block", marginBottom: 4 }}>Frequency</label>
+              <select
+                value={frequency}
+                onChange={(e) => setFrequency(e.target.value as RecurringFrequency)}
+                style={{ width: "100%", padding: "6px 12px", borderRadius: 4, border: "1px solid #ccc" }}
+              >
+                <option value="daily">Daily</option>
+                <option value="weekdays">Weekdays (Mon-Fri)</option>
+                <option value="weekends">Weekends (Sat-Sun)</option>
+                <option value="custom">Custom Days</option>
+              </select>
+            </div>
+
+            {frequency === "custom" && (
+              <div>
+                <label style={{ fontWeight: 600, display: "block", marginBottom: 6 }}>Days of Week</label>
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                  {DAYS_OF_WEEK.map((day) => {
+                    const active = selectedDays.includes(day.id);
+                    return (
+                      <button
+                        key={day.id}
+                        type="button"
+                        aria-pressed={active}
+                        onClick={() => {
+                          setSelectedDays((prev) =>
+                            prev.includes(day.id)
+                              ? prev.filter((d) => d !== day.id)
+                              : [...prev, day.id]
+                          );
+                        }}
+                        style={{
+                          padding: "6px 12px",
+                          borderRadius: 20,
+                          fontSize: 13,
+                          fontWeight: 600,
+                          cursor: "pointer",
+                          border: active ? "1px solid #1b7a3d" : "1px solid #ccc",
+                          backgroundColor: active ? "#d7f0df" : "#fbfbfb",
+                          color: active ? "#1b7a3d" : "#555",
+                          transition: "all 0.15s ease-in-out",
+                        }}
+                      >
+                        {day.shortLabel}
+                      </button>
+                    );
+                  })}
+                </div>
+                {selectedDays.length === 0 && (
+                  // An empty selection is legal and builds a daily schedule
+                  // (see buildEventBridgeCron). Say so here, next to the chips
+                  // the operator is still clicking — the summary below reads
+                  // "Every day", which is easy to miss mid-selection.
+                  <p
+                    role="status"
+                    style={{ marginTop: 6, marginBottom: 0, fontSize: 13, color: "#92400e" }}
+                  >
+                    No days selected — this will send <strong>every day</strong>. Pick at least one day to limit it.
+                  </p>
+                )}
+              </div>
+            )}
+
+            <div style={{ display: "flex", gap: 16 }}>
+              <div style={{ flex: 1 }}>
+                <label style={{ fontWeight: 600, display: "block", marginBottom: 4 }}>Send Time</label>
+                <input
+                  type="time"
+                  value={timeOfDay}
+                  onChange={(e) => setTimeOfDay(e.target.value)}
+                  style={{ width: "100%", padding: "6px 12px", borderRadius: 4, border: "1px solid #ccc" }}
+                />
+              </div>
+
+              <div style={{ flex: 1 }}>
+                <label style={{ fontWeight: 600, display: "block", marginBottom: 4 }}>Timezone</label>
+                <select
+                  value={timezone}
+                  onChange={(e) => setTimezone(e.target.value)}
+                  style={{ width: "100%", padding: "6px 12px", borderRadius: 4, border: "1px solid #ccc" }}
+                >
+                  <option value="">Org Default (UTC)</option>
+                  <option value="America/Denver">Mountain Time (America/Denver)</option>
+                  <option value="America/Los_Angeles">Pacific Time (America/Los_Angeles)</option>
+                </select>
+              </div>
+            </div>
+
+            <div style={{
+              marginTop: 6,
+              padding: "10px 14px",
+              backgroundColor: "#f0fdf4",
+              border: "1px solid #bbf7d0",
+              borderRadius: 6,
+              fontSize: 14,
+              color: "#166534",
+              display: "flex",
+              alignItems: "center",
+              gap: 8
+            }}>
+              <strong>📅 Summary:</strong> {describeSchedule({ frequency, daysOfWeek: selectedDays, timeOfDay }, timezone)}
+            </div>
+
+            <div>
+              <details style={{ fontSize: 12, cursor: "pointer", marginTop: 4 }}>
+                <summary style={{ color: "#666", outline: "none" }}>Advanced: View generated cron</summary>
+                <div style={{
+                  marginTop: 6,
+                  padding: 8,
+                  backgroundColor: "#f4f4f5",
+                  border: "1px solid #e4e4e7",
+                  borderRadius: 4,
+                  fontFamily: "monospace"
+                }}>
+                  {cron}
+                </div>
+              </details>
+            </div>
+
+            <div>
+              <label style={{ fontWeight: 600, display: "block", marginBottom: 4 }}>Article feed (optional)</label>
+              <select value={feedId} onChange={(e) => setFeedId(e.target.value)} style={{ width: "100%", padding: "6px 12px", borderRadius: 4, border: "1px solid #ccc" }}>
+                <option value="">Use the composed body</option>
+                {(feeds.data ?? []).filter((feed) => feed.targetListId === listId).map((feed) => <option key={feed.feedId} value={feed.feedId}>{feed.feedId} ({feed.format})</option>)}
+              </select>
+              <p className="muted" style={{ marginTop: 4 }}>Each firing fetches the selected feed and builds an edition from its latest items.</p>
+            </div>
           </div>
         )}
       </div>

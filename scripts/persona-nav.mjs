@@ -1,6 +1,6 @@
 // Prints the nav each role actually sees, derived from Sidebar.tsx GROUPS and
 // the ROLES matrix in packages/rbac. Used to regenerate the tables in
-// docs/PERSONAS.md so they cannot drift from the console.
+// packages/integration-tests/PERSONAS.md so they cannot drift from the console.
 //
 // The matrix is READ, never restated here: a third hand-written copy would be
 // the one copy rbac-client-drift.test.ts does not guard, and the doc derived

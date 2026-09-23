@@ -1,8 +1,9 @@
 /**
- * LocalStack integration (#19): exercises the SES-adjacent AWS adapters —
- * SQS enqueue, KMS asymmetric sign (magic-link mint), and EventBridge Scheduler
- * create/cancel — against emulated AWS, so the SQS/KMS/Scheduler adapters are
- * covered end-to-end (DynamoDB is already covered by dynalite).
+ * LocalStack integration (#19): exercises the AWS adapters that need service
+ * semantics unavailable in in-process fakes — DynamoDB transactions, SQS
+ * enqueue, KMS asymmetric sign (magic-link mint), and EventBridge Scheduler
+ * create/cancel. Dynalite covers ordinary DynamoDB calls elsewhere, but does
+ * not implement TransactWriteItems, so the counter/idempotency path lives here.
  *
  * Requires a running LocalStack. Start it with `docker compose -f
  * docker-compose.localstack.yml up -d` (or set LOCALSTACK_ENDPOINT). When
@@ -11,11 +12,17 @@
  */
 import test from "node:test";
 import assert from "node:assert/strict";
+import {
+  DynamoDBClient,
+  CreateTableCommand,
+  DeleteTableCommand,
+} from "@aws-sdk/client-dynamodb";
 import { SQSClient, CreateQueueCommand, ReceiveMessageCommand, GetQueueAttributesCommand } from "@aws-sdk/client-sqs";
 import { KMSClient, CreateKeyCommand, GetPublicKeyCommand } from "@aws-sdk/client-kms";
 import { SchedulerClient, CreateScheduleGroupCommand } from "@aws-sdk/client-scheduler";
 import { jwtVerify, createLocalJWKSet, type JSONWebKeySet } from "jose";
 import {
+  DynamoStores,
   SqsSendQueue,
   KmsMagicLinkSigner,
   EventBridgeScheduler,
@@ -28,6 +35,7 @@ const ENDPOINT =
 const REGION = process.env.AWS_REGION ?? "us-east-1";
 const credentials = { accessKeyId: "test", secretAccessKey: "test" };
 const clientConfig = { endpoint: ENDPOINT, region: REGION, credentials };
+const TRANSACTION_TABLE = `addressium-transaction-test-${process.pid}`;
 
 async function localstackUp(): Promise<boolean> {
   try {
@@ -50,6 +58,91 @@ const descriptor: SendDescriptor = {
   subject: "Hello",
   template: { blocks: [{ kind: "text", html: "hi" }] },
 };
+
+test("DynamoDB event append is transactional, idempotent, and counts unique opens", { skip: !up }, async () => {
+  const dynamo = new DynamoDBClient(clientConfig);
+  await dynamo.send(
+    new CreateTableCommand({
+      TableName: TRANSACTION_TABLE,
+      BillingMode: "PAY_PER_REQUEST",
+      AttributeDefinitions: [
+        { AttributeName: "pk", AttributeType: "S" },
+        { AttributeName: "sk", AttributeType: "S" },
+      ],
+      KeySchema: [
+        { AttributeName: "pk", KeyType: "HASH" },
+        { AttributeName: "sk", KeyType: "RANGE" },
+      ],
+    }),
+  );
+
+  try {
+    // No nonTransactionalCountersForTests escape hatch: every append below
+    // exercises the same TransactWriteItems request production uses.
+    const stores = new DynamoStores(TRANSACTION_TABLE, dynamo);
+    await stores.campaigns.put({
+      orgId: "summit",
+      campaignId: "counters",
+      type: "one_off",
+      subject: "Counter test",
+      templateId: "template",
+      audience: { listId: "ledger" },
+      status: "sent",
+      counters: {
+        sent: 0,
+        delivered: 0,
+        opens: 0,
+        clicks: 0,
+        bounces: 0,
+        complaints: 0,
+        unsubscribes: 0,
+        rejects: 0,
+        renderingFailures: 0,
+        deliveryDelays: 0,
+      },
+    });
+
+    const sent = {
+      orgId: "summit",
+      campaignId: "counters",
+      subscriberId: "sub-1",
+      type: "sent" as const,
+      at: "2026-09-17T12:00:00.000Z",
+      eventId: "ses-message-1:sent",
+    };
+    await stores.events.append(sent);
+    await stores.events.append(sent);
+
+    await stores.events.append({
+      ...sent,
+      type: "open",
+      eventId: "ses-message-1:open:1",
+    });
+    await stores.events.append({
+      ...sent,
+      type: "open",
+      at: "2026-09-17T12:01:00.000Z",
+      eventId: "ses-message-1:open:2",
+    });
+
+    const campaign = await stores.campaigns.get("summit", "counters");
+    assert.equal(campaign?.counters.sent, 1, "an exact redelivery must not double-count");
+    assert.equal(campaign?.counters.opens, 1, "opens count people, not occurrences");
+    assert.equal((await stores.events.all("summit", "counters")).length, 3);
+
+    await stores.events.append({
+      ...sent,
+      campaignId: "missing-campaign",
+      type: "bounce",
+      eventId: "ses-message-2:bounce",
+    });
+    assert.equal(await stores.campaigns.get("summit", "missing-campaign"), undefined);
+    assert.equal((await stores.events.all("summit", "missing-campaign")).length, 1);
+  } finally {
+    await dynamo.send(new DeleteTableCommand({ TableName: TRANSACTION_TABLE }));
+    dynamo.destroy();
+  }
+});
 
 test("SQS adapter enqueues a send descriptor onto a real queue", { skip: !up }, async () => {
   const sqs = new SQSClient(clientConfig);

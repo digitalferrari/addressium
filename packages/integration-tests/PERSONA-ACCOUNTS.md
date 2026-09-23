@@ -4,7 +4,7 @@ Created 2026-09-16 against the live admin pool `us-east-1_khM5Bgpo2`
 (stack `addressium-dev`, us-east-1). App client `dp2k200l2ebsrc9tlj2u7soij`.
 Console: <https://d2xoqzbsflph68.cloudfront.net>
 
-These back the staff personas in [`PERSONAS.md`](../PERSONAS.md). Addresses are all
+These back the staff personas in [`PERSONAS.md`](./PERSONAS.md). Addresses are all
 `@example.com` (RFC 2606) and undeliverable by design; `--message-action SUPPRESS` was
 used, so **no mail was sent** by creating them.
 
@@ -50,9 +50,9 @@ these accounts are not challenged for a TOTP code. Existing enrollments — incl
 
 ## The two questions this was set up to answer
 
-Both are flagged in [`2026-09-15-SUMMARY.md`](2026-09-15-SUMMARY.md) as observations
-from a `developer_admin` render, never confirmed. A real login settles each in about a
-minute. Sign out fully between personas — the console caches the Cognito session.
+Both were first flagged by a `developer_admin` render and never confirmed by a
+real login. A real login settles each in about a minute. Sign out fully between
+personas — the console caches the Cognito session.
 
 1. **`marcus.ellery` (`analyst`, holds only `reports:view`) → Campaigns.**
    Do `Pause` and `Archive` render, and do they *act* when clicked? The nav reaches

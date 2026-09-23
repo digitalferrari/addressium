@@ -18,6 +18,7 @@ import { useAsync } from "../useAsync.js";
 import { relativeTime } from "../time.js";
 import { can, type Grant } from "../rbac.js";
 import { api, scheduleHasSent, type CampaignRow, type SendScheduleState } from "../api.js";
+import { describeSchedule } from "@addressium/domain";
 
 /**
  * The two state machines this screen shows at once.
@@ -148,7 +149,10 @@ function campaignWhen(r: CampaignListRow, now?: number): string {
     return `${at.toLocaleString()}${rel ? ` (${rel})` : ""}`;
   }
   const cron = r.schedule?.cron;
-  if (cron) return `${cron}${r.schedule?.timezone ? ` (${r.schedule.timezone})` : ""}`;
+  if (cron) {
+    const desc = describeSchedule(cron, r.schedule?.timezone);
+    return `${desc} (${cron})`;
+  }
   return "—";
 }
 

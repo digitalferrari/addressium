@@ -7,7 +7,7 @@ journeys, so a regression in the experience shows up as a changed report rather
 than a changed reviewer.
 
 Personas are also test fixtures. The machine-readable definitions live in
-[`packages/integration-tests/test/personas.ts`](../packages/integration-tests/test/personas.ts)
+[`test/personas.ts`](./test/personas.ts)
 and are asserted against the real Cedar authorizer by `personas.test.ts`. **That
 module is the source of truth for claims and capabilities** — this document
 describes the people; the fixtures decide what they can do.
@@ -227,12 +227,14 @@ time. Deny by default, enforced at the boundary — even for `developer_admin`.
 
 ## Logging a review
 
-Keep this file stable; it defines who the personas are. Put each review in its
-own dated file:
+Keep this file stable; it defines who the personas are. Each *review* is a
+snapshot of one build, so it belongs outside the repo — a GitHub issue, or a
+local run log. A committed review goes stale the moment the next commit lands and
+nothing will ever update it.
 
-```
-docs/persona-reviews/YYYY-MM-DD-<persona-id>.md
-```
+Name it `YYYY-MM-DD-<persona-id>` so a series stays sortable. (`PERSONAS.md` and
+[`PERSONA-ACCOUNTS.md`](./PERSONA-ACCOUNTS.md) stay here because they describe
+who the personas *are* rather than what one run found.)
 
 Persona ids are the `id` field in the fixtures module: `owner`, `org-admin`,
 `campaign-editor`, `brand-editor`, `sales-rep`, `marketing-analyst`,

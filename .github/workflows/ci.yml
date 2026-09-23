@@ -6,6 +6,7 @@ name: ci
 on:
   push:
     branches: ["main"]
+    tags: ["v*"]
   pull_request:
 
 permissions:
@@ -21,9 +22,15 @@ jobs:
           node-version: "22"
           cache: "npm"
       - run: npm ci
+      - run: npm run audit:ci
       - run: npm run build
+      - name: Start LocalStack integration services
+        run: docker compose -f docker-compose.localstack.yml up -d --wait
       - run: npm test --if-present
       - run: npm run test:web --if-present
+      - name: Stop LocalStack integration services
+        if: always()
+        run: docker compose -f docker-compose.localstack.yml down
       # A real `cdk synth`, not just the assertion tests (#202).
       #
       # `npm test` builds templates via `Template.fromStack`, which covers the
@@ -65,25 +72,41 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Configure AWS credentials via OIDC
-        if: vars.DEPLOY_ROLE_ARN != ''
-        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
-        with:
-          role-to-assume: ${{ vars.DEPLOY_ROLE_ARN }}
-          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "22"
           cache: "npm"
-      - run: npm ci
-      - run: npm run build
-      - name: Write deployment configuration
+      - name: Write and validate deployment configuration
+        id: deployment-config
         if: vars.DEPLOY_ROLE_ARN != ''
         env:
           ADDRESSIUM_CONFIG_JSON: ${{ secrets.ADDRESSIUM_CONFIG_JSON }}
         run: |
           test -n "$ADDRESSIUM_CONFIG_JSON" || (echo "Set the ADDRESSIUM_CONFIG_JSON repository secret before deploying." && exit 1)
           printf '%s' "$ADDRESSIUM_CONFIG_JSON" > infra/cdk/addressium.config.json
+          node <<'NODE'
+          const fs = require("node:fs");
+          const config = require("./infra/cdk/addressium.config.json");
+          const stage = config.stage ?? "dev";
+          const region = config.region ?? "us-east-1";
+          if (!["dev", "staging", "prod"].includes(stage)) throw new Error(`invalid deployment stage: ${stage}`);
+          if (!/^[a-z0-9-]+$/.test(region)) throw new Error(`invalid AWS region: ${region}`);
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `stage=${stage}\nregion=${region}\n`);
+          NODE
+      - name: Configure AWS credentials via OIDC
+        if: vars.DEPLOY_ROLE_ARN != ''
+        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
+        with:
+          role-to-assume: ${{ vars.DEPLOY_ROLE_ARN }}
+          aws-region: ${{ steps.deployment-config.outputs.region }}
+      - run: npm ci
+      - run: npm run build
+      - name: Check the CloudFormation change set for destructive replacements
+        if: vars.DEPLOY_ROLE_ARN != ''
+        env:
+          STAGE: ${{ steps.deployment-config.outputs.stage }}
+          AWS_REGION: ${{ steps.deployment-config.outputs.region }}
+        run: ./scripts/deploy-check.sh --stage "$STAGE" --region "$AWS_REGION"
       - name: Deploy the control-plane stack
         if: vars.DEPLOY_ROLE_ARN != ''
         run: npx cdk deploy --require-approval never

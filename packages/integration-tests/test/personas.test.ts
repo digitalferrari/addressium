@@ -157,7 +157,7 @@ test("persona ids are unique and fixture addresses are non-deliverable", () => {
 /**
  * Send-path expectations tied to the persona's org type (§4.11).
  *
- * `orgType` was previously declarative — PERSONAS.md claimed it kept "a test
+ * `orgType` was previously declarative — ../PERSONAS.md claimed it kept "a test
  * blast could not reach a live list" an assertion, while nothing read the field.
  * These drive the real guard (`recipientAllowedForDev` in @addressium/domain).
  */

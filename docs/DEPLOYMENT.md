@@ -49,7 +49,8 @@ aws cloudformation deploy \
   --template-file infra/bootstrap/addressium-bootstrap.yaml \
   --stack-name addressium-dev-bootstrap \
   --capabilities CAPABILITY_NAMED_IAM \
-  --parameter-overrides AdminEmail=you@example.com Stage=dev
+  --parameter-overrides AdminEmail=you@example.com Stage=dev \
+    GitHubRepo=<owner>/<repo>
 
 npx cdk bootstrap aws://<account>/<region> \
   --custom-permissions-boundary addressium-dev-boundary
@@ -69,6 +70,23 @@ alternative `scripts/aws-bootstrap.sh` path for disposable test accounts, and
 the honest caveat about the CloudFormation execution role are in
 [`scripts/README.md`](../scripts/README.md).
 
+`GitHubRepo` is optional and creates the **CI deploy path**: an
+`AWS::IAM::OIDCProvider` for `token.actions.githubusercontent.com` plus an
+`addressium-<stage>-ci-deployer` role whose trust policy is restricted to
+`repo:<owner>/<repo>:ref:refs/tags/v*` — tag builds only, so no branch or pull
+request run can assume it. The stack prints the role as the `CiDeployRoleArn`
+output; set it as the `DEPLOY_ROLE_ARN` repository variable:
+
+```bash
+gh variable set DEPLOY_ROLE_ARN --repo <owner>/<repo> --body <CiDeployRoleArn>
+```
+
+The tagged release workflow (`.github/workflows/ci.yml`) then deploys with **no
+long-lived AWS key stored in GitHub** — it exchanges a short-lived, GitHub-signed
+token for temporary STS credentials. Only one OIDC provider per URL per account
+is allowed, so pass `GitHubOidcProviderArn` instead of creating a second one if
+that provider already exists. Leave `GitHubRepo` blank and no CI role is created.
+
 **Then, as the deploy identity** (`aws sts get-caller-identity` should succeed),
 the rest of this guide applies. That identity needs to create DynamoDB, Lambda,
 SES, KMS, Cognito, API Gateway, SQS, SNS, EventBridge, Step Functions, S3,
@@ -85,16 +103,15 @@ CloudFront, Secrets Manager and IAM resources.
 ```bash
 npm install        # all workspaces
 npm run build      # tsc -b across packages/services/apps/infra
-npm test           # 734 tests (730 passing, 4 conditional skips), no AWS creds needed
-npm run test:web   # 37 component tests
+npm test           # the full suite; no AWS creds needed (4 conditional skips)
+npm run test:web   # component tests for the three SPAs
 ```
 
-`npm test` runs in-memory and against a real DynamoDB API (dynalite — no Java,
-no Docker). With LocalStack down that is 250 passing and 4 skipped: the SQS, KMS
-and EventBridge Scheduler adapter tests, plus a placeholder that exists **only**
-when LocalStack is unreachable. Bring up `docker-compose.localstack.yml` first
-and the total becomes 253, all passing — the placeholder is not registered, so
-the two totals never match.
+`npm test` runs in-memory and against a DynamoDB-compatible API (dynalite — no
+Java or Docker). Tests that require transaction or AWS-service semantics skip
+when LocalStack is unavailable. Bring up `docker-compose.localstack.yml` first
+to exercise native `TransactWriteItems`, SQS, KMS, and EventBridge Scheduler;
+CI does this on every run.
 
 > **The CDK tests are slow on purpose, and the obvious fix does not work.**
 > Roughly 8.5 seconds per test across 77 of them. The cause is `nodeModules:
@@ -162,9 +179,10 @@ Pass with `-c key=value` on `cdk deploy`, or add to `cdk.json` → `context`:
 > **Leave the two analytics flags off unless you are specifically testing them.**
 > They are opt-in, off by default, and demoted out of the core design by #64 —
 > not removed. Both carry standing cost well above the rest of the stack
-> combined. Concretely, on a `dev` synth: default is 357 resources / 29 Lambda
-> functions; `-c enableAnalytics=true -c enableOpenSearchMirror=true` is 399
-> resources / 33 Lambda functions, and emits three more stack outputs
+> combined. The exact counts are not quoted here — they were stale the last time
+> someone did. Synth both ways and compare: the default deploy, then
+> `-c enableAnalytics=true -c enableOpenSearchMirror=true`, which is
+> substantially larger and emits three more stack outputs
 > (`SegmentCollectionEndpoint`, `AnalyticsBucketName`,
 > `AnalyticsReplayFunctionName`). Neither flag is set
 > anywhere in the repo, and neither has a default value in `cdk.json`.
@@ -184,17 +202,42 @@ publishes to a topic with no subscribers: `npm run deploy:check` warns about
 exactly this before it inspects anything else, because a stack that ships 28
 alarms into a void *looks* monitored, which is worse than one with none.
 
+> **An email subscription must be confirmed, or it silently disappears.** With
+> `opsAlertEmail`, SNS sends that address a confirmation mail. Until someone
+> clicks the link the subscription is `PendingConfirmation` — and **SNS deletes
+> an unconfirmed subscription after three days**. CloudFormation is not told: the
+> stack still reports the resource `CREATE_COMPLETE`, so a later `cdk deploy`
+> finds nothing to change and the topic goes on paging nobody. This is not
+> hypothetical — it happened to this project's first deployment, and the
+> earlier `deploy:check` printed a reassuring `✓` throughout, because it read
+> the *config file* instead of the topic. It now reads the live subscription
+> counts and reports `✗ the ops topic has NO confirmed subscribers` instead.
+> Email is also the weakest on-call channel; prefer `opsAlertTopicArn` pointing
+> at a topic with confirmed subscribers you manage.
+
 ## 4. Deploy
 
-Deploy from the **repo root**, not from `infra/cdk`:
+Deploy from the **repo root**, not from `infra/cdk`, and **as the scoped deploy
+identity — never as the account root**:
 
 ```bash
+export AWS_PROFILE=addressium-deploy   # a profile that assumes addressium-<stage>-deployer
+
 npm run deploy         # deploy:check runs first — an && chain, not a hook
 
 # §5 — a SEPARATE command. `npm run deploy` ships Lambdas and CloudFormation
 # only; it leaves the three SPA bundles in S3 exactly as they were.
 ADDRESSIUM_PUBLIC_ORG_ID=<your-org-id> node scripts/publish-spas.mjs
 ```
+
+> **Root deploys are refused.** `deploy-check.sh` calls `sts:get-caller-identity`
+> and exits non-zero when the caller is the account root (`…:root`). Root has no
+> attributable deploy identity and no ceiling on blast radius, and on a machine
+> whose ambient credentials *are* root it is the path of least resistance — which
+> is why it takes a gate rather than an intention. Configure a profile that
+> assumes `addressium-<stage>-deployer`; the bootstrap stack prints the ARN and an
+> `AssumeCommand` output, and `~/.aws/config` needs only `role_arn` plus a
+> `source_profile`.
 
 > **`confirmUrlBase` has no usable default.** Omit it and every confirmation
 > email links to `https://your-site.example/confirm`, a domain you do not own —
@@ -707,8 +750,21 @@ Set `opsAlertTopicArn` (or `opsAlertEmail`) in config — see §3. If you suppli
 only an email, the `OpsAlertsTopicArn` output names the topic that was created
 for you; with your own ARN there is no such output.
 
-`deploy:check` (§4) warns when neither is set, and likewise when the WAF ARNs
-are unset. There is still no `doctor` command.
+**Confirm the subscription.** An email subscription stays `PendingConfirmation`
+until someone clicks the link SNS mails, and SNS deletes it after three days —
+silently, with the CloudFormation resource still reporting `CREATE_COMPLETE`
+(§3). Verify from AWS rather than from the stack:
+
+```bash
+aws sns get-topic-attributes --topic-arn <OpsAlertsTopicArn> \
+  --query 'Attributes.[SubscriptionsConfirmed,SubscriptionsPending]' --output text
+# expect a non-zero first value, not "0 0"
+```
+
+`deploy:check` (§4) now performs this check for you and refuses to print a clean
+bill of health when the topic has no confirmed subscribers. It also warns when
+neither target is set, and likewise when the WAF ARNs are unset. There is still
+no `doctor` command.
 
 ---
 
@@ -718,7 +774,8 @@ are unset. There is still no `doctor` command.
   own `AlertConfig.snsTopicArn` — operator-supplied already, per org — and a
   `halt`-level breach flips the campaign to `halted` so the sender stops. Set
   that topic when you provision the org; with none set, nothing is published.
-- **Infrastructure alarms.** 30 CloudWatch alarms in a default synth: the send
+- **Infrastructure alarms.** Every handler's errors and throttles in a default
+  synth (count from `cdk synth`, not from here): the send
   queue and events queue with their DLQs, errors and throttles across every
   handler, DynamoDB throttles and system errors, drip enrollments the confirm
   path swallowed (§4.6, #245), and campaign templates failing to render
@@ -773,7 +830,7 @@ are unset. There is still no `doctor` command.
   including AWS. Treat the bypass permission as break-glass and grant it
   deliberately. Set `auditRetentionYears` before the first deploy: it is stamped
   on every object written from then on and cannot be shortened afterwards.
-- **Logs.** 27 log groups, one per application handler, retention 90 days in
+- **Logs.** One group per application handler, retention 90 days in
   `prod` and **7 days in dev/staging** — keyed off the validated `stage` value
   (#190), so an unrecognised stage fails at synth rather than silently
   misconfiguring retention.
@@ -829,23 +886,27 @@ doing anything.
 
 ## 11. The first live deployment
 
-The stack is deployed to a disposable dev account (#212), has loaded its
-handlers, and has delivered mail to a controlled inbox. The 1.0 gate remains
-`npm run test:e2e` **passing**, and that suite has still never been run. The
-deploy steps below have been walked and their corrections are folded into §1–§6;
-the broader sender, event, and mailbox-provider paths remain written rather than
-observed. Everything below is the operator's part; on the code side the smoke
-suite is still written and waiting, while the deploy guard and the scoped policy
-have now been exercised by two real deploys (§4).
+This is the **operator's runbook** for standing up a disposable account and
+walking the public journey in it. What the dev deployment proved — and the
+defects that only a real AWS account surfaced — is recorded in
+[`ARCHITECTURE.md` §13](./ARCHITECTURE.md#13-status-what-is-proven-and-what-is-not);
+it is not restated here, because a status paragraph in a runbook goes stale
+silently and the runbook is read at exactly the moment that matters.
 
-> **What that first run cost, so you can budget for the second.** Ten bugs, none
-> visible to `npm test` or `cdk synth`, because they fail only against real AWS
-> APIs. Two classes are worth expecting again: **IAM boundary gaps**, which
-> surface as a deploy denied partway through, and **bundling failures**, which
-> are worse — the stack reaches `CREATE_COMPLETE` while every handler is dead on
-> arrival. Both are fixed, but the lesson generalizes: after a successful deploy,
-> **invoke the functions**. `CREATE_COMPLETE` is not evidence that any code runs.
-> `GET /version` returning 200 is a cheap first check and catches exactly this.
+The 1.0 gate is `npm run test:e2e` **passing**, and that suite has still never
+been run. The deploy steps below have been walked and their corrections folded
+into §1–§6; the broader sender, event, and mailbox-provider paths remain written
+rather than observed. The deploy guard and the scoped policy have been exercised
+by two real deploys (§4).
+
+> **Budget for the second run.** The first cost ten bugs, none visible to
+> `npm test` or `cdk synth`, because they fail only against real AWS APIs. Two
+> classes are worth expecting again: **IAM boundary gaps**, which surface as a
+> deploy denied partway through, and **bundling failures**, which are worse — the
+> stack reaches `CREATE_COMPLETE` while every handler is dead on arrival. Both
+> are fixed, but the lesson generalizes: after a successful deploy, **invoke the
+> functions**. `CREATE_COMPLETE` is not evidence that any code runs. `GET
+> /version` returning 200 is a cheap first check and catches exactly this.
 
 ### Use a dedicated, disposable account
 
@@ -916,6 +977,7 @@ every record with a "why" note for this reason.
 ### The run
 
 ```bash
+export AWS_PROFILE=addressium-deploy   # the gate refuses the account root
 npm run deploy        # deploy:check runs first — an && chain, not a hook
 ADDRESSIUM_PUBLIC_ORG_ID=<your-org-id> \
   node scripts/publish-spas.mjs   # the SPAs — `npm run deploy` skips them (§5)

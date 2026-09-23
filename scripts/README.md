@@ -27,12 +27,21 @@ aws cloudformation deploy \
   --template-file infra/bootstrap/addressium-bootstrap.yaml \
   --stack-name addressium-dev-bootstrap \
   --capabilities CAPABILITY_NAMED_IAM \
-  --parameter-overrides AdminEmail=you@example.com Stage=dev
+  --parameter-overrides AdminEmail=you@example.com Stage=dev \
+    GitHubRepo=<owner>/<repo>
 ```
 
 Prefer this because it is **state**, not a one-shot action. When a later release
 needs a new permission, that is a stack *update* — with a diff, a rollback, and a
 clean uninstall. A script can only create and hope.
+
+`GitHubRepo` is optional. Set it and the template also creates a GitHub Actions
+**OIDC provider** plus an `addressium-<stage>-ci-deployer` role trusted only for
+`repo:<owner>/<repo>:ref:refs/tags/v*` (tag builds only). Put the printed
+`CiDeployRoleArn` output into the `DEPLOY_ROLE_ARN` repository variable and the
+tagged release workflow deploys with no stored AWS key. Pass an existing
+`GitHubOidcProviderArn` instead of letting it create a second provider — an
+account allows only one per URL.
 
 Then finish the one step CloudFormation can't do (it is itself a stack):
 
@@ -147,6 +156,16 @@ allow everything **deployment** needs, which is a different and larger set:
   `BootstrapVersion` parameter (typed `AWS::SSM::Parameter::Value<String>`)
   through the **batch** API. Granting only the singular form fails in a way that
   reads as a bootstrap-version problem.
+- **`cloudformation:DescribeStacks` / `DescribeChangeSet` / `DeleteChangeSet`** —
+  `deploy-check.sh` talks to CloudFormation **directly**, not through CDK's
+  deploy role, to read the stack and inspect/clean up the change set it creates.
+  These were absent from the boundary while `DeployPolicy` already granted them,
+  so the gate died on its first call — and `npm run deploy` could only ever
+  succeed as an unbounded principal, which is why root became the normal way to
+  deploy. `ExecuteChangeSet` is deliberately **not** granted: the CDK deploy role
+  applies the change, so a bounded principal may inspect a change set but not
+  apply one. Adding an action here that the gate needs, but forgetting the
+  matching identity-policy grant, fails the same way in reverse.
 - **`events:*`** — the stack creates EventBridge rules.
 - **IAM role lifecycle** — the stack synthesizes 31 roles, one execution role per
   Lambda. That is the least-privilege payoff, not bloat, and it means the

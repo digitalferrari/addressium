@@ -16,7 +16,6 @@ import {
   memStores,
   CaptureSender,
   HmacConfirmationSigner,
-  SystemClock,
   JoseMagicLinkSigner,
   signup,
   confirmOptIn,
@@ -27,6 +26,7 @@ import {
   buildClickMap,
   redactToken,
   type EmailTemplate,
+  type Clock,
   provisionSubscriberAccount,
   type Stores,
 } from "@addressium/domain";
@@ -37,6 +37,14 @@ const ISS = "https://addressium.example/summit";
 const AUD = "northwindtimes.example";
 const KID = "test-key-1";
 const ARTICLE = "https://northwindtimes.example/markets/the-chart";
+
+class FrozenClock implements Clock {
+  private readonly instant = new Date();
+
+  now(): Date {
+    return new Date(this.instant);
+  }
+}
 
 const template: EmailTemplate = {
   blocks: [
@@ -54,7 +62,7 @@ function need<T>(v: T | undefined | null, msg: string): T {
 async function harness() {
   const stores = memStores();
   const sender = new CaptureSender();
-  const clock = new SystemClock();
+  const clock = new FrozenClock();
   const confirmSigner = new HmacConfirmationSigner("unit-test-secret");
   const { publicKey, privateKey } = await generateKeyPair("ES256");
   const jwk = { ...(await exportJWK(publicKey)), kid: KID, alg: "ES256", use: "sig" };

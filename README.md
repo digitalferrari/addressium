@@ -15,13 +15,10 @@ the same owner.
 > with sample data.
 
 > ### ⚠️ Status: pre-1.0, not production-ready
-> This is deployed to a disposable dev account (#212) — as of 2026-09-15 the
-> `addressium-dev` stack is current with `9c7c260`. The stack stands up, its
-> handlers load (bar two added in that roll-forward and not yet load-checked —
-> see [Status](#status)), an organization provisions, and mail has reached a
-> developer-controlled inbox. `npm run test:e2e` has still never run, and no
-> install has run for a day. See [Status](#status) before putting a real list
-> near it.
+> Deployed to a **disposable dev account only** — never to production, and no
+> install has run for a full day. `npm run test:e2e`, the only suite that
+> exercises AWS itself, **has never been run**. Read
+> [Status](#status) before putting a real list near it.
 
 ---
 
@@ -119,12 +116,13 @@ the build if one reappears.
                         (SES event dest) └───────────────┘
 ```
 
-**29 Lambda functions, 357 CloudFormation resources** — the default `dev` synth
-(`docs/DEPLOYMENT.md` §3), and the 29 is the figure the first real deployment
-invoked one by one. One function serves 54 admin routes; the unauthenticated
-functions stay separate because they hold genuinely different privileges —
-merging them would give one internet-facing function the union of "can create
-Cognito users", "can send mail", and "holds the webhook signing secret".
+**One router function serves the whole authenticated console**; the
+unauthenticated functions stay separate because they hold genuinely different
+privileges — merging them would give one internet-facing function the union of
+"can create Cognito users", "can send mail", and "holds the webhook signing
+secret". For the current function and resource counts, synth the stack
+(`docs/DEPLOYMENT.md` §3); they are deliberately not quoted here, because the
+numbers that used to be were already stale at the commit they described.
 
 ### Why each service
 
@@ -177,9 +175,11 @@ This creates a deploy identity that can deploy and operate addressium **and
 nothing else**, constrained by a permissions boundary. Admin credentials never
 have to be handed to a pipeline, a teammate, or an agent.
 
-**Then, as the deployer:**
+**Then, as the deployer** (a scoped role, **not** the account root — `deploy:check`
+refuses root):
 
 ```bash
+export AWS_PROFILE=addressium-deploy   # profile assuming addressium-<stage>-deployer
 npm install
 npm run build
 npm run deploy          # deploy:check runs first — an && chain, not a hook
@@ -209,7 +209,7 @@ Details: [`scripts/README.md`](scripts/README.md) ·
 ## Upgrades
 
 ```bash
-npm test                # 724 tests; 720 pass, 4 skip without LocalStack
+npm test                # full Node suite; LocalStack-only cases skip if unavailable
 npm run deploy:check    # dry run — refuses anything that would destroy data
 npm run deploy          # in place; CloudFormation rolls back on failure.
                         # API/infra ONLY — does not publish the SPAs.
@@ -330,13 +330,13 @@ and DynamoDB in production, with no rewrite.
 
 ## Development
 
-Node 20+, npm workspaces.
+Node 22+, npm workspaces.
 
 ```bash
 npm install
 npm run build
-npm test          # 724 tests: in-memory + real DynamoDB API via dynalite
-                  # 720 pass; 4 skip without LocalStack
+npm test          # in-memory + DynamoDB API integration coverage
+                  # LocalStack-only cases skip when its container is unavailable
 npm run test:web  # component tests for the three SPAs
 npm run dev       # the API on :4000 over dynalite — no AWS, no credentials
 npm run test:e2e  # the live smoke suite (needs a real account — never yet run;
@@ -370,91 +370,21 @@ call.
 
 ## Status
 
-**Honest state, because a README that reads "done" is worse than useless:**
+**Pre-1.0. Deployed to a disposable dev account; never to production. Do not
+migrate a real list onto it yet.**
 
-- **It is deployed to a dev account** (#212) — not to production. As of
-  **2026-09-15** the live `addressium-dev` stack (us-east-1) is **current with
-  `9c7c260`**, which is also where `origin/main` points; 95 API routes are live
-  and all three SPAs are published. Two handlers added in that deploy
-  (`TrendsFn`, `SeriesReportFn`) have **not** had their module-load health
-  verified — see the ESM-bundling bugs below for why that is not a formality.
-  The stack stands up, the handlers checked at the first deploy load, `POST /orgs` provisions a real SES identity,
-  and a developer has received mail sent through it. It surfaced
-  **ten bugs that neither `npm test` nor `cdk synth` could see**, because they
-  fail only against real AWS APIs. Two of them produced a stack reporting
-  CREATE_COMPLETE with every handler dead on arrival — the ESM bundling pair in
-  commit `401b64f`. Assume the same class of defect still hides behind every
-  step this deployment did not reach.
-- **What that deployment has not yet proven:** a recurring campaign, a real
-  bounce, a mailbox provider's one-click POST, or `npm run test:e2e`. Reaching
-  one controlled inbox does not establish the broader DNS and deliverability
-  posture.
-- What `npm test` *can* now see is much wider than it was: `npm run dev` runs the
-  full public journey — signup → confirmation mail → confirm → send → one-click
-  unsubscribe — against the **real** SES/SQS/Scheduler adapters, over local
-  stand-ins spoken to over the wire. It has already caught two live defects.
-- What it still cannot see is anything where **AWS itself** has to behave: SES
-  publishing to SNS, a real SES-shaped event payload, a mailbox provider issuing
-  the one-click POST, a real Cognito JWT, EventBridge firing on consecutive days,
-  real bounces tripping the halt gate. `npm run test:e2e` is written for exactly
-  those and **has never been run**.
-- `deploy:check` gates every deploy, fails **closed** on a change-set shape it
-  cannot interpret, and has now run against real CloudFormation on both a create
-  and an update (the 2026-09-15 roll-forward to `9c7c260`) — neither of which had
-  a data-holding resource to replace. The replacement
-  path it exists for is still fixture-only. It had also **never once run** before
-  that deploy: it was wired as an npm `predeploy` hook, which does not fire under
-  `ignore-scripts=true`, and npm reports nothing when it skips one. It is an `&&`
-  chain in the `deploy` script now, which no config can disable.
-- **Migration/version and release notification support is implemented and now
-  deployed.** The deploy-time runner writes the marker after successful ordered
-  migrations, and a tagged CI release publishes GitHub release notes. Live
-  confirmation has now happened: `GET /version` returns `inSync: true` with a
-  `deployedAt` stamp (2026-09-15).
-- **Custom domains and automated SPA publishing are implemented but not
-  configured.** `adminCustomDomain` / `publicCustomDomain` accept a hostname;
-  CDK requests ACM DNS validation and outputs the CloudFront targets for
-  Cloudflare. `scripts/publish-spas.mjs` builds and publishes all three SPAs
-  from stack outputs, but it is wired only into `.github/workflows/ci.yml` — a
-  local `npm run deploy` does **not** run it, so publishing is a manual second
-  step outside CI. Actual hostnames and the operator's Cloudflare record changes
-  are intentionally still required.
-- **`apps/subscriber-web` and `apps/public-web` share one bucket**, kept apart
-  only by a Vite `base`: subscriber-web owns `/` because outgoing mail links at
-  `/confirm` and `/unsubscribe` resolve there, and public-web lives under
-  `/signup/` with its `embed.js`. Delete that `base` and both build to `/`, where
-  whichever syncs last silently overwrites the other's `index.html`. Publishing
-  is handled by `scripts/publish-spas.mjs`, which **`npm run deploy` does not
-  invoke** — run it explicitly with `ADDRESSIUM_PUBLIC_ORG_ID` set. See
-  [`docs/DEPLOYMENT.md` §5](docs/DEPLOYMENT.md).
-- **A sending domain cannot be corrected after the fact.** There is no
-  update-org route in the API or the console, and provisioning returns early on
-  `alreadyExisted`, so a typo means creating a new org under a different name —
-  the org id is slugified from the name.
-- **Bulk export returns inline rather than streaming to S3.** Fine for an
-  ordinary list; an org large enough to exceed a Lambda response is exactly the
-  org most likely to be migrating.
-- The importer reads a real Pinpoint export **through the field mapper** — a
-  verified sample is CSV with 73 dotted columns (`Address`, `EndpointStatus`,
-  `OptOut`, `Attributes.*`, `User.UserAttributes.*`), and list membership rides
-  in the `Attributes.*` columns as `true`/`false`/empty where empty means *never
-  asked*. A Pinpoint export JOB's **gzipped JSON Lines** is also read (#239) —
-  flattened to the same dotted columns, so one mapper serves both — and a saved
-  mapping is not yet re-offered on the next file with the same headers.
-- The audit writer is implemented (WORM-safe `Put` only) and privileged routes
-  call it, and the current dev deployment (`9c7c260`) now includes it — but no
-  real audit object has been observed yet; that remains unverified.
+The full, maintained picture — what the dev deployment proved, what it did not,
+and the defects that only a real AWS account surfaced — lives in one place:
+[`docs/ARCHITECTURE.md` §13](docs/ARCHITECTURE.md#13-status-what-is-proven-and-what-is-not).
 
-**1.0 is gated on** `npm run test:e2e` passing against a real AWS account and one
-install running for 30 days. Neither has happened. The dev deployment established
-that the stack stands up and can deliver mail to a controlled inbox; it does not
-yet establish the real-AWS paths the smoke suite covers.
+It is *not* restated here. This section used to carry its own copy, as did
+`DEPLOYMENT.md`, `SECURITY.md` and `DESIGN-COMPENDIUM.md` — five copies that
+every deploy invalidated at once and none of which got updated, so they ended up
+disagreeing with each other and with reality.
 
-The runbook, now amended by what that deployment actually hit, is in
-[`docs/DEPLOYMENT.md` §11](docs/DEPLOYMENT.md).
-
-Do not migrate a real list onto this yet. A mail system with only controlled dev
-sends can still cost you a sending reputation that takes months to rebuild.
+The headline, if you read nothing else: `npm run test:e2e` (the only suite that
+exercises AWS itself) **has never been run**, and 1.0 is gated on it passing
+against a real account plus one install running for 30 days.
 
 ## License
 

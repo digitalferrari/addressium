@@ -53,7 +53,15 @@ test("a real lastUsedAt is rendered, and it comes from the server", async () => 
   render(<ApiKeys org="acme" grant={ADMIN} />);
   const row = await screen.findByRole("row", { name: /Billing entitlement sync/ });
   expect(within(row).queryByText("Never")).toBeNull();
-  expect(within(row).getByText(new RegExp(new Date("2026-01-02T03:04:05.000Z").getFullYear().toString()))).toBeInTheDocument();
+  // Assert the rendered timestamp itself rather than `.getByText(/2026/)`.
+  // That year regex matched BOTH this cell and the Created cell whenever the
+  // runner's timezone put the two fixtures in the same year — and CI runs UTC,
+  // where the created fixture (2026-01-01T00:00:00Z) renders as 1/1/2026, so
+  // the query found two elements and threw. Locally (UTC-7) the same instant
+  // rendered as 12/31/2025, the year was unique, and it passed. Both sides here
+  // go through the same formatter in the same process, so the expectation is
+  // timezone-independent.
+  expect(row).toHaveTextContent(new Date("2026-01-02T03:04:05.000Z").toLocaleString());
 });
 
 test("the plaintext is shown once at creation and never again", async () => {

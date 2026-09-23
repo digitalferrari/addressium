@@ -20,35 +20,116 @@
 #
 set -euo pipefail
 
-STAGE="${STAGE:-dev}"
-REGION="${AWS_REGION:-us-east-1}"
 NAME_PREFIX="addressium"
 KEEP_CHANGE_SET="no"
 
+# Stage and region are NOT defaulted here any more. They are read from the same
+# file `cdk deploy` reads, so the stack this gate inspects is the stack the
+# deploy will touch. An explicit --stage/--region (or STAGE / AWS_REGION) that
+# CONTRADICTS that file is refused rather than silently honoured — otherwise the
+# gate happily reports "safe to deploy" for addressium-dev while `cdk deploy`
+# replaces the table behind addressium-prod.
+STAGE_FLAG=""
+REGION_FLAG=""
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --stage)  STAGE="$2"; shift 2 ;;
-    --region) REGION="$2"; shift 2 ;;
+    --stage)  STAGE_FLAG="$2"; shift 2 ;;
+    --region) REGION_FLAG="$2"; shift 2 ;;
     --keep)   KEEP_CHANGE_SET="yes"; shift ;;
     -h|--help) sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
 done
 
-STACK="${NAME_PREFIX}-${STAGE}"
-# Change-set names must be unique per attempt and match [a-zA-Z][-a-zA-Z0-9]*.
-CHANGE_SET="addressium-check-$$"
-
 # The script is invoked from the repo root (npm's deploy:check / predeploy),
 # but `cdk` only works where cdk.json lives. Anchor everything so a direct
 # invocation from any directory behaves the same.
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 CDK_DIR="$ROOT/infra/cdk"
+CFG="$CDK_DIR/addressium.config.json"
 
 say()  { printf '\n\033[1m==> %s\033[0m\n' "$*"; }
 info() { printf '    %s\n' "$*"; }
 fail() { printf '\033[31m    ✗ %s\033[0m\n' "$*"; }
 ok()   { printf '\033[32m    ✓ %s\033[0m\n' "$*"; }
+warn() { printf '\033[33m    ! %s\033[0m\n' "$*"; }
+
+json_field() {
+  python3 -c "
+import json,sys
+try:
+    print(json.load(open(sys.argv[1])).get(sys.argv[2],'').strip())
+except Exception:
+    print('')
+" "$1" "$2" 2>/dev/null || echo ""
+}
+
+say "Resolving the stack to check"
+
+CFG_STAGE=""
+CFG_REGION=""
+if [[ -f "$CFG" ]]; then
+  CFG_STAGE="$(json_field "$CFG" stage)"
+  CFG_REGION="$(json_field "$CFG" region)"
+fi
+
+# Precedence: explicit flag > environment variable > config file > default.
+STAGE="${STAGE_FLAG:-${STAGE:-}}"
+REGION="${REGION_FLAG:-${AWS_REGION:-}}"
+
+if [[ -n "$CFG_STAGE" ]]; then
+  if [[ -n "$STAGE" && "$STAGE" != "$CFG_STAGE" ]]; then
+    fail "--stage ${STAGE} contradicts stage \"${CFG_STAGE}\" in ${CFG}"
+    fail "cdk deploy reads its stage from that file, so this check would inspect"
+    fail "stack ${NAME_PREFIX}-${STAGE} while the deploy replaces ${NAME_PREFIX}-${CFG_STAGE}."
+    fail "Change the config, or drop the override to check what will actually be deployed."
+    exit 2
+  fi
+  STAGE="$CFG_STAGE"
+fi
+
+if [[ -n "$CFG_REGION" ]]; then
+  if [[ -n "$REGION" && "$REGION" != "$CFG_REGION" ]]; then
+    fail "--region ${REGION} contradicts region \"${CFG_REGION}\" in ${CFG}"
+    fail "the change set would be inspected in ${REGION} while the deploy happens in ${CFG_REGION}."
+    fail "Change the config, or drop the override to check what will actually be deployed."
+    exit 2
+  fi
+  REGION="$CFG_REGION"
+fi
+
+if [[ -z "$CFG_STAGE" || -z "$CFG_REGION" ]]; then
+  warn "no stage/region in ${CFG} — falling back to stage=${STAGE:-dev} region=${REGION:-us-east-1}."
+  warn "cdk deploy cannot run without that file, so this check is not gating a real deploy."
+fi
+
+STAGE="${STAGE:-dev}"
+REGION="${REGION:-us-east-1}"
+
+STACK="${NAME_PREFIX}-${STAGE}"
+# Change-set names must be unique per attempt and match [a-zA-Z][-a-zA-Z0-9]*.
+CHANGE_SET="addressium-check-$$"
+
+info "stack ${STACK} in ${REGION} (from ${CFG##*/})"
+
+# Refuse to run as the account root. Root has no CloudTrail-attributable deploy
+# identity and an unbounded blast radius, and on many machines the ambient
+# credentials resolve to it. Everything below assumes a scoped principal.
+say "Checking the deploy identity"
+CALLER_ARN="$(aws sts get-caller-identity --query Arn --output text 2>/dev/null || echo "")"
+if [[ -z "$CALLER_ARN" || "$CALLER_ARN" == "None" ]]; then
+  fail "no usable AWS credentials — cannot check the change set or deploy."
+  exit 1
+fi
+if [[ "$CALLER_ARN" == *":root" ]]; then
+  fail "these credentials are the ACCOUNT ROOT: ${CALLER_ARN}"
+  fail "root has unrestricted access and no attributable deploy identity."
+  fail "Deploy as the scoped role instead:"
+  fail "  AWS_PROFILE=addressium-deploy npm run deploy"
+  exit 1
+fi
+ok "deploying as ${CALLER_ARN##*/}"
 
 cleanup() {
   if [[ "$KEEP_CHANGE_SET" == "no" ]]; then
@@ -59,25 +140,62 @@ cleanup() {
 }
 trap cleanup EXIT
 
-warn() { printf '\033[33m    ! %s\033[0m\n' "$*"; }
-
 # Exposure preflight (#222). Not a data-safety check, so it warns rather than
 # refusing — but a stack that ships 26 alarms into a topic with no subscribers
 # LOOKS monitored, which is worse than one with no alarms at all.
 say "Checking alert routing"
-CFG="$CDK_DIR/addressium.config.json"
 if [[ -f "$CFG" ]]; then
-  OPS_ARN="$(python3 -c "import json,sys;print(json.load(open('$CFG')).get('opsAlertTopicArn','').strip())" 2>/dev/null || echo "")"
-  OPS_EMAIL="$(python3 -c "import json,sys;print(json.load(open('$CFG')).get('opsAlertEmail','').strip())" 2>/dev/null || echo "")"
+  OPS_ARN="$(json_field "$CFG" opsAlertTopicArn)"
+  OPS_EMAIL="$(json_field "$CFG" opsAlertEmail)"
+
+  # A configured target is not a working one. An SNS email subscription starts
+  # PENDING; if nobody clicks the confirmation mail, SNS deletes it after three
+  # days. After that the topic pages nobody while the config still reads as
+  # though it does — which is exactly what happened on 2026-09-17. So ask the
+  # live topic, not the file.
+  RESOLVED_TOPIC=""
   if [[ -n "$OPS_ARN" ]]; then
-    ok "alarms publish to your topic: ${OPS_ARN}"
+    RESOLVED_TOPIC="$OPS_ARN"
   elif [[ -n "$OPS_EMAIL" ]]; then
-    ok "alarms publish to a created topic subscribed by ${OPS_EMAIL}"
-  else
+    # Read the stack OUTPUT rather than walking StackResources: that call pages
+    # at 100 items and this stack is much larger, so a resource lookup silently
+    # reports "not found" for anything past the first page. The output is exact.
+    RESOLVED_TOPIC="$(aws cloudformation describe-stacks \
+      --stack-name "$STACK" --region "$REGION" \
+      --query "Stacks[0].Outputs[?OutputKey=='OpsAlertsTopicArn'].OutputValue | [0]" \
+      --output text 2>/dev/null || echo "")"
+  fi
+
+  if [[ -z "$OPS_ARN" && -z "$OPS_EMAIL" ]]; then
     warn "no opsAlertTopicArn and no opsAlertEmail — every CloudWatch alarm will"
     warn "publish to a topic with NO subscribers. A stuck send queue, a filling"
     warn "dead-letter queue, or a failing bounce handler will page nobody."
     warn "Set one of them in ${CFG}."
+  elif [[ -z "$RESOLVED_TOPIC" || "$RESOLVED_TOPIC" == "None" ]]; then
+    if aws cloudformation describe-stacks --stack-name "$STACK" --region "$REGION" >/dev/null 2>&1; then
+      warn "alert target configured, but ${STACK} exposes no OpsAlertsTopicArn output."
+      warn "Alerting cannot be verified against a topic this script cannot find."
+    else
+      warn "alert target configured in ${CFG}, but ${STACK} does not exist yet."
+      warn "The topic and its subscription are created with the first deploy."
+    fi
+  else
+    ATTRS="$(aws sns get-topic-attributes --topic-arn "$RESOLVED_TOPIC" --region "$REGION" \
+      --query 'Attributes.[SubscriptionsConfirmed,SubscriptionsPending]' --output text 2>/dev/null || echo "")"
+    CONFIRMED="$(printf '%s' "$ATTRS" | awk '{print $1}')"
+    PENDING="$(printf '%s' "$ATTRS" | awk '{print $2}')"
+    if [[ -z "$CONFIRMED" ]]; then
+      warn "could not read the ops topic (${RESOLVED_TOPIC}) — alerting unverified."
+    elif [[ "$CONFIRMED" == "0" ]]; then
+      fail "the ops topic has NO confirmed subscribers — every alarm pages nobody."
+      if [[ "${PENDING:-0}" != "0" ]]; then
+        fail "${PENDING} subscription(s) PENDING: the confirmation mail was never"
+        fail "clicked. SNS deletes an unconfirmed subscription after 3 days."
+      fi
+      fail "topic: ${RESOLVED_TOPIC}"
+    else
+      ok "alarms reach ${CONFIRMED} confirmed subscriber(s) on the ops topic"
+    fi
   fi
 
   # Edge protection is the operator's (#225). The stack no longer creates a

@@ -1,5 +1,5 @@
 /**
- * Persona fixtures — the test actors documented in PERSONAS.md.
+ * Persona fixtures — the test actors documented in ../PERSONAS.md.
  *
  * A persona is a PERSON WITH DUTIES; a grant is (role x org scope). Several
  * personas share one grant on purpose: a sales rep and a marketing analyst are
@@ -54,7 +54,7 @@ export interface StaffClaims {
 export interface Persona {
   /** Stable key used by tests and by the review-log filenames. */
   id: string;
-  /** Display name — the person, as PERSONAS.md describes them. */
+  /** Display name — the person, as ../PERSONAS.md describes them. */
   name: string;
   /** Job title / duty, which is what distinguishes personas sharing a grant. */
   job: string;

@@ -4,16 +4,16 @@
 > multi-tenant boundaries. Every control here maps to a **public, named
 > standard** so it can be independently reviewed — nothing bespoke.
 
-- **Status:** Design-level, tracking
-  [`DESIGN-COMPENDIUM.md`](./DESIGN-COMPENDIUM.md) revision 2. Deployed to a dev
-  account only (`addressium-dev`, us-east-1, current with `9c7c260` as of
-  2026-09-15); never to production. Almost every control below is asserted from
-  the source and the synthesized template rather than probed on the running
-  stack — the exceptions are input-validation error redaction and the
-  `deploy:check` preflight, both exercised live on 2026-09-15. Where r2 decided a control that the CDK does
-  not yet build, it carries the inline tag **[Decided r2 — not yet built]**.
-  Read an untagged control as present in the synthesized stack today, and a
-  tagged one as a decision, not a protection you currently have.
+- **Status:** Design-level. Deployed to a disposable dev account only, never to
+  production — **deployment status lives in one place**,
+  [`ARCHITECTURE.md`](./ARCHITECTURE.md) §13, and is deliberately not restated
+  here (it used to be, in five documents at once, and they drifted apart).
+  Almost every control below is asserted from the **source and the synthesized
+  template** rather than probed on a running stack; §13 names the exceptions.
+  Where r2 decided a control the CDK does not yet build, it carries the inline
+  tag **[Decided r2 — not yet built]**. Read an untagged control as present in
+  the synthesized stack today, and a tagged one as a decision, not a protection
+  you currently have.
 - **Companion docs:** [`ARCHITECTURE.md`](./ARCHITECTURE.md) (system design),
   [`../SECURITY.md`](../SECURITY.md) (how to report a vulnerability).
 - **Audience:** contributors, security reviewers, and operators self-hosting
@@ -657,33 +657,49 @@ first-class control:
   least-privilege; **OIDC to AWS** (no static deploy keys). The `deploy` job runs
   only on `refs/tags/v*`, requests `id-token: write`, and assumes the
   `DEPLOY_ROLE_ARN` repo variable's role via `configure-aws-credentials`.
-  Create that role once with a GitHub OIDC provider
-  (`token.actions.githubusercontent.com`) and a trust policy that restricts
-  `sub` to `repo:<owner>/<repo>:ref:refs/tags/v*`; grant it only the CDK
-  deploy permissions. No branch/PR run can assume it.
+  The `GitHubRepo` bootstrap parameter creates that role once with a GitHub OIDC
+  provider (`token.actions.githubusercontent.com`) and a trust policy restricting
+  `sub` to `repo:<owner>/<repo>:ref:refs/tags/v*`, with only the CDK deploy
+  permissions and the same permissions boundary. No branch/PR run can assume it.
 - **Dependabot/Renovate**, **CodeQL**, and **secret scanning** enabled.
 
-### One accepted advisory
+### No accepted high or critical advisories
 
-`npm audit` reports **GHSA-mh99-v99m-4gvg** (`brace-expansion` DoS via unbounded
-expansion) with **no fix applied**, deliberately. It reaches us only as a
-dependency that `aws-cdk-lib` **bundles** inside its own `minimatch`, and npm
-cannot patch a bundled dep: an `overrides` entry was tried and reverted (it
-deletes the bundled copy and breaks CDK synth outright), and re-verified on
-npm 11.17 (2026-07), where the override simply never takes effect — no 5.0.8
-is installed and the bundled 5.0.7 stays. The latest release,
-aws-cdk-lib@2.262.2, still bundles the vulnerable copy.
+**There are none.** The previous revision of this section accepted
+**GHSA-mh99-v99m-4gvg** (a `brace-expansion` DoS) on reachability grounds: it
+arrived only as a dependency `aws-cdk-lib` **bundles** inside its own
+`minimatch`, npm cannot patch a bundled dep, and an `overrides` entry was tried
+and reverted because it deletes the bundled copy and breaks synth.
 
-Accepting it is defensible on reachability: `aws-cdk-lib` appears in
-`infra/cdk` and **nowhere else** — no deployed service depends on it, so the
-code is absent from every Lambda. The only thing that ever evaluates those globs
-is `cdk synth` on a maintainer's machine or in CI, over stack definitions from
-this repository. There is no path from an untrusted input to it.
+That reasoning was sound but the conclusion expired. **Two things changed, and
+both are now fixed rather than accepted:**
 
-**Dependabot alert #17 (CVE-2026-14257) is dismissed as tolerable risk**
-(2026-07) citing this section. It clears when aws-cdk-lib ships a release
-bundling a patched `minimatch`. Re-check on each CDK bump rather than
-suppressing the warning.
+- `aws-cdk-lib` `2.270.0` bundles `brace-expansion@5.0.9`, which patches *both*
+  `GHSA-mh99-v99m-4gvg` and the later `GHSA-rgw5-rvv9-x895` — the second
+  advisory landed against the same package, so the old single-advisory allowlist
+  would have blocked the build anyway. The dependency range is now `^2.270.0`.
+- `nanoid` was pinned at `3.3.16` by the lockfile while `postcss` accepts
+  `^3.3.16`; a lockfile refresh to `3.3.19` fixes it with no override at all.
+
+Verified rather than assumed: `cdk synth` at the new version produces a template
+with the **same 387 resources and the same resource-type counts**, and the only
+diffs are Lambda asset hashes (they fold in the CDK version) and the
+`CDKMetadata` block. No infrastructure change.
+
+`scripts/audit-dependencies.mjs` still supports a narrowly-scoped exception — it
+is tied to a specific GHSA *and* requires every affected node to sit inside the
+`node_modules/aws-cdk-lib` subtree, so the same package in application code
+still fails. It currently has nothing to accept. If an advisory must be accepted
+in future, record the reachability argument **and a re-check trigger** here;
+"accepted" without an expiry condition is how the previous entry became wrong
+while still reading authoritative.
+
+The remaining `npm audit` output is 5 **moderate** advisories (below the gate's
+high/critical threshold): `sanitize-html`, `vitest`, `@vitest/mocker`, `fflate`
+and `@smithy/middleware-compression`. `sanitize-html` is the one worth watching
+— it is the allowlist sanitizer behind `sanitizeEmailHtml` — and its advisory is
+an SVG SMIL scheme-policy bypass that our allowlist does not admit SVG through.
+
 - Branch protection + required review; maintainer **2FA**.
 - Public trust signals: **OpenSSF Scorecard** + **Best Practices Badge**.
 - Coordinated disclosure per [`../SECURITY.md`](../SECURITY.md).
@@ -752,6 +768,10 @@ A living checklist mapped to our controls (full ASVS tracked separately):
   history cannot be rewritten (#29). The *mode* is a separate open item, below.
 - ~~CI: pin all actions to SHAs, wire OIDC-to-AWS deploy role.~~ **Done** —
   every `uses:` pinned by SHA; OIDC `deploy` job assumes a scoped role on tags (#27).
+  The AWS side was aspirational until 2026-09-18, when the `GitHubRepo`
+  bootstrap parameter actually created the provider and the
+  `addressium-<stage>-ci-deployer` role and `DEPLOY_ROLE_ARN` was set. The tagged
+  deploy path is **wired but not yet exercised** — no release has run it.
 - ~~Switch the audit bucket's Object Lock from COMPLIANCE to GOVERNANCE.~~
   **Done** (#9 **[CHANGED r2]**, #219) — the CDK now sets
   `ObjectLockRetention.governance(...)`, verified as `Mode: GOVERNANCE` in a

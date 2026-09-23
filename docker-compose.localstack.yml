@@ -7,7 +7,7 @@ services:
     ports:
       - "4566:4566"
     environment:
-      - SERVICES=sqs,kms,scheduler,ses
+      - SERVICES=dynamodb,sqs,kms,scheduler,ses
       - DEBUG=0
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:4566/_localstack/health"]

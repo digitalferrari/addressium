@@ -19,6 +19,20 @@ test("strips scripts, event handlers, and javascript:/data: URLs", () => {
   assert.match(clean, /<p>hi<\/p>/); // benign text survives
 });
 
+test("raw-text and SVG animation sanitizer bypasses stay unreachable", () => {
+  // Regression coverage for the sanitize-html advisory families fixed in
+  // 2.17.3-2.17.7. Email HTML deliberately permits none of textarea, xmp, SVG,
+  // animate or set, so future allowlist expansion must confront these payloads.
+  const dirty =
+    `<textarea></textarea/><img src=x onerror=alert(1)>` +
+    `<xmp><svg><script>alert(2)</script></svg></xmp>` +
+    `<svg><a><animate attributeName="href" values="#safe;javascript:alert(3)"></animate></a></svg>`;
+  const clean = sanitizeEmailHtml(dirty);
+
+  assert.doesNotMatch(clean, /<(?:textarea|xmp|svg|animate|script)\b/i);
+  assert.doesNotMatch(clean, /(?:onerror|javascript:)/i);
+});
+
 test("keeps the tables, inline styles, links and images email needs", () => {
   const html = `<table cellpadding="0"><tr><td style="color:#333" align="center">` +
     `<a href="https://x.example/a" data-linkid="l0">Read</a>` +

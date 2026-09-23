@@ -279,10 +279,12 @@ serves all three flows.
 
 API Gateway HTTP API → Lambda. Two authorizer scopes:
 
-- **Admin routes**: Cognito JWT authorizer. 48 routes carry it; 44 of those are
-  the admin-console routes, which all dispatch through **one** router function
-  (§9.4).
-- **Public routes**: 15 route keys (13 paths) with no auth — signup, batch
+- **Admin routes**: Cognito JWT authorizer. The admin-console routes all
+  dispatch through **one** router function (§9.4) — `services/api` is not one
+  Lambda per route. The route counts are asserted by
+  `packages/integration-tests/test/route-parity.test.ts` rather than restated
+  here, because the numbers in this paragraph had drifted.
+- **Public routes**: no auth — signup, batch
   signup, confirm, unsubscribe (GET+POST), version, public list, public
   branding, the JWKS endpoint, the public directory, the three
   preference-centre routes (#74), and the two HMAC-signed webhooks. They are
@@ -2084,10 +2086,11 @@ Lambda throttles.
 imports no AWS SDK, so the full business logic runs against in-memory adapters,
 and the integration suite runs the whole journey — signup → double opt-in → send
 → open/click → click map — against a real DynamoDB API via dynalite, with no Java
-or Docker. `docker-compose.localstack.yml` un-skips three adapter tests (SQS,
-KMS, EventBridge Scheduler) for anyone who wants them. The suite's fourth skip is
-a placeholder that is only registered when LocalStack is *unreachable*, so it is
-never un-skipped — it disappears instead, and the total drops from 734 to 733.
+or Docker. `docker-compose.localstack.yml` adds the service semantics dynalite
+cannot provide: native `TransactWriteItems`, SQS, KMS, and EventBridge
+Scheduler. CI starts that environment on every run, so the transactional event
+counter and idempotency path cannot silently fall back to the dynalite-only
+test mode.
 
 **`npm run dev` — the API on a port, no AWS** (compendium #61, #232).
 `scripts/dev-server.mjs` starts an HTTP server on :4000 that mounts the **same
@@ -2180,12 +2183,19 @@ addressium/
     ├── DEPLOYMENT.md         # deploy/operate runbook
     ├── DESIGN-COMPENDIUM.md  # service inventory + decisions
     ├── SECURITY.md           # threat model + controls
-    ├── REVIEW-FINDINGS.md    # the full-codebase review, with re-verification
     └── reporting/queries.sql # opt-in analytics-tier queries
 ```
 
-**`services/api` is one router, not 44 functions.** This design originally implied
-a Lambda per route; the build collapsed all **44 authenticated console routes**
+Persona fixtures and their definitions live with the tests that assert them:
+`packages/integration-tests/PERSONAS.md`, `PERSONA-ACCOUNTS.md` and
+`test/personas.ts`. They were under `docs/` and moved — they describe
+fixtures, so they belong beside them, and a review *run* (as opposed to the
+definitions) is a point-in-time artifact that belongs in an issue rather than in
+the repo.
+
+**`services/api` is one router, not one Lambda per route.** This design
+originally implied a function per route; the build collapsed the authenticated
+console routes
 into a single **AdminApiFn** dispatching on `routeKey`, with a build-time parity
 test asserting that the CDK's route list and the handler's dispatch table agree.
 The unauthenticated handlers stay separate **on purpose** — they hold genuinely
@@ -2356,72 +2366,192 @@ degrades to the normal wall.
 
 ---
 
-## 13. What is not yet proven
+## 13. Status: what is proven, and what is not
 
 A design document that reads "done" is worse than useless. Everything above
-describes the target; this is the part that is still unearned. It mirrors
-[`DESIGN-COMPENDIUM.md`](./DESIGN-COMPENDIUM.md) §9.
+describes the target; this section is the part that is still unearned.
 
-- **Deployed to a dev account** (#212); never to production. Current with
-  `9c7c260` as of 2026-09-15. The deployment
-  confirmed that the stack applies, that the handlers present at the first
-  deploy load, and that mail can reach a controlled inbox. `TrendsFn` and
-  `SeriesReportFn`, added in the 2026-09-15 roll-forward, have not had their
-  module-load health checked. Every count,
-  alarm, and most wiring claim in this document
-  is still read from a **synthesized CloudFormation template** rather than from
-  a running system — a narrower fact than the template being *right*. It
-  surfaced ten defects invisible to both `npm test` and `cdk synth`; two of them
-  produced a stack at `CREATE_COMPLETE` in which none of the 29 handlers could
-  load, so even "it deployed" does not imply "it runs".
-- **The event plane was dead at three independent layers** until recently, and a
-  fourth surfaced on the first real deploy: the KMS key policy granted SES
-  nothing, so publishing to the **encrypted** `SesEventsTopic` failed at the
-  encryption step even though `sns:Publish` was correctly granted (#208). Two
-  grants are needed, not one. The fix is verified against a live account for org
-  provisioning and controlled mail delivery but **not against real bounce or
-  complaint traffic** — until a real bounce arrives from a real mailbox provider,
-  treat that portion of §4.5 as designed rather than demonstrated.
+**This is the single home for deployment status.** It used to be restated in the
+README, `DEPLOYMENT.md`, `SECURITY.md` and `DESIGN-COMPENDIUM.md` §9 as well —
+five copies that every deploy invalidated at once and none of which got updated,
+so they disagreed with each other and with reality. If you need to say what is
+proven, say it *here* and link to it from anywhere else. The operator-facing
+runbook for a live deployment is [`DEPLOYMENT.md`](./DEPLOYMENT.md) §11.
+
+### 13.1 Where it stands
+
+**Deployed to a disposable dev account** (#212), us-east-1, as of 2026-09-15 at
+`9c7c260`. **Never to production.** No install has run for a full day. The
+deployment confirmed the stack applies, that the handlers present at the first
+deploy load, that `POST /orgs` provisions a real SES identity, and that mail
+reaches a developer-controlled inbox.
+
+**What this build does not establish**, and the reason the label is pre-1.0:
+
+- `npm run test:e2e` **has never been run**. It is written, and it is the only
+  thing that exercises AWS itself: SES publishing to SNS, a real SES-shaped
+  event payload, a mailbox provider issuing the one-click POST, a real Cognito
+  JWT, EventBridge firing on consecutive days, real bounces tripping the halt
+  gate. Every one of those paths is currently *written* rather than *observed*.
+- No recurring campaign, no real bounce, and no mailbox provider's one-click
+  POST has been exercised end to end.
+- `TrendsFn` and `SeriesReportFn`, added in the 2026-09-15 roll-forward, have
+  not had their module-load health checked. That is not a formality: see 13.2.
+- Nothing here has been probed on the running stack. Almost every control this
+  document and `SECURITY.md` describe is asserted from the **source and the
+  synthesized template** — a real check, but a narrower one than the template
+  being right. The exceptions, exercised live on 2026-09-15, are input-validation
+  error redaction and the `deploy:check` preflight.
+
+### 13.2 What the first deploy actually cost
+
+Ten defects that neither `npm test` nor `cdk synth` could see, because they only
+fail against real AWS APIs. Two classes recurred, and both are worth expecting
+again:
+
+- **IAM boundary gaps** — a deploy denied partway through.
+- **Bundling failures** — worse: the stack reaches `CREATE_COMPLETE` while every
+  handler is dead on arrival. Two of the ten did exactly this.
+
+The lesson generalizes: **`CREATE_COMPLETE` is not evidence that any code runs.**
+After a deploy, invoke the functions. `GET /version` returning 200 is a cheap
+first check that catches this class.
+
+### 13.3 The event plane
+
+Dead at three independent layers until recently, and a fourth surfaced on the
+first real deploy: the KMS key policy granted SES nothing, so publishing to the
+**encrypted** `SesEventsTopic` failed at the encryption step even though
+`sns:Publish` was correctly granted (#208). Two grants are needed, not one.
+
+The fix is verified live for org provisioning and controlled mail delivery, but
+**not against real bounce or complaint traffic**. Until a real bounce arrives
+from a real mailbox provider, treat §4.5 as designed rather than demonstrated.
+
+### 13.4 The archive body is unreachable, not merely unwired
+
+`services/sender` writes the generic rendered body only when its `ARCHIVE_BUCKET`
+env var is set, and `SenderFn` is the one function the stack does **not** give it
+to — the bucket is passed to the API's env block and to `ArchiveFn` instead. The
+`SenderFn` role *is* granted `archiveBucket.grantPut`/`grantRead`, so the intent
+was there and the wiring is not.
+
+The consequence is a broken round trip rather than a missing feature:
+`ArchiveFn` reads back a key nothing ever wrote and answers `404 campaign body
+not found`, and the click overlay (§4.8) has no body to decorate. The
+`EmailArchive` DynamoDB record — link map and `s3Key` — **is** written, so the
+click *table* works and only the overlaid body does not.
+
+One document said this was safe because the archived body would be the generic
+template carrying merge *tags* rather than one recipient's rendered values. That
+reasoning holds; it just describes a write that cannot happen. Verified by
+reading the synthesized `SenderFn` environment — there is no test asserting the
+env var either way, which is why it stayed invisible.
+
+### 13.5 `deploy-check.sh` — the guard, and its unexercised branch
+
+It has faced two live change sets (a *create* and the 2026-09-15 *update*), but
+**neither contained a data-holding resource to be replaced**, so the branch it
+exists for has still never executed against real CloudFormation. That branch
+remains fixture-only. It is the one thing standing between a key-schema change
+and an empty table (§9).
+
+Worse, until that same deploy it had never run **at all**: it hung off an npm
+`predeploy` hook, which `ignore-scripts=true` silently suppresses, and npm
+reports nothing when it skips one. It is an `&&` chain in the `deploy` script now,
+which no configuration can disable. Tagged CI releases also derive the stage
+from the deployment configuration and run the same guard before invoking
+`cdk deploy`, so the unattended path cannot bypass it.
+
+The rehearsal is still outstanding — run it across three change classes on a
+throwaway stack: a no-op (0), a stateless edit (0), and a deliberate partition-key
+change (**must** exit non-zero naming `KeySchema`). Do the third where losing the
+table is acceptable; the point of the check is that such a change destroys data
+if it goes through. Replace the synthetic fixtures in
+`packages/integration-tests/test/deploy-check.test.ts` with the three real
+payloads. The guard fails **closed**, so a payload mismatch presents as "every
+deploy is blocked" rather than as a silent miss.
+
+### 13.6 Proven live
+
+**Version marker and migrations.** A deploy-time custom resource executes ordered
+migrations before application Lambdas update, then writes the marker. On
+2026-09-15 it ran against the dev stack and `/version` reported `inSync: true`
+with a `deployedAt` stamp. PITR, deletion protection and a `RETAIN` removal
+policy are on the table in every stage — but **PITR is deliberately not called a
+backup** (#190): a 35-day window inside the table dies with the table. A real
+AWS Backup plan (daily 35 days, monthly a year) is on by default in prod only.
+
+### 13.7 Known gaps that are not deployment status
+
+These are decisions or defects rather than unproven claims, but they belong on a
+list an operator reads before trusting an install:
+
+- **A sending domain cannot be corrected after the fact.** No update-org route
+  exists in the API or console, and provisioning returns early on `alreadyExisted`
+  — so a typo means creating a new org under a different name (the org id is
+  slugified from the name).
+- **`apps/subscriber-web` and `apps/public-web` share one bucket**, kept apart
+  only by a Vite `base`: subscriber-web owns `/` because outgoing mail links at
+  `/confirm` and `/unsubscribe` resolve there, and public-web lives under
+  `/signup/`. Delete that `base` and both build to `/`, where whichever syncs
+  last silently overwrites the other's `index.html`. `scripts/publish-spas.mjs`
+  handles this, and `npm run deploy` does **not** invoke it (§9).
 - **Custom SPA domains are implemented but unconfigured.** Optional
-  `adminCustomDomain` / `publicCustomDomain` config supplies a hostname and
-  existing Route 53 zone; CDK validates a CloudFront certificate in us-east-1,
-  creates A/AAAA aliases, and uses the hostname for Cognito callbacks and CORS.
-  No dev hostname/zone has been supplied or deployed yet.
-- **`deploy-check.sh` has faced two live change sets** — a *create* and the
-  2026-09-15 *update* — but neither contained a data-holding resource to be
-  replaced, so the branch it exists for has still never executed against real
-  CloudFormation. That branch remains fixture-only. It
-  is the one thing standing between a key-schema change and an empty table (§9).
-  Worse, until that same deploy it had never run **at all**: it hung off an npm
-  `predeploy` hook, which `ignore-scripts=true` silently suppresses.
-- **Version marker and migrations are implemented and now proven live.** A
-  deploy-time custom resource executes ordered migrations before application
-  Lambdas update and writes the marker after success. On 2026-09-15 it ran
-  against the dev stack and `/version` reported `inSync: true` with a
-  `deployedAt` stamp.
-- **GDPR erasure reaches the lake by tombstone, not by rewriting** (#164, §4.19).
-  Rows bearing a pseudonymous subscriber id survive in `events/` until their
-  lifecycle rule expires them — anti-joined out of every query, resolvable by
-  nothing, but physically present. Lower `analyticsEventRetentionDays` if that is
-  not acceptable for your jurisdiction. The S3 **archive** is not reached either
-  — but checked rather than assumed: `EmailArchive.s3Key` is computed and stored
-  in DynamoDB while **nothing uploads an object**, and the archived body is the
-  GENERIC template carrying merge *tags*, not one recipient's rendered values. So
-  there is no subject data there to erase today. If per-recipient bodies are ever
-  archived, that changes and this line stops being true.
-- **The counts that are safe to quote** — 30 alarms, 28 log groups, 67 API routes
-  (52 behind the JWT authorizer), 357 resources in a default synth — are
-  reproducible with `npm run build && cd infra/cdk && npx cdk synth`. They are
-  template facts,
-  which is a weaker claim than it sounds. Dev and prod now synthesize the same
-  resource COUNT by coincidence rather than by design: prod adds the backup vault,
-  plan and selection (#190) while dev adds the auto-delete custom resources for
-  the two site buckets, and the two happen to balance.
+  `adminCustomDomain` / `publicCustomDomain` supplies a hostname; CDK validates a
+  CloudFront certificate in us-east-1, creates A/AAAA aliases, and uses the
+  hostname for Cognito callbacks and CORS. No dev hostname or zone has been
+  supplied or deployed.
+- **The audit log has no observed object.** The WORM-safe `Put`-only writer is
+  implemented and privileged routes call it, but no real audit object has been
+  read back from the bucket.
+- **`confirmUrlBase` has no usable default.** Left unset, every confirmation
+  email links to `https://your-site.example/confirm` and no subscriber can ever
+  confirm. `deploy:check` warns.
 
-**1.0 is gated on** the end-to-end suite passing against a real AWS account,
-GDPR erasure completing, and one install running for 30 days.
+### 13.8 GDPR erasure and the analytics lake
 
----
+Erasure reaches the lake by **tombstone, not rewriting** (#164, §4.19). Rows
+bearing a pseudonymous subscriber id survive in `events/` until their lifecycle
+rule expires them — anti-joined out of every query, resolvable by nothing, but
+physically present. Lower `analyticsEventRetentionDays` if that is not acceptable
+for your jurisdiction.
+
+The S3 **archive** is not reached either — but that was checked rather than
+assumed, and per 13.4 the body write does not happen at all today, so there is no
+subject data there to erase. If per-recipient bodies are ever archived, this line
+stops being true.
+
+### 13.9 Counts, and why they are not in this file
+
+The numbers previously quoted here — 30 alarms, 28 log groups, 67 API routes,
+357 resources, 29 Lambdas — were **already wrong at the commit they claimed to
+describe**, so they have been removed rather than corrected. A number that reads
+authoritative and is stale is worse than no number.
+
+Get them from the template, which is the only source that cannot drift:
+
+```bash
+npm run build && cd infra/cdk && npx cdk synth
+```
+
+At `1aca458` a default dev synth is **387 resources, 36 Lambda functions** (33
+application + 3 CDK framework), **36 alarms, 33 log groups, 95 API routes** (80
+behind the JWT authorizer). Those are **template facts** — a weaker claim than it
+sounds, and the reason this section leads with what a *running* system has shown.
+Dev and prod now synthesize the same resource count by coincidence rather than by
+design: prod adds the backup vault, plan and selection (#190) while dev adds the
+auto-delete custom resources for the two site buckets, and the two happen to
+balance.
+
+### 13.10 The 1.0 gate
+
+**1.0 is gated on** `npm run test:e2e` passing against a real AWS account, GDPR
+erasure completing, and one install running for 30 days. None of the three has
+happened.
+
+**Do not migrate a real list onto this yet.** A mail system with only controlled
+dev sends can still cost you a sending reputation that takes months to rebuild.
 
 *This document is the source of truth for addressium's design. Implementation PRs
 should reference and, where they deviate, update it.*

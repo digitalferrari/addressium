@@ -4,8 +4,37 @@
 where a decision changed something, it is marked **[CHANGED r2]** with the
 reason.
 
-Counts and costs are read from the **currently synthesized CloudFormation
-template**, not from memory. Items not yet built say so.
+**Two citation namespaces collide here, and it is worth knowing before you
+follow a number.** This file's items are cited in code as `compendium #N`.
+Bare `(#N)` in a code comment is a *different* namespace — the retired local
+issue tracker, deleted in `9c7c260`. Where the two overlap the numbers mean
+unrelated things: `compendium #53` is the re-engagement automation, while a bare
+`(#53)` in `themes.ts` means "branding presets". Neither is deducible from the
+other, and the bare form resolves to nothing on disk.
+
+**So: to be unambiguous, cite this file as `compendium #N`, never bare `#N`.**
+The compendium half is alive and kept — the decision record — but the numbers
+below are stable and must not be renumbered, because code across the repo
+references them.
+
+Eighteen numbers are currently ambiguous in the wild, and a follow-up should
+audit them: `(#4)`, `(#5)`, `(#6)`, `(#9)`, `(#13)`, `(#19)`, `(#23)`, `(#28)`,
+`(#29)`, `(#30)`, `(#31)`, `(#32)`, `(#53)`, `(#54)`, `(#58)`, `(#60)`, `(#61)`,
+`(#62)`. Each appears bare in code while this file defines an unrelated item with
+the same number — `(#9)` means "parallelise the send queue", `compendium #9` is
+the audit bucket. They were not introduced here and are not fixable by
+renumbering (that would break the over-a-hundred citations that *do* resolve).
+Fixing them means reading each one and rewriting it to name what it means.
+
+**Volatile facts are deliberately not restated here.** Resource counts, line
+counts and dollar figures used to be — they drifted within a single release, and
+a wrong number that reads authoritative is worse than no number. Get counts from
+`npx cdk synth` (see [`ARCHITECTURE.md`](./ARCHITECTURE.md) §13); costs come from
+[`packages/domain/src/cost.ts`](../packages/domain/src/cost.ts), which the
+console's estimator also reads, so the screen, the README and the tests cannot
+disagree.
+
+Items not yet built say so.
 
 ---
 
@@ -34,8 +63,10 @@ creating a competing copy.
 
 ## 1. The permanent core
 
-Frozen by the problem domain, not by our choices. 474 lines of a 13,000-line
-codebase.
+Frozen by the problem domain, not by our choices — the small set of structures
+no later iteration can reshape without a data migration. The count is
+`wc -l packages/core/src/entities.ts`, deliberately not restated here (it was
+wrong by 5x within a release).
 
 | # | Structure | Why it cannot change |
 |---|---|---|
@@ -58,7 +89,7 @@ additive-optional fields and tolerant reads, not a migration framework.
 | # | Service | Why this and not an alternative | Holds |
 |---|---|---|---|
 | 7 | **DynamoDB** — 1 table, 3 GSIs, on-demand, PITR, `deletionProtection`, RETAIN in every stage | Single-digit-ms reads at any list size, no capacity planning, no idle cost. A relational DB needs an always-on instance. | Every subscriber, subscription, campaign, event, suppression |
-| 8 | **S3 — ArchiveBucket** (versioned) | Will store the generic rendered body once per campaign; today it holds nothing — the EmailArchive Dynamo record (link map + body key) exists, the body write does not (ARCHITECTURE §4.8) | Rendered bodies + link maps |
+| 8 | **S3 — ArchiveBucket** (versioned) | Will store the generic rendered body once per campaign. **Today it holds nothing, and the body write is not merely unwired but unreachable**: `services/sender` writes only when the `ARCHIVE_BUCKET` env var is set, and `SenderFn` is the one function the stack does **not** give it to (CDK line ~1060). So `ArchiveFn` reads back a key nothing ever wrote and answers `404 campaign body not found`, and the click overlay has no body to decorate (ARCHITECTURE §4.8) | Rendered bodies + link maps (once the env var is wired) |
 | 9 | **S3 — AuditBucket** (Object Lock, **GOVERNANCE**) **[CHANGED r2]** | WORM audit history. GOVERNANCE rather than COMPLIANCE: a privileged principal can still remove an object with `s3:BypassGovernanceRetention`, so a mistake is recoverable. COMPLIANCE cannot be undone by anyone, including AWS. | Audit log |
 | 10 | **S3 — AnalyticsBucket** (versioned, lifecycle) | Event archive for later analytics. Fed by on-demand DynamoDB export, not a streaming pipeline. | Exported events |
 | 11 | **S3 ×2 — AdminSite / PublicSite** | SPA hosting behind CloudFront OAC; private buckets | Built frontend assets |
@@ -108,8 +139,8 @@ see DEPLOYMENT §11.)*
 
 | # | Service | Why |
 |---|---|---|
-| 27 | **CloudWatch Logs** — 27 groups, explicit retention (90d prod / 7d dev) | Lambda's default is *never expire* — unbounded cost forever |
-| 28 | **CloudWatch Alarms ×28** — kept in full | See #29 for where they surface |
+| 27 | **CloudWatch Logs** — one group per handler, explicit retention (90d prod / 7d dev) | Lambda's default is *never expire* — unbounded cost forever. Count from `cdk synth`, never from here |
+| 28 | **CloudWatch Alarms** — kept in full | See #29 for where they surface. Count from `cdk synth`, never from here |
 | 29 | **CloudWatch Dashboard** **[NEW r2]** | Answering "UI screen or CloudWatch dashboard?": **both, for different audiences.** Alarms are *operational* (is the system broken?) → CloudWatch dashboard + the external SNS topic, for the engineer. The console's reporting screen is *campaign performance* (how did my email do?) → for the marketer. A marketer does not care about Lambda throttles; an on-call engineer should not have to log into a marketing console. The console shows a single derived **system health: OK / degraded** badge, not raw alarms. |
 
 ---
@@ -127,33 +158,35 @@ customer's security posture.
 | 32 | **Ops alerting topic + subscriptions** | Alert routing (PagerDuty, Slack, on-call rotation) is org infrastructure. | Provide `opsAlertTopicArn` in config, or `opsAlertEmail` for a simple setup. |
 
 **Consequence:** the stack must emit the ARNs these need as CloudFormation
-outputs, and `doctor` should warn when no WAF association or alert target is
+outputs, and `deploy:check` warns when no WAF association or alert target is
 configured — silently shipping unprotected is worse than shipping without WAF.
+(A standalone `doctor` command does not exist; those preflight checks live in
+`deploy:check`.)
 
 ---
 
 ## 4. Compute — Lambda functions
 
-| # | Function | Trigger | Does |
-|---|---|---|---|
-| 33 | **AdminApiFn** | 43 API routes | All authenticated console operations, dispatched on `routeKey`. Behind JWT authorizer; every handler also checks RBAC. |
-| 34 | **SenderFn** | SQS | Renders per recipient, mints magic-link token, calls SES, records `sent`. Per-recipient idempotency; fan-out for large lists. |
-| 35 | **EventsFn** | **SQS** (was SNS) **[CHANGED r2]** | Unwraps SES events, records opens/clicks/bounces/complaints, drives suppression + auto-halt |
-| 36 | **LaunchFn** | EventBridge | Builds each recurring edition (incl. RSS feed fetch) and enqueues it |
-| 37 | **DripStepFn** | Step Functions | One drip step send |
-| 38 | **ProvisioningFn** | `POST /orgs` | Creates per-org KMS key, SES identity, config set, event destination |
-| 39 | **TokensFn** | `GET …/jwks.json` | Publishes the org's public key so publishers can verify magic links |
-| 40 | **SignupFn / SignupBatchFn** | `POST /signup*` | Public signup + double opt-in email. Honeypot + optional CAPTCHA. |
-| 41 | **ConfirmFn** | `GET /confirm` | Verifies the opt-in token, confirms subscriptions |
-| 42 | **UnsubscribeFn** | `POST /unsubscribe` | RFC 8058 one-click unsubscribe, signed token |
-| 43 | **PublicListFn / PublicBrandingFn / PublicDirectoryFn** | public GETs | Data the subscriber site and public site render. Branding is intentionally public — the public site uses it. |
-| 44 | **EntitlementFn / IdentityFn** | webhooks | Sync paid status and identity from the operator's systems, HMAC-verified |
-| 45 | **VersionFn** | `GET /version` | Running vs deployed version |
-| 46 | **ReportFn / UsageMeterFn / UsageIngestFn / ScheduleFn** | API routes + daily cron | Campaign reports, usage metering + ingest, scheduling. `AnalyzeFn` was the AI layer's and went with it (#62, #227). |
-| 47 | **SubscriberAccountFn** | invoked by ConfirmFn (#23) | The one Cognito write — creates the pool subscriber after double opt-in. Reachable from no route; three enumerated actions; explicit Deny on the admin pool. |
-| 48 | **ReengagementSweepFn** | weekly cron (Mon 04:00 UTC, #233) | Paged, checkpointed re-engagement/sunset sweep (ARCHITECTURE §4.22) |
-| 49 | **ConfirmSecretRotationFn** | yearly schedule (#234) | Rotates the confirm-token HMAC keyring; the ONE secretsmanager write grant in the stack |
-| 50 | **PreferencesFn / PreferenceRequestFn** | `GET`/`POST /preferences`, `POST /preferences/request` (#74) | Token-scoped preference centre API, reserved concurrency |
+| Function | Trigger | Does |
+|---|---|---|
+| **AdminApiFn** | the authenticated API routes | All console operations, dispatched on `routeKey`. Behind the JWT authorizer; every handler also checks RBAC. Not a Lambda per route — see §9 of ARCHITECTURE.md for why, and `route-parity.test.ts` for the invariant |
+| **SenderFn** | SQS | Renders per recipient, mints magic-link token, calls SES, records `sent`. Per-recipient idempotency; fan-out for large lists. |
+| **EventsFn** | **SQS** (was SNS) **[CHANGED r2]** | Unwraps SES events, records opens/clicks/bounces/complaints, drives suppression + auto-halt |
+| **LaunchFn** | EventBridge | Builds each recurring edition (incl. RSS feed fetch) and enqueues it |
+| **DripStepFn** | Step Functions | One drip step send |
+| **ProvisioningFn** | `POST /orgs` | Creates per-org KMS key, SES identity, config set, event destination |
+| **TokensFn** | `GET …/jwks.json` | Publishes the org's public key so publishers can verify magic links |
+| **SignupFn / SignupBatchFn** | `POST /signup*` | Public signup + double opt-in email. Honeypot + optional CAPTCHA. |
+| **ConfirmFn** | `GET /confirm` | Verifies the opt-in token, confirms subscriptions |
+| **UnsubscribeFn** | `POST /unsubscribe` | RFC 8058 one-click unsubscribe, signed token |
+| **PublicListFn / PublicBrandingFn / PublicDirectoryFn** | public GETs | Data the subscriber site and public site render. Branding is intentionally public — the public site uses it. |
+| **EntitlementFn / IdentityFn** | webhooks | Sync paid status and identity from the operator's systems, HMAC-verified |
+| **VersionFn** | `GET /version` | Running vs deployed version |
+| **ReportFn / UsageMeterFn / UsageIngestFn / ScheduleFn** | API routes + daily cron | Campaign reports, usage metering + ingest, scheduling. `AnalyzeFn` was the AI layer's and went with it (#62, #227). |
+| **SubscriberAccountFn** | invoked by ConfirmFn (#23) | The one Cognito write — creates the pool subscriber after double opt-in. Reachable from no route; three enumerated actions; explicit Deny on the admin pool. |
+| **ReengagementSweepFn** | weekly cron (Mon 04:00 UTC, #233) | Paged, checkpointed re-engagement/sunset sweep (ARCHITECTURE §4.22) |
+| **ConfirmSecretRotationFn** | yearly schedule (#234) | Rotates the confirm-token HMAC keyring; the ONE secretsmanager write grant in the stack |
+| **PreferencesFn / PreferenceRequestFn** | `GET`/`POST /preferences`, `POST /preferences/request` (#74) | Token-scoped preference centre API, reserved concurrency |
 | — | **SegmentIndexerFn / AnalyticsExportFn / SnapshotFn / ReplayFn** | opt-in only | Exist solely under `enableOpenSearchMirror` / `enableAnalytics` (§4.23) — not in a default synth |
 
 **Deliberately not consolidated:** the public functions hold *different sensitive
@@ -246,18 +279,29 @@ caching a short-lived data key or signing locally with a KMS-wrapped key.
 ## 7. Cost
 
 Confirmed acceptable. With WAF now external (#30, #31), addressium's own idle
-cost is roughly:
+cost is a small fixed floor plus per-org keys.
 
-| Item | Monthly |
-|---|---|
-| CloudWatch alarms — 29 × $0.10 | $2.90 |
-| Secrets Manager — 2 × $0.40 | $0.80 |
-| KMS — $1 for the stack's data key + $1 per org key | $1.00 + $1.00 × orgs |
-| DynamoDB / S3 / Lambda / SQS / SNS at test volume | ~$1.00 |
-| **Baseline** | **≈ $5.80 + $1/org** |
+**The number is not stated here on purpose.** It is computed in
+[`packages/domain/src/cost.ts`](../packages/domain/src/cost.ts), which the
+console's Cost estimator renders and `cost.test.ts` asserts — so the figure on
+screen, in the README and in the tests are one value that cannot disagree. Every
+unit price there is named and dated rather than folded into a constant, because
+AWS pricing changes and a stale estimate that reads authoritative is worse than
+no estimate.
 
-Plus $0.10 per 1,000 emails. WAF, if the operator adds one, is theirs and
-typically already paid for.
+The drivers, in the order they matter:
+
+- **CloudWatch alarms** — the largest line, and it scales with the alarm count,
+  which is why that count is not restated in prose either.
+- **KMS** — the stack's data key, plus one signing key **per org** (a
+  customer-managed key, not the $0.03/10k symmetric rate).
+- **Secrets Manager** — the confirm-token and webhook signing secrets.
+- **DynamoDB / S3 / Lambda / SQS / SNS** — pennies at test volume, metered by
+  `estimateSendCost` at real volume.
+
+Plus SES at $0.10 per 1,000 emails, and one KMS `Sign` per recipient for the
+magic-link token (#14/#45 — the volume caveat is in §5). WAF, if the operator
+adds one, is theirs and typically already paid for.
 
 ---
 
@@ -285,27 +329,11 @@ was never written down, which left the code looking like an oversight. See item
 
 ## 9. What is not yet proven
 
-- **Deployed to a dev account** (#212) — never to production, but mail has
-  reached a controlled inbox. It surfaced ten defects that neither `npm test`
-  nor `cdk synth` could see, two of which left every handler unloadable in a
-  stack reporting `CREATE_COMPLETE`.
-- The event plane was dead at three layers, and a fourth appeared live: the CMK
-  policy granted SES nothing, so publishing to the encrypted SES events topic
-  needed a second grant (`kms:GenerateDataKey*` + `kms:Decrypt`) alongside the
-  `sns:Publish` of #208. Mail delivery has been observed, but bounce and
-  complaint handling have not been exercised by real SES traffic.
-- `deploy-check.sh` has now seen two live change sets — a create and the
-  2026-09-15 update, neither holding a replaceable data resource — so the
-  replacement branch it exists for remains fixture-only. Before the first deploy it
-  had never run at all, having hung off an npm `predeploy` hook that
-  `ignore-scripts=true` silently suppresses.
-- Version marker/migrations are implemented as a deploy-time custom resource,
-  and the 2026-09-15 dev deploy proved the live marker: `/version` reports
-  `inSync: true` with a `deployedAt` stamp.
-- Custom SPA domains are implemented with Route 53 aliases and us-east-1 ACM
-  validation; no dev hostname/zone has been configured yet.
-- GDPR erasure's lake story is tombstone + anti-join + lifecycle expiry (#199):
-  the pseudonymous rows physically remain until the bucket lifecycle drops
-  them — disclosed in SECURITY §4.7 as the honest limit.
+**Moved.** The canonical list is [`ARCHITECTURE.md`](./ARCHITECTURE.md) §13.
+It used to be restated here too, and in the README, DEPLOYMENT and SECURITY
+besides — every deploy invalidated all five copies at once and none of them got
+updated, so they drifted apart from each other and from reality. One list, one
+home.
 
-1.0 gated on the end-to-end suite passing against a real account.
+What belongs in this file is the decision record. Deployment status does not,
+because it changes far faster than a decision should.

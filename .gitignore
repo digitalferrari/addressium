@@ -17,3 +17,9 @@ addressium.code-workspace
 # local persona test credentials — never commit
 persona-logins.txt
 **/persona-logins.txt
+deepseek-review.md
+gemini_review.md
+gemini_suggestions.md
+orichat.txt
+readiness-notes.md
+docs/images/campaign-scheduler-example.png
