@@ -28,6 +28,7 @@
  * per-recipient send stays. Revisit if SES adds per-entry headers.
  */
 import { SESv2Client, SendEmailCommand } from "@aws-sdk/client-sesv2";
+import { RecipientRejectedError } from "@addressium/domain";
 import type { EmailSender, SentMessage } from "@addressium/domain";
 
 /** SES message-tag names carrying our correlation ids (#184). */
@@ -91,6 +92,39 @@ export class SesEmailSender implements EmailSender {
     if (/^<https:\/\//i.test(msg.listUnsubscribe)) {
       headers.push({ Name: "List-Unsubscribe-Post", Value: "List-Unsubscribe=One-Click" });
     }
+    await this.sendOne(msg, headers);
+  }
+
+  /**
+   * Issues the SendEmail call and classifies a failure as per-recipient or not
+   * (#293).
+   *
+   * Only `MessageRejected` whose text NAMES THIS RECIPIENT becomes a
+   * `RecipientRejectedError`. That pairing matters: SES raises the same
+   * `MessageRejected` for an unverified FROM identity, which is an account-wide
+   * fault — treating it as per-recipient would write one reject per recipient
+   * and report a send that completed having mailed nobody.
+   *
+   * Everything else rethrows unchanged, so the slice aborts and SQS retries it:
+   * `TooManyRequestsException` (throttling), `LimitExceededException` (quota),
+   * `AccountSuspendedException`, `SendingPausedException`,
+   * `MailFromDomainNotVerifiedException`, `InternalServiceErrorException` and
+   * any network error. For all of those the next recipient would fail too, so
+   * retrying the whole slice is the correct response.
+   */
+  private async sendOne(msg: SentMessage, headers: Array<{ Name: string; Value: string }>): Promise<void> {
+    try {
+      await this.sendCommand(msg, headers);
+    } catch (e) {
+      const err = e as { name?: string; message?: string };
+      if (err?.name === "MessageRejected" && namesRecipient(err.message, msg.to)) {
+        throw new RecipientRejectedError(msg.to, err.message ?? "MessageRejected");
+      }
+      throw e;
+    }
+  }
+
+  private async sendCommand(msg: SentMessage, headers: Array<{ Name: string; Value: string }>): Promise<void> {
     await this.client.send(
       new SendEmailCommand({
         FromEmailAddress: msg.from,
@@ -121,4 +155,17 @@ export class SesEmailSender implements EmailSender {
       }),
     );
   }
+}
+
+/**
+ * Does this error text name THIS recipient?
+ *
+ * The check that keeps an account-wide `MessageRejected` — an unverified FROM
+ * identity raises the same exception — from being misread as a per-recipient
+ * one. Compared case-insensitively because SES echoes the address as given,
+ * and addresses are case-insensitive in the domain part.
+ */
+function namesRecipient(message: string | undefined, recipient: string): boolean {
+  if (!message || !recipient) return false;
+  return message.toLowerCase().includes(recipient.toLowerCase());
 }

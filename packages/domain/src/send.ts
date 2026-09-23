@@ -27,6 +27,7 @@ import type {
   SendThrottle,
   Stores,
 } from "./ports.js";
+import { RecipientRejectedError } from "./ports.js";
 import { mergeTagFallbacks } from "./merge-tags.js";
 import { applySeriesAdFills, buildLinkMap, plainTextFrom, renderForRecipient, type EmailTemplate } from "./render.js";
 import { completeScheduleRange, scheduleActive } from "./schedule-state.js";
@@ -109,6 +110,18 @@ export interface SendResult {
    * subscribers that predate the toggle and still need the account backfill.
    */
   untokenized?: number;
+  /**
+   * Recipients SES refused individually (#293) — an address it will not send
+   * to, recorded as a `reject` event and skipped so the rest of the slice still
+   * goes out. Absent when zero.
+   *
+   * A non-zero count on a production send is worth looking at: these addresses
+   * are permanently unsendable, so they are list hygiene rather than a
+   * transient fault. A LARGE count is a different signal entirely — the send
+   * aborts at MAX_CONSECUTIVE_REJECTS, because that is an account-level fault
+   * wearing a per-recipient disguise.
+   */
+  rejected?: number;
   /** True if this campaign (or slice) had nothing new to dispatch. */
   skipped?: boolean;
   /** True if a deliverability halt stopped this send (§4.13). */
@@ -149,6 +162,20 @@ export function sendClaimKey(campaignId: string, subscriberId: string): string {
 
 /** How often the halt flag is re-read mid-loop (in recipients). */
 const HALT_CHECK_EVERY = 100;
+/**
+ * Consecutive per-recipient rejections that abort the slice (#293).
+ *
+ * The backstop for an account-level fault the SES adapter misclassified as
+ * per-recipient — an unverified FROM identity raises the same `MessageRejected`
+ * for every recipient. Without this, such a fault would write one reject per
+ * recipient and report a COMPLETED send that mailed nobody, which is a worse
+ * failure than aborting because it looks like success.
+ *
+ * Ten, and consecutive: high enough that a real list's scattered bad addresses
+ * never trip it, low enough that a systemic fault stops in ten calls rather
+ * than twenty thousand.
+ */
+const MAX_CONSECUTIVE_REJECTS = 10;
 
 /**
  * Split an ORDERED list of recipient ids into key-range windows of `chunkSize`
@@ -688,6 +715,14 @@ export async function sendCampaign(
   let alreadySent = 0;
   const claimedRecipients: string[] = [];
   let untokenized = 0;
+  /** Per-recipient SES rejections this slice (#293). */
+  let rejected = 0;
+  /**
+   * Consecutive rejections, reset by any success. The breaker reads this rather
+   * than the total so a list with a scattering of genuinely bad addresses keeps
+   * sending, while a systemic fault — every recipient rejected — aborts fast.
+   */
+  let consecutiveRejects = 0;
 
   // Deliverability halt (§4.13, #165). checkDeliverability flips the campaign to
   // "halted" on a bounce/complaint breach — or, for send ids with no Campaign
@@ -763,11 +798,59 @@ export async function sendCampaign(
         tags: { orgId: input.orgId, campaignId: input.campaignId, subscriberId: subscriber.sub },
       });
     } catch (e) {
-      // The claim guards a dispatch that did not happen — give it back so the
-      // retry re-attempts THIS recipient instead of skipping them forever.
+      // A PER-RECIPIENT rejection: this address is unsendable, the rest of the
+      // slice is not (#293). Keep the claim — retrying this address would fail
+      // identically — record it, and carry on.
+      //
+      // Before this, the throw below aborted the loop for every error, so one
+      // permanently-rejected address stranded everyone after it: SQS redelivered,
+      // the claims skipped the sent prefix, the loop hit the same address, and it
+      // failed the same way until the message dead-lettered. On a 10-recipient
+      // list with one bad address at position 4 that was 3 delivered and 6 never
+      // mailed, with DLQ depth as the only signal.
+      if (e instanceof RecipientRejectedError) {
+        const rejection: RecipientRejectedError = e;
+        // A fixed literal: a CloudWatch metric filter matches it, because this
+        // path no longer reaches the DLQ and would otherwise be silent.
+        console.error("send: recipient rejected", {
+          orgId: input.orgId,
+          campaignId: input.campaignId,
+          subscriberId: subscriber.sub,
+          error: rejection.message,
+        });
+        await stores.events.append({
+          orgId: input.orgId,
+          subscriberId: subscriber.sub,
+          campaignId: input.campaignId,
+          // NOT `bounce`: no receiver refused anything, so suppressing the
+          // address would punish a subscriber for our fault. `reject` already
+          // means exactly this (#241).
+          type: "reject",
+          at: clock.now().toISOString(),
+        });
+        rejected++;
+        // The breaker. An account-wide fault that the adapter misclassified —
+        // an unverified FROM identity raises the same MessageRejected — would
+        // otherwise write one reject per recipient and report a completed send
+        // that mailed nobody, which is worse than aborting. Consecutive, so a
+        // scattering of genuinely bad addresses never trips it.
+        if (++consecutiveRejects >= MAX_CONSECUTIVE_REJECTS) {
+          throw new Error(
+            `send aborted: ${consecutiveRejects} consecutive recipient rejections — ` +
+              `this is an account-level fault, not ${consecutiveRejects} bad addresses ` +
+              `(last: ${rejection.message})`,
+          );
+        }
+        continue;
+      }
+      // Everything else — throttling, quota, suspended account, 5xx, network —
+      // means the NEXT recipient would fail too, so abort and let SQS retry the
+      // slice. The claim guards a dispatch that did not happen; give it back so
+      // the retry re-attempts THIS recipient instead of skipping them forever.
       await stores.sendClaims.release(input.orgId, sendClaimKey(input.campaignId, subscriber.sub));
       throw e;
     }
+    consecutiveRejects = 0;
 
     const evt: EngagementEvent = {
       orgId: input.orgId,
@@ -784,9 +867,14 @@ export async function sendCampaign(
     // A claim alone may belong to another worker still inside sender.send.
     // Never complete its window before that dispatch has a durable sent event.
     if (claimedRecipients.length > 0) {
-      const delivered = new Set((await stores.events.all(input.orgId, input.campaignId))
-        .filter((e) => e.type === "sent").map((e) => e.subscriberId));
-      if (claimedRecipients.some((id) => !delivered.has(id))) {
+      // `reject` is TERMINAL here, not pending (#293). A rejected recipient
+      // never gets a `sent` event and never will — retrying that address fails
+      // identically — so accepting only `sent` would throw on every retry and
+      // dead-letter the message anyway. That would have moved the DLQ loop
+      // rather than removed it, which is the whole point of the change.
+      const settled = new Set((await stores.events.all(input.orgId, input.campaignId))
+        .filter((e) => e.type === "sent" || e.type === "reject").map((e) => e.subscriberId));
+      if (claimedRecipients.some((id) => !settled.has(id))) {
         throw new Error("send claims still awaiting recorded delivery; retry completion");
       }
     }
@@ -801,6 +889,10 @@ export async function sendCampaign(
     devBlocked,
     alreadySent,
     untokenized,
+    ...(rejected > 0 ? { rejected } : {}),
+    // A slice that rejected every recipient did NOT do its job, so it must not
+    // report `skipped` (which reads as "already delivered") — that is the shape
+    // an operator would scroll past.
     skipped: sent === 0 && alreadySent > 0,
     ...(halted ? { halted: true } : {}),
   };

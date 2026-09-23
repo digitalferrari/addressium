@@ -663,6 +663,38 @@ export interface EmailSender {
   send(msg: SentMessage): Promise<void>;
 }
 
+/**
+ * THIS recipient is unsendable; the rest of the slice is fine (#293).
+ *
+ * A campaign send is a loop over recipients, and a throw used to abort it. One
+ * permanently-rejected address therefore stranded every recipient after it:
+ * SQS redelivered, the claims skipped the already-sent prefix, the loop reached
+ * the same bad address, and it failed identically until the message reached the
+ * dead-letter queue. Measured on a 10-recipient list with one bad address at
+ * position 4: 3 delivered, 6 never mailed, and the only signal was DLQ depth.
+ *
+ * On a 20k edition an imported address SES refuses would do the same thing.
+ *
+ * So the adapter raises this for the NARROW set of errors that are provably
+ * about one recipient, and the send loop records a `reject` event and carries
+ * on. Everything else — throttling, quota, suspended account, unverified FROM
+ * identity, 5xx, network — keeps aborting the slice, because those mean the
+ * NEXT recipient would fail too and retrying the whole slice is correct.
+ *
+ * Raising this for an error that is not per-recipient is the dangerous
+ * direction: it would write one reject per recipient and report a completed
+ * send that mailed nobody. `sendCampaign` has a consecutive-reject breaker for
+ * exactly that, but the adapter's classification is the real guard.
+ */
+export class RecipientRejectedError extends Error {
+  readonly recipient: string;
+  constructor(recipient: string, message: string) {
+    super(message);
+    this.name = "RecipientRejectedError";
+    this.recipient = recipient;
+  }
+}
+
 /** Signs & verifies the internal double-opt-in confirmation token (HMAC). */
 export interface ConfirmClaims {
   orgId: string;

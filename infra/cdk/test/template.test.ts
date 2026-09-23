@@ -2138,3 +2138,59 @@ test("the placeholder URL appears nowhere once both are configured (#294)", () =
     "a subscriber-facing URL still falls back to the your-site.example placeholder",
   );
 });
+
+/**
+ * The fix for #293 removed this failure's only signal, so it needs a new one.
+ *
+ * A permanently-rejected recipient used to abort the whole slice, which
+ * dead-lettered the message — `SendDlqNotEmptyAlarm` fired. The send now skips
+ * that recipient and continues, which is correct, but the DLQ stays empty and
+ * the Lambda `Errors` metric stays zero because the invocation SUCCEEDS. A list
+ * rotting steadily, or an account-level fault the adapter misclassified, would
+ * otherwise be completely invisible.
+ */
+test("per-recipient SES rejections are alarmed (#293)", () => {
+  const t = template();
+  const filters = t.findResources("AWS::Logs::MetricFilter");
+  const hit = Object.values(filters).find(
+    (f) => (f.Properties as { FilterPattern: string }).FilterPattern === '"send: recipient rejected"',
+  );
+  assert.ok(hit, "no MetricFilter watches the recipient-rejection log line");
+
+  // The SENDER's log group — that is the handler that logs it. A filter on the
+  // wrong group matches nothing and alarms never, which looks exactly like a
+  // healthy deployment.
+  const logGroupRef = (hit.Properties as { LogGroupName: { Ref?: string } }).LogGroupName?.Ref ?? "";
+  assert.ok(logGroupRef.startsWith("SenderFnLogs"), `filter watches ${logGroupRef}`);
+
+  const alarms = t.findResources("AWS::CloudWatch::Alarm");
+  const alarm = Object.values(alarms).find(
+    (a) => (a.Properties as { MetricName?: string }).MetricName === "RecipientRejects",
+  );
+  assert.ok(alarm, "the metric exists but nothing alarms on it");
+  const actions = (alarm.Properties as { AlarmActions?: unknown[] }).AlarmActions;
+  assert.ok(actions && actions.length > 0, "the alarm reaches nobody");
+  // Not zero: every real list has a few permanently unsendable addresses, and an
+  // alarm that fires on every send is one people mute.
+  assert.ok(
+    ((alarm.Properties as { Threshold?: number }).Threshold ?? 0) > 0,
+    "a zero threshold would fire on routine list rot and get muted",
+  );
+});
+
+/**
+ * The filter pattern and the log line are two halves of one contract, in two
+ * different packages. Renaming the log line alone would leave a filter that
+ * matches nothing — and a metric that is always zero is indistinguishable from
+ * a healthy system.
+ */
+test("the sender still logs the literal the metric filter matches (#293)", () => {
+  const src = readFileSync(
+    resolve(dirname(fileURLToPath(import.meta.url)), "../../../../packages/domain/src/send.ts"),
+    "utf8",
+  );
+  assert.ok(
+    src.includes('console.error("send: recipient rejected"'),
+    "send.ts no longer logs the literal RecipientRejectFilter matches",
+  );
+});

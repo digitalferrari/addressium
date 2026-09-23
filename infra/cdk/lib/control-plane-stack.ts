@@ -2392,6 +2392,42 @@ export class ControlPlaneStack extends Stack {
     // So the counter is not enough. `HotCounters.renderingFailures` sits in a
     // per-campaign report an operator opens AFTER the send; this fires while it is
     // still running, which is the only time the information is worth anything.
+    /**
+     * Per-recipient SES rejections (#293).
+     *
+     * This alarm exists because the FIX removed the only signal this failure
+     * used to have. A permanently-rejected address used to abort the whole
+     * slice, which dead-lettered the message — so `SendDlqNotEmptyAlarm` fired.
+     * Now the send skips that recipient and carries on, which is right, but it
+     * means the DLQ stays empty and a steadily-rotting list would be invisible.
+     *
+     * The Lambda `Errors` metric cannot cover it either: the invocation
+     * succeeds. So the log line is the metric.
+     *
+     * Threshold is deliberately not zero. Any real list has a few permanently
+     * unsendable addresses, and an alarm that fires on every send is one people
+     * mute. It fires when rejections are frequent enough to mean list rot or a
+     * misclassified account fault.
+     */
+    const recipientRejects = new MetricFilter(this, "RecipientRejectFilter", {
+      logGroup: senderFn.logGroup,
+      metricNamespace: `addressium/${props.stage}`,
+      metricName: "RecipientRejects",
+      // Matches the literal `sendCampaign` logs. Asserted on both sides by a
+      // source-text guard — a reworded log line with no filter change would
+      // silently stop alarming.
+      filterPattern: FilterPattern.literal('"send: recipient rejected"'),
+      metricValue: "1",
+      defaultValue: 0,
+    });
+    alarm("RecipientRejectAlarm", new Alarm(this, "RecipientRejectAlarm", {
+      metric: recipientRejects.metric({ period: Duration.minutes(15), statistic: "Sum" }),
+      threshold: 25,
+      comparisonOperator: ComparisonOperator.GREATER_THAN_THRESHOLD,
+      evaluationPeriods: 1,
+      treatMissingData: TreatMissingData.NOT_BREACHING,
+      alarmDescription: "addressium: SES is refusing many recipients — list rot or a sending-identity fault (#293)",
+    }));
     const renderingFailures = new MetricFilter(this, "RenderingFailureFilter", {
       logGroup: eventsFn.logGroup,
       metricNamespace: `addressium/${props.stage}`,
