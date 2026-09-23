@@ -387,6 +387,30 @@ Resources:
               - lambda:InvokeFunction
               - lambda:GetFunction
             Resource: "*"
+          - Sid: PublishTheSpaBundles
+            # scripts/publish-spas.mjs runs `aws s3 sync --delete` against the
+            # site buckets. OperateAndSmokeTest above grants DeleteObject but
+            # not PutObject, which makes that sync strictly destructive: the
+            # delete pass is authorized, every upload is denied, and the admin
+            # console is left serving an index.html whose bundle the same run
+            # just removed. That is how the SPAs came down on 2026-09-22.
+            #
+            # Scoped to the site buckets by name rather than widening the
+            # Resource: "*" statement above — nothing else should be writable.
+            # CloudFront is how a publish is actually made visible, so the
+            # invalidation the script issues afterwards is granted too.
+            Effect: Allow
+            Action:
+              - s3:PutObject
+            Resource:
+              - !Sub "arn:${AWS::Partition}:s3:::addressium-${Stage}-adminsitebucket*/*"
+              - !Sub "arn:${AWS::Partition}:s3:::addressium-${Stage}-publicsitebucket*/*"
+          - Sid: InvalidateTheSpaDistributions
+            Effect: Allow
+            Action:
+              - cloudfront:CreateInvalidation
+              - cloudfront:GetInvalidation
+            Resource: "*"
 
   DeployRole:
     Type: AWS::IAM::Role
