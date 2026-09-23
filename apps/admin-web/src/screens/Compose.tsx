@@ -23,7 +23,16 @@ const MODE_LABELS: Record<"blocks" | "html" | "mjml", string> = {
   mjml: "MJML",
 };
 
-export function Compose({ org, onScheduled }: { org: string; onScheduled: () => void }) {
+export function Compose({
+  org,
+  onScheduled,
+  duplicateOf,
+}: {
+  org: string;
+  onScheduled: () => void;
+  /** Prefill from an existing campaign's stored body (#307). */
+  duplicateOf?: string;
+}) {
   const lists = useAsync(() => api.lists(org), [org]);
   const templates = useAsync(() => api.templates(org), [org]);
   const segments = useAsync(() => api.segments(org), [org]);
@@ -64,6 +73,64 @@ export function Compose({ org, onScheduled }: { org: string; onScheduled: () => 
     if (lists.data && lists.data.length > 0 && !listId) setListId(lists.data[0]!.listId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lists.data]);
+
+  /**
+   * Prefill from an existing campaign (#307).
+   *
+   * Everything EXCEPT the campaign id, which must be new — re-using it would
+   * overwrite the original's record rather than create a copy. The operator
+   * names the duplicate themselves, which also makes it obvious that this is a
+   * new send rather than an edit of the old one.
+   *
+   * The body mode comes from `editorSource` rather than being inferred from the
+   * template: an MJML campaign arrives as compiled html plus its source, and
+   * inferring would drop them into the Raw HTML editor with their MJML lost.
+   */
+  useEffect(() => {
+    if (!duplicateOf) return;
+    let live = true;
+    setMsg("Loading the campaign to duplicate…");
+    api
+      .campaignContent(org, duplicateOf)
+      .then((body) => {
+        if (!live) return;
+        setSubject(body.subject);
+        setPreviewText(body.previewText ?? "");
+        if (body.listId) setListId(body.listId);
+        setSegmentId(body.segmentId ?? "");
+        const mode = body.editorSource?.mode ?? ("blocks" in body.template ? "blocks" : "html");
+        setBodyMode(mode);
+        if (mode === "mjml") setMjml(body.editorSource?.mjml ?? "");
+        else if ("html" in body.template && body.template.html) setHtml(body.template.html);
+        else if ("blocks" in body.template && body.template.blocks) {
+          setBlocks(
+            body.template.blocks.map((b) => ({
+              kind: b.kind,
+              html: "html" in b ? b.html : "",
+              label: "label" in b ? b.label : "",
+              url: "url" in b ? b.url : "",
+              slot: "slot" in b ? b.slot : "",
+            })),
+          );
+        }
+        setMsg(`Duplicated from "${duplicateOf}". Give it a new campaign id and schedule it.`);
+      })
+      .catch((e) => {
+        if (!live) return;
+        // A campaign scheduled before bodies were stored has none. Say so
+        // plainly — "not found" would read as data loss, and the operator can
+        // still compose from scratch.
+        setMsg(
+          String(e).includes("predates-body-storage")
+            ? `"${duplicateOf}" was scheduled before bodies were kept, so its content cannot be loaded. Compose it again here.`
+            : String(e),
+        );
+      });
+    return () => {
+      live = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [duplicateOf, org]);
 
   const setBlock = (i: number, patch: Partial<DraftBlock>) =>
     setBlocks((bs) => bs.map((b, j) => (j === i ? { ...b, ...patch } : b)));

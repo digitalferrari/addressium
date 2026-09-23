@@ -157,9 +157,13 @@ function Console() {
   // report later from the nav would silently reload whichever campaign was
   // linked to last, instead of the empty picker that entry point implies.
   const [reportCampaign, setReportCampaign] = useState<string | undefined>(undefined);
+  // Set when Duplicate is pressed on a campaign; Compose prefills from it and
+  // it is cleared on leaving, so composing fresh later starts empty.
+  const [duplicateOf, setDuplicateOf] = useState<string | undefined>(undefined);
   useEffect(() => {
     if (view !== "report" && reportCampaign !== undefined) setReportCampaign(undefined);
-  }, [view, reportCampaign]);
+    if (view !== "compose" && duplicateOf !== undefined) setDuplicateOf(undefined);
+  }, [view, reportCampaign, duplicateOf]);
   const [orgEnv, setOrgEnv] = useState<"prod" | "dev" | null>(null);
   // Name and sending domain for the sidebar identity block and the breadcrumb
   // (#260). Cleared alongside `orgEnv` on every switch so the shell never shows
@@ -213,8 +217,17 @@ function Console() {
         {view === "newsletters" && <Newsletters org={org} />}
         {view === "templates" && <Templates org={org} />}
         {view === "mergetags" && <MergeTags org={org} />}
-        {view === "compose" && <Compose org={org} onScheduled={() => setView("schedules")} />}
-        {view === "campaigns" && <Campaigns org={org} grant={grant} onCompose={() => setView("compose")} />}
+        {view === "compose" && (
+          <Compose org={org} onScheduled={() => setView("schedules")} duplicateOf={duplicateOf} />
+        )}
+        {view === "campaigns" && (
+          <Campaigns
+            org={org}
+            grant={grant}
+            onCompose={() => setView("compose")}
+            onDuplicate={(campaignId) => { setDuplicateOf(campaignId); setView("compose"); }}
+          />
+        )}
         {view === "report" && <Report org={org} grant={grant} initialCampaign={reportCampaign} />}
         {view === "analytics" && <Analytics org={org} grant={grant} />}
         {view === "schedules" && (

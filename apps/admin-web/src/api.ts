@@ -461,6 +461,20 @@ export type ScheduleWhen =
   | { type: "recurring"; cron: string; timezone?: string };
 
 export type EmailTemplateBody = { blocks: EmailBlock[] } | { html: string } | { mjmlHtml: string };
+export interface CampaignBody {
+  orgId: string;
+  campaignId: string;
+  template: EmailTemplateBody;
+  subject: string;
+  previewText?: string;
+  listId?: string;
+  segmentId?: string;
+  editorSource?: { mode: "blocks" | "html" | "mjml"; mjml?: string };
+  rootCampaignId: string;
+  version: number;
+  savedAt: string;
+}
+
 export interface ScheduleCampaignBody {
   orgId: string;
   campaignId: string;
@@ -1102,6 +1116,15 @@ export const api = {
   setVisibility: (orgId: string, listId: string, visibility: "open" | "closed") =>
     call<unknown>("POST", `/lists/visibility`, { orgId, listId, visibility }),
   report: (org: string, campaign: string) => call<CampaignReport>("GET", `/orgs/${org}/campaigns/${campaign}/report`),
+  /**
+   * The structured body, for re-opening a campaign in Compose (#307).
+   *
+   * Not the archive route: that returns RENDERED html of a sent campaign, with
+   * merge values resolved and block kinds flattened. This is what the operator
+   * composed, and the only thing that can be loaded back into an editor.
+   */
+  campaignContent: (org: string, campaign: string) =>
+    call<CampaignBody>("GET", `/orgs/${org}/campaigns/${campaign}/content`),
   analyticsTrends: (org: string, days = 30) => call<AnalyticsTrends>("GET", `/orgs/${org}/analytics/trends?days=${days}`),
   archive: (org: string, campaign: string) => call<{ html: string }>("GET", `/orgs/${org}/campaigns/${campaign}/archive`),
   seriesReport: (org: string, series: string) => call<SeriesReport>("GET", `/orgs/${org}/series/${series}/report`),

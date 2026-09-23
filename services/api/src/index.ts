@@ -1470,6 +1470,41 @@ export async function campaignsHandler(event: HttpEvent): Promise<HttpResult> {
 }
 
 /**
+ * GET /orgs/{org}/campaigns/{id}/content — the structured body, for Compose to
+ * re-open (#307).
+ *
+ * Distinct from the archive route, which returns the RENDERED html of a
+ * campaign that already sent — merge values resolved, ad fills applied, block
+ * kinds flattened into anchors. That answers "what did subscribers receive";
+ * this answers "what did the operator compose", and only this can be loaded
+ * back into an editor.
+ *
+ * Gated on `campaigns:manage` rather than `reports:view`: the body is what an
+ * operator edits, not a report they read, and it carries the unrendered
+ * template including any ad markup.
+ */
+export async function campaignContentHandler(event: HttpEvent): Promise<HttpResult> {
+  try {
+    const orgId = event.pathParameters?.org ?? "";
+    const campaignId = event.pathParameters?.id ?? "";
+    requireGrant(event, "campaigns:manage", orgId);
+    const body = await stores().campaignBodies.get(orgId, campaignId);
+    if (!body) {
+      // A campaign scheduled before bodies were stored has none. Distinguished
+      // from "no such campaign" so the console can say "re-enter the body"
+      // rather than "not found", which would read as data loss.
+      const campaign = await stores().campaigns.get(orgId, campaignId);
+      return campaign
+        ? json(404, { error: "no stored body", reason: "predates-body-storage" })
+        : json(404, { error: "not found" });
+    }
+    return json(200, body);
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+/**
  * GET /orgs/{org}/campaigns — recent campaigns for the console's report picker
  * (#103). Returns a lightweight projection (no full template bodies), newest by
  * campaignId first, so operators don't have to remember raw ids.
@@ -3182,6 +3217,7 @@ const ADMIN_ROUTES: Record<string, RouteHandler> = {
   "POST /lists/presentation": listPresentationHandler,
   "GET /orgs/{org}/campaigns": campaignsListHandler,
   "GET /orgs/{org}/campaigns/{id}": campaignsHandler,
+  "GET /orgs/{org}/campaigns/{id}/content": campaignContentHandler,
   "POST /campaigns": campaignsHandler,
   "GET /orgs/{org}/schedules": schedulesListHandler,
   // Registered in CDK via `api.addRoutes` rather than the `adminRoute` helper,

@@ -135,6 +135,16 @@ function scheduleEvent(body: Record<string, unknown>, role = "developer_admin", 
   };
 }
 
+function getEvent(campaignId: string, role = "developer_admin", orgs = ORG) {
+  return {
+    pathParameters: { org: ORG, id: campaignId },
+    requestContext: {
+      http: { method: "GET", sourceIp: "203.0.113.7" },
+      authorizer: { jwt: { claims: { "custom:role": role, "custom:orgs": orgs, sub: "admin-1" } } },
+    },
+  };
+}
+
 /** Exactly what the console's Compose screen posts for a "Send now" one-off. */
 const composeBody = (campaignId: string, extra: Record<string, unknown> = {}) => ({
   orgId: ORG,
@@ -624,4 +634,82 @@ test("a one-off gets no series row", async () => {
   const scheduler = new CaptureScheduler();
   await api.scheduleCampaignHandler(scheduleEvent(composeBody("no-series")), { scheduler });
   assert.equal(await stores.series.get(ORG, "no-series"), undefined);
+});
+
+/**
+ * The content route, for re-opening a campaign in Compose (#307).
+ *
+ * Distinct from the archive route: that returns RENDERED html of a campaign
+ * that already sent — merge values resolved, ad fills applied, block kinds
+ * flattened into anchors. It answers "what did subscribers receive"; this
+ * answers "what did the operator compose", and only this can be loaded back
+ * into an editor.
+ */
+test("the content route returns the structured body", async () => {
+  const scheduler = new CaptureScheduler();
+  await api.scheduleCampaignHandler(
+    scheduleEvent(composeBody("content-read", { previewText: "Preview line" })),
+    { scheduler },
+  );
+
+  const res = await api.campaignContentHandler(getEvent("content-read"));
+  assert.equal(res.statusCode, 200);
+  const body = JSON.parse(res.body) as { subject: string; previewText?: string; template: unknown };
+  assert.equal(body.subject, "Weekly ledger");
+  assert.equal(body.previewText, "Preview line");
+  assert.deepEqual(body.template, { blocks: [{ kind: "text", html: "<p>Hello</p>" }] });
+});
+
+test("MJML comes back as MJML, not as the compiled html", async () => {
+  // Without `editorSource` a re-opened campaign would land in the Raw HTML
+  // editor with the operator's source gone.
+  const scheduler = new CaptureScheduler();
+  const mjml = "<mjml><mj-body><mj-text>Hi</mj-text></mj-body></mjml>";
+  await api.scheduleCampaignHandler(
+    scheduleEvent(
+      composeBody("content-mjml", {
+        template: { mjmlHtml: "<p>Hi</p>" },
+        editorSource: { mode: "mjml", mjml },
+      }),
+    ),
+    { scheduler },
+  );
+
+  const res = await api.campaignContentHandler(getEvent("content-mjml"));
+  const body = JSON.parse(res.body) as { editorSource?: { mode: string; mjml?: string } };
+  assert.equal(body.editorSource?.mode, "mjml");
+  assert.equal(body.editorSource?.mjml, mjml);
+});
+
+test("a campaign with no stored body is distinguished from one that does not exist", async () => {
+  // "not found" for a campaign that predates body storage would read as data
+  // loss. The console needs to say "compose it again" instead.
+  const scheduler = new CaptureScheduler();
+  await api.scheduleCampaignHandler(scheduleEvent(composeBody("content-legacy")), { scheduler });
+  // Simulate a pre-#298 campaign: the record exists, the body does not.
+  await stores.campaignBodies.put({
+    orgId: ORG,
+    campaignId: "content-legacy",
+    template: { blocks: [] },
+    subject: "x",
+    rootCampaignId: "content-legacy",
+    version: 1,
+    savedAt: "t",
+  });
+  const real = await api.campaignContentHandler(getEvent("content-legacy"));
+  assert.equal(real.statusCode, 200, "a stored body is returned");
+
+  const missing = await api.campaignContentHandler(getEvent("no-such-campaign"));
+  assert.equal(missing.statusCode, 404);
+  assert.equal(JSON.parse(missing.body).error, "not found", "an unknown campaign is plainly not found");
+});
+
+test("reading a body requires campaigns:manage, not merely reports:view", async () => {
+  // The body is what an operator edits, and it carries unrendered template
+  // markup including ad tags — not a report an analyst reads.
+  const scheduler = new CaptureScheduler();
+  await api.scheduleCampaignHandler(scheduleEvent(composeBody("content-rbac")), { scheduler });
+
+  const res = await api.campaignContentHandler(getEvent("content-rbac", "analyst"));
+  assert.equal(res.statusCode, 403);
 });

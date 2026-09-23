@@ -1921,6 +1921,7 @@ export class ControlPlaneStack extends Stack {
     adminRoute("ListVisFn", "listVisibilityHandler", HttpMethod.POST, "/lists/visibility");
     adminRoute("CampaignsListFn", "campaignsListHandler", HttpMethod.GET, "/orgs/{org}/campaigns");
     adminRoute("CampaignsGetFn", "campaignsHandler", HttpMethod.GET, "/orgs/{org}/campaigns/{id}");
+    adminRoute("CampaignContentFn", "campaignContentHandler", HttpMethod.GET, "/orgs/{org}/campaigns/{id}/content");
     adminRoute("CampaignsPostFn", "campaignsHandler", HttpMethod.POST, "/campaigns");
     // Send-schedule lifecycle: list + start/pause/archive (never delete, §4.6).
     adminRoute("SchedulesGetFn", "schedulesListHandler", HttpMethod.GET, "/orgs/{org}/schedules");

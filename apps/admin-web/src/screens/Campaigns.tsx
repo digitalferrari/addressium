@@ -213,7 +213,18 @@ function LifecyclePill({ status }: { status: SendScheduleState["status"] }) {
   );
 }
 
-export function Campaigns({ org, grant, onCompose }: { org: string; grant: Grant | null; onCompose?: () => void }) {
+export function Campaigns({
+  org,
+  grant,
+  onCompose,
+  onDuplicate,
+}: {
+  org: string;
+  grant: Grant | null;
+  onCompose?: () => void;
+  /** Open Compose prefilled from this campaign's stored body (#307). */
+  onDuplicate?: (campaignId: string) => void;
+}) {
   const [filter, setFilter] = useState<Filter>("All sends");
   const [busy, setBusy] = useState("");
   const [actionError, setActionError] = useState("");
@@ -419,6 +430,20 @@ export function Campaigns({ org, grant, onCompose }: { org: string; grant: Grant
                           <button className="btn ghost" disabled={s.status !== "active" || scheduleHasSent(s) || !!busy} onClick={() => void act(s.scheduleId, "pause")}>Pause</button>
                           <button className="btn ghost" disabled={s.status === "archived" || !!busy} onClick={() => void act(s.scheduleId, "archive")}>Archive</button>
                         </span>
+                      )}
+                      {/* Duplicate is not a lifecycle action, so it sits outside
+                          the branch above: a campaign with no schedule record —
+                          and one that has already sent, which is the common case
+                          — is exactly what an operator wants to copy. */}
+                      {onDuplicate && canSchedule && (
+                        <button
+                          className="btn ghost"
+                          style={{ marginTop: 6 }}
+                          onClick={() => onDuplicate(r.campaign.campaignId)}
+                          title="Open Compose prefilled from this campaign"
+                        >
+                          Duplicate
+                        </button>
                       )}
                     </td>
                   </tr>
