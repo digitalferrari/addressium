@@ -162,6 +162,8 @@ export interface SetupState {
 export interface OrgMeta {
   orgId: string;
   name: string;
+  /** IANA zone scheduled sends resolve against; editable in Settings (#294). */
+  defaultTimezone?: string;
   environment: "prod" | "dev";
   setupComplete: boolean;
   /**
@@ -1138,6 +1140,27 @@ export const api = {
   setBranding: (orgId: string, branding: Branding) => call<Branding>("POST", `/orgs/branding`, { orgId, branding }),
   saveSettings: (orgId: string, settings: { hourlyEnabled: boolean }) =>
     call<{ hourlyEnabled: boolean }>("POST", `/orgs/settings`, { orgId, ...settings }),
+  /**
+   * Correct the org's name, timezone or sending domain (#294).
+   *
+   * A domain change ADDS an identity and promotes it; nothing is ever removed,
+   * so the response may carry DNS records to publish and a warning about lists
+   * still sending from the previous domain.
+   */
+  updateOrganization: (
+    orgId: string,
+    update: { name?: string; defaultTimezone?: string; addDomain?: string },
+  ) =>
+    call<{
+      orgId: string;
+      changed: Array<{ field: string; from: string; to: string }>;
+      dns: Array<{ type: string; name: string; value: string; note?: string }>;
+      warning?: string;
+      listsOnPreviousDomain?: string[];
+    }>("POST", `/orgs/${encodeURIComponent(orgId)}/settings/organization`, {
+      action: "updateOrganization",
+      ...update,
+    }),
   setPresentation: (orgId: string, listId: string, presentation: ListPresentation) =>
     call<unknown>("POST", `/lists/presentation`, { orgId, listId, presentation }),
   /** `source` picks the reason and, transitively, the scope (§4.13): omitted stays manual/org-scoped

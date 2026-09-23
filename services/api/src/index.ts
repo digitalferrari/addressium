@@ -1303,6 +1303,11 @@ export async function orgMetaHandler(event: HttpEvent): Promise<HttpResult> {
       name: org.name,
       environment: org.environment ?? "prod",
       setupComplete: org.setupComplete,
+      // Settings → Organization edits this, so the form must be able to show the
+      // current value (#294). Added together with the client type: `api.ts`
+      // declares response shapes locally, so a field present in only one of the
+      // two compiles cleanly and is silently `undefined` at runtime.
+      defaultTimezone: org.defaultTimezone,
       ...(org.domains?.[0] ? { primaryDomain: org.domains[0] } : {}),
       // The whole list, on the same reasoning that already admits
       // `primaryDomain` above: this route is scoped to one org by

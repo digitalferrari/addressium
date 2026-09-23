@@ -1940,6 +1940,16 @@ export class ControlPlaneStack extends Stack {
       integration: new HttpLambdaIntegration("RotateMagicLinkKeyInt", provisioningFn),
       authorizer: adminAuth,
     });
+    // Correcting an org's settings, including its sending domain (#294). On
+    // `provisioningFn` because a domain change needs `ses:CreateEmailIdentity`,
+    // which is deliberately kept off the internet-facing API router — so this
+    // reuses an existing role and adds NO new IAM.
+    api.addRoutes({
+      path: "/orgs/{org}/settings/organization",
+      methods: [HttpMethod.POST],
+      integration: new HttpLambdaIntegration("UpdateOrgInt", provisioningFn),
+      authorizer: adminAuth, // handler additionally requires identity:manage on THIS org
+    });
 
     // Public JWKS so publisher sites can verify magic-link tokens (§4.10).
     const tokensFn = fn("TokensFn", svc("services/tokens/src/index.ts"), "handler", apiEnv);

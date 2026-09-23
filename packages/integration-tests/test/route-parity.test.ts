@@ -105,6 +105,9 @@ test("the router declares no handler for a route CDK never registers", () => {
  *   would put those grants behind every admin route.
  * - `POST /orgs/{org}/identity/rotate-key` — the same provisioning service,
  *   because rotation needs its KMS create/update-alias grant.
+ * - `POST /orgs/{org}/settings/organization` — also provisioning (#294): a
+ *   sending-domain correction calls `ses:CreateEmailIdentity`, and that grant is
+ *   deliberately kept off the internet-facing router.
  * - the JWKS route — `services/tokens`, which holds `kms:GetPublicKey`.
  * - report and usage — `services/reporting`.
  * - trends — `services/reporting` reads the append-only event log across campaigns.
@@ -112,6 +115,7 @@ test("the router declares no handler for a route CDK never registers", () => {
 const SERVED_BY_ANOTHER_SERVICE = new Set([
   "POST /orgs",
   "POST /orgs/{org}/identity/rotate-key",
+  "POST /orgs/{org}/settings/organization",
   "GET /orgs/{org}/.well-known/jwks.json",
   "GET /orgs/{org}/campaigns/{campaign}/report",
   "GET /orgs/{org}/analytics/trends",

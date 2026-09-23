@@ -9,7 +9,7 @@
  */
 import { schemas } from "@addressium/core";
 import { AwsProvisioningProviders, DynamoStores, S3AuditLog } from "@addressium/adapters-aws";
-import { provisionOrganization, recordAudit, SystemClock } from "@addressium/domain";
+import { dnsRecords, listsSendingFrom, planOrgUpdate, provisionOrganization, recordAudit, SystemClock } from "@addressium/domain";
 import { authorize, grantFromClaims } from "@addressium/rbac";
 
 function env(name: string): string {
@@ -84,6 +84,121 @@ export async function handler(event: ProvisionEvent) {
       statusCode: 200,
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ orgId: parsedOrg.data, kid: key.kid, keyCount: previous.length + 1, rotatedAt }),
+    };
+  }
+
+  /**
+   * Correct an organization's settings, including its sending domain (#294).
+   *
+   * Lives in THIS Lambda, not the API, because a domain change needs
+   * `ses:CreateEmailIdentity` — a grant `services/adapters-aws/ses-identity.ts`
+   * deliberately keeps off the internet-facing router. Reusing the provisioning
+   * role also means this shipped with no new IAM at all.
+   *
+   * Org-scoped (`identity:manage` on THIS org), unlike org creation below which
+   * is cross-org and needs the `*` grant.
+   */
+  if (raw && typeof raw === "object" && (raw as { action?: unknown }).action === "updateOrganization") {
+    const orgId = event.pathParameters?.org ?? (raw as { orgId?: unknown }).orgId;
+    const parsedOrg = schemas.idSchema.safeParse(orgId);
+    if (!parsedOrg.success) return { statusCode: 400, headers: {}, body: JSON.stringify({ error: "valid org is required" }) };
+    try {
+      authorize(grantFromClaims(claims), "identity:manage", parsedOrg.data);
+    } catch {
+      return { statusCode: 403, headers: {}, body: JSON.stringify({ error: "forbidden" }) };
+    }
+
+    const org = await stores().organizations.get(parsedOrg.data);
+    if (!org) return { statusCode: 404, headers: {}, body: JSON.stringify({ error: "unknown org" }) };
+
+    const input = raw as { name?: string; defaultTimezone?: string; addDomain?: string };
+    let planned;
+    try {
+      planned = planOrgUpdate(org, {
+        ...(input.name !== undefined ? { name: input.name } : {}),
+        ...(input.defaultTimezone !== undefined ? { defaultTimezone: input.defaultTimezone } : {}),
+        ...(input.addDomain !== undefined ? { addDomain: input.addDomain } : {}),
+      });
+    } catch (e) {
+      return { statusCode: 400, headers: {}, body: JSON.stringify({ error: (e as Error).message }) };
+    }
+    if (planned.changed.length === 0) {
+      return { statusCode: 200, headers: { "content-type": "application/json" },
+        body: JSON.stringify({ orgId: parsedOrg.data, changed: [], dns: [] }) };
+    }
+
+    // A new primary domain needs a verified SES identity before anything sends
+    // from it. `ensureSesDomainIdentity` is idempotent and does a get-first, so
+    // a domain the account already holds — every one of them, during the
+    // Pinpoint cutover — is REUSED rather than recreated, and its existing DKIM
+    // is left alone.
+    let dns = planned.dns;
+    const domainChange = planned.changed.find((c) => c.field === "primaryDomain");
+    if (domainChange) {
+      const identity = await providers.ensureSesDomainIdentity(
+        parsedOrg.data, domainChange.to, org.dedicatedIpPoolName,
+      );
+      dns = dnsRecords(domainChange.to, identity.dkimTokens, {
+        ...(org.dmarcPolicy ? { dmarcPolicy: org.dmarcPolicy } : {}),
+        ...(identity.mailFromDomain ? { mailFromDomain: identity.mailFromDomain } : {}),
+        ...(identity.mailFromMxHost ? { mailFromMxHost: identity.mailFromMxHost } : {}),
+      });
+    }
+
+    // Re-read and merge only the changed fields. Settings, customer-sync and
+    // magic-link rotation all write this record too, and putting back a whole
+    // object read before the SES round-trip above would revert whichever of
+    // them landed in between — including a key rotation.
+    const current = await stores().organizations.get(parsedOrg.data);
+    if (!current) return { statusCode: 404, headers: {}, body: JSON.stringify({ error: "unknown org" }) };
+    const merged = { ...current };
+    for (const c of planned.changed) {
+      if (c.field === "name") merged.name = planned.org.name;
+      if (c.field === "defaultTimezone") merged.defaultTimezone = planned.org.defaultTimezone;
+      if (c.field === "primaryDomain") merged.domains = planned.org.domains;
+    }
+    await stores().organizations.put(merged);
+
+    try {
+      await recordAudit(auditLog(), clock, {
+        orgId: parsedOrg.data,
+        memberSub: claims.sub ?? "unknown",
+        action: "organization.update",
+        // Before AND after, per field: "who changed the sending domain, from
+        // what" is the question this entry exists to answer.
+        target: planned.changed.map((c) => `${c.field}: ${c.from} -> ${c.to}`).join("; "),
+      });
+    } catch (e) {
+      console.error("audit: append failed", { action: "organization.update", error: (e as Error).message });
+    }
+
+    // Nothing was removed, so no send can break — but every list still sending
+    // from the OLD domain is now sending from a domain that is no longer
+    // primary, which an operator who just "changed the sending domain" will not
+    // expect. Named, not rewritten: silently editing the From address on live
+    // newsletters would be the worse surprise.
+    const staleLists = domainChange
+      ? await listsSendingFrom(stores(), parsedOrg.data, domainChange.from)
+      : [];
+
+    return {
+      statusCode: 200,
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        orgId: parsedOrg.data,
+        changed: planned.changed,
+        dns,
+        ...(staleLists.length > 0
+          ? {
+              warning:
+                `${staleLists.length} list(s) still send from ${domainChange!.from}: ` +
+                `${staleLists.join(", ")}. The old domain remains a verified sending ` +
+                `identity, so they keep working — update each list's from-address ` +
+                `when you want them on ${domainChange!.to}.`,
+              listsOnPreviousDomain: staleLists,
+            }
+          : {}),
+      }),
     };
   }
 

@@ -246,7 +246,128 @@ function DomainsTab({ org, grant }: { org: string; grant: Grant | null }) {
         </p>
       </div>
 
+      <OrganizationCard org={org} grant={grant} />
       <AdvancedSettingsCard org={org} grant={grant} />
+    </div>
+  );
+}
+
+/**
+ * Correcting the organization's own details (#294).
+ *
+ * The domain field is labelled "Add a sending domain", not "Change", because
+ * that is what it does: the previous identity is KEPT and stays verified. In a
+ * shared AWS account it may be carrying mail this deployment knows nothing
+ * about, so removing it is never a side effect of a settings save.
+ */
+function OrganizationCard({ org, grant }: { org: string; grant: Grant | null }) {
+  const loaded = useAsync(() => api.orgMeta(org), [org]);
+  const [name, setName] = useState("");
+  const [timezone, setTimezone] = useState("");
+  const [addDomain, setAddDomain] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState("");
+  const [dns, setDns] = useState<Array<{ type: string; name: string; value: string; note?: string }>>([]);
+  const [warning, setWarning] = useState("");
+  const canManage = can(grant, "identity:manage", org);
+
+  useEffect(() => {
+    if (loaded.data) {
+      setName(loaded.data.name ?? "");
+      setTimezone(loaded.data.defaultTimezone ?? "");
+    }
+  }, [loaded.data]);
+
+  const save = async () => {
+    setBusy(true);
+    setMsg("");
+    setDns([]);
+    setWarning("");
+    try {
+      const res = await api.updateOrganization(org, {
+        name,
+        defaultTimezone: timezone,
+        ...(addDomain.trim() ? { addDomain: addDomain.trim() } : {}),
+      });
+      if (res.changed.length === 0) {
+        setMsg("No changes to save.");
+      } else {
+        setMsg(`Saved: ${res.changed.map((c) => `${c.field} ${c.from} → ${c.to}`).join("; ")}`);
+        setAddDomain("");
+        setDns(res.dns ?? []);
+        if (res.warning) setWarning(res.warning);
+      }
+    } catch (e) {
+      setMsg(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (loaded.loading) return <SkeletonCard lines={3} label="Loading organization…" />;
+
+  const field = (label: string, value: string, set: (v: string) => void, hint?: string, placeholder?: string) => (
+    <label style={{ display: "block", marginBottom: 10 }}>
+      <span style={{ display: "block", fontSize: 13 }}>{label}</span>
+      <input
+        value={value}
+        placeholder={placeholder}
+        disabled={!canManage || busy}
+        onChange={(e) => set(e.target.value)}
+        style={{ width: 340 }}
+      />
+      {hint && <div className="muted" style={{ fontSize: 12 }}>{hint}</div>}
+    </label>
+  );
+
+  return (
+    <div className="card">
+      <h3>Organization</h3>
+      <p className="muted">
+        Correct this organization&rsquo;s details. Provisioned infrastructure (SES configuration
+        sets, signing keys, the subscriber pool) is not editable here — changing those fields
+        would only make this record disagree with AWS.
+      </p>
+      {field("Name", name, setName)}
+      {field("Default time zone", timezone, setTimezone, "An IANA name, e.g. America/New_York. Scheduled sends resolve against it.")}
+      {field(
+        "Add a sending domain",
+        addDomain,
+        setAddDomain,
+        "Adds a verified SES identity and makes it primary. Existing domains are KEPT and stay verified — they may still be carrying mail.",
+        "news.example.com",
+      )}
+      {canManage ? (
+        <button className="btn" disabled={busy} onClick={save}>
+          {busy ? "Saving…" : "Save organization"}
+        </button>
+      ) : (
+        <p className="muted">You do not have permission to change these settings.</p>
+      )}
+      {msg && <p className="muted" style={{ marginTop: 10 }}>{msg}</p>}
+      {warning && (
+        <p className="muted" style={{ marginTop: 10 }}><strong>Note:</strong> {warning}</p>
+      )}
+      {dns.length > 0 && (
+        <div style={{ marginTop: 12 }}>
+          <h4>Publish these DNS records</h4>
+          <p className="muted" style={{ fontSize: 12 }}>
+            The domain cannot send until these resolve. addressium does not write DNS.
+          </p>
+          <table>
+            <tbody>
+              {dns.map((r) => (
+                <tr key={`${r.type}-${r.name}`}>
+                  <td><code>{r.type}</code></td>
+                  <td style={{ wordBreak: "break-all" }}><code>{r.name}</code></td>
+                  <td style={{ wordBreak: "break-all" }}><code>{r.value}</code></td>
+                  <td className="muted" style={{ fontSize: 12 }}>{r.note}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }
