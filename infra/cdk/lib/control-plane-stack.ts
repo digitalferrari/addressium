@@ -2100,6 +2100,19 @@ export class ControlPlaneStack extends Stack {
       methods: [HttpMethod.GET],
       integration: new HttpLambdaIntegration("PublicDirectoryInt", publicDirectoryFn),
     });
+    // Which org serves a given subscriber hostname (#294). One SPA bundle is
+    // published for every org, so it resolves its own org at RUNTIME from the
+    // host it was loaded on — `VITE_ORG_ID` used to be substituted in at build
+    // time, which meant one build per org.
+    const publicSiteFn = fn("PublicSiteFn", apiEntry, "publicSiteHandler", apiEnv);
+    table.grantReadData(publicSiteFn);
+    reservePublic(publicSiteFn);
+    api.addRoutes({
+      // Unauthenticated: the answer is already public to anyone loading the page.
+      path: "/public/site",
+      methods: [HttpMethod.GET],
+      integration: new HttpLambdaIntegration("PublicSiteInt", publicSiteFn),
+    });
     const publicListFn = fn("PublicListFn", apiEntry, "publicListHandler", apiEnv);
     table.grantReadData(publicListFn);
     reservePublic(publicListFn);

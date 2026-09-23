@@ -3604,6 +3604,54 @@ export async function machineListCampaignsHandler(event: HttpEvent): Promise<Htt
   }
 }
 
+/**
+ * GET /public/site?host=newsletter.example.com — which org serves this hostname?
+ *
+ * Orgs are siloed: each one's subscriber portal lives on a subdomain of that
+ * org's OWN domain, and every one of those hostnames serves the SAME SPA
+ * bundle. The bundle therefore cannot know its org at build time — it asks.
+ *
+ * Before this, `VITE_ORG_ID` was substituted into the JavaScript by Vite at
+ * BUILD time, so the shipped bundle contained a literal org id and one build
+ * could serve exactly one org. Ten orgs meant ten builds, ten publishes and ten
+ * chances for one of them to go stale.
+ *
+ * Unauthenticated on purpose: the answer is already public. Anyone loading
+ * `newsletter.example.com` can see whose signup page it is, and the reply
+ * carries only what the page renders — never the org's domains, settings or
+ * counts.
+ */
+export async function publicSiteHandler(event: HttpEvent): Promise<HttpResult> {
+  try {
+    const host = (event.queryStringParameters?.host ?? "").trim().toLowerCase();
+    if (!host) return json(400, { error: "host required" });
+
+    // Matched against `siteUrl`, which is the hostname an operator configured
+    // for THIS org — not `domains`, which are SES sending identities and answer
+    // a different question ("who may we mail as").
+    const orgs = await stores().organizations.list();
+    const match = orgs.find((o) => {
+      if (!o.siteUrl) return false;
+      try {
+        return new URL(o.siteUrl).host.toLowerCase() === host;
+      } catch {
+        return false;
+      }
+    });
+    // 404, not a guess. Serving the wrong org's signup form would subscribe
+    // someone to a publication they never visited.
+    if (!match) return json(404, { error: "no organization is configured for this host" });
+
+    return json(200, {
+      orgId: match.orgId,
+      name: match.name,
+      ...(match.branding ? { branding: match.branding } : {}),
+    });
+  } catch (e) {
+    return fail(e);
+  }
+}
+
 const PUBLIC_ROUTES: Record<string, RouteHandler> = {
   "POST /signup": signupHandler,
   "POST /signup/batch": signupBatchHandler,
@@ -3617,6 +3665,7 @@ const PUBLIC_ROUTES: Record<string, RouteHandler> = {
   "POST /preferences": preferencesHandler,
   "GET /orgs/{org}/lists/{list}/public": publicListHandler,
   "GET /orgs/{org}/directory": publicDirectoryHandler,
+  "GET /public/site": publicSiteHandler,
   "GET /public/orgs/{org}/editions/{campaign}": publicArchiveHandler,
   // The subscriber site reads branding to theme itself, unauthenticated. It was
   // registered in CDK and missing from this manifest (#238) — so it worked in

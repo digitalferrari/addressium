@@ -21,7 +21,7 @@ test("submitting the form posts a signup and shows the confirmation message", as
   });
   vi.stubGlobal("fetch", fetchMock);
 
-  render(<SignupForm defaultList="ledger" />);
+  render(<SignupForm orgId="acme" defaultList="ledger" />);
   await userEvent.type(screen.getByPlaceholderText("you@example.com"), "reader@example.com");
   await userEvent.click(screen.getByRole("button", { name: /subscribe/i }));
 
@@ -37,7 +37,7 @@ test("submitting the form posts a signup and shows the confirmation message", as
 });
 
 test("the subscribe button is disabled until an email is entered", async () => {
-  render(<SignupForm defaultList="ledger" />);
+  render(<SignupForm orgId="acme" defaultList="ledger" />);
   expect(screen.getByRole("button", { name: /subscribe/i })).toBeDisabled();
 });
 
@@ -58,7 +58,7 @@ test("the hosted page renders the trap field and posts it", async () => {
   });
   vi.stubGlobal("fetch", fetchMock);
 
-  const { container } = render(<SignupForm defaultList="ledger" />);
+  const { container } = render(<SignupForm orgId="acme" defaultList="ledger" />);
   const trap = container.querySelector<HTMLInputElement>(`input[name="${HONEYPOT_FIELD}"]`);
   expect(trap).not.toBeNull();
 
@@ -92,7 +92,7 @@ test("a filled trap is still submitted, so the server can silently drop it", asy
   });
   vi.stubGlobal("fetch", fetchMock);
 
-  const { container } = render(<SignupForm defaultList="ledger" />);
+  const { container } = render(<SignupForm orgId="acme" defaultList="ledger" />);
   const trap = container.querySelector<HTMLInputElement>(`input[name="${HONEYPOT_FIELD}"]`)!;
   await userEvent.type(trap, "http://spam.example");
   await userEvent.type(screen.getByPlaceholderText("you@example.com"), "bot@example.com");

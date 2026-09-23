@@ -4,16 +4,68 @@
  * to the API; the "Embed" tab shows a copy-paste snippet that renders the same
  * widget against the operator's org + list.
  */
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { HONEYPOT_ATTRS, HONEYPOT_FIELD } from "@addressium/core";
 
 const BASE = import.meta.env.VITE_API_BASE ?? "";
-const ORG = import.meta.env.VITE_ORG_ID ?? "your-org";
+
+/**
+ * Which org this page belongs to, resolved at RUNTIME from the hostname (#294).
+ *
+ * It used to be `import.meta.env.VITE_ORG_ID`, which Vite substitutes at BUILD
+ * time — so the shipped JavaScript contained a literal org id and one build
+ * could serve exactly one org. Ten orgs meant ten builds, ten publishes, and ten
+ * chances for one of them to go stale.
+ *
+ * Orgs are siloed: each one's subscriber portal lives on a subdomain of that
+ * org's own domain, and every one of those hostnames serves this SAME bundle.
+ * So the bundle asks which org it is serving.
+ *
+ * `VITE_ORG_ID` remains as a fallback for local `npm run dev`, where there is no
+ * configured hostname to resolve.
+ */
+function useOrgId(): { orgId: string | undefined; error: string | undefined } {
+  const [orgId, setOrgId] = useState<string | undefined>(import.meta.env.VITE_ORG_ID);
+  const [error, setError] = useState<string | undefined>();
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await fetch(`${BASE}/public/site?host=${encodeURIComponent(window.location.host)}`);
+        if (cancelled) return;
+        if (res.status === 404) {
+          // NOT a fallback to some default org: serving the wrong org's signup
+          // form would subscribe someone to a publication they never visited.
+          setError(
+            "This site is not configured yet. Its subscriber domain has no organization in addressium.",
+          );
+          return;
+        }
+        if (!res.ok) throw new Error(await res.text());
+        const j = (await res.json()) as { orgId: string };
+        setOrgId(j.orgId);
+      } catch (e) {
+        if (!cancelled) setError(String(e));
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  return { orgId, error };
+}
 
 export function App() {
   const [tab, setTab] = useState<"form" | "embed">("form");
   const params = useMemo(() => new URLSearchParams(window.location.search), []);
   const listId = params.get("list") ?? "";
+  const { orgId, error } = useOrgId();
+
+  // A misconfigured host says so rather than rendering a form that would post
+  // to the wrong org — or to `"your-org"`, the old placeholder default.
+  if (error) return <div className="wrap"><h1>Subscribe</h1><p className="muted">{error}</p></div>;
+  if (!orgId) return <div className="wrap"><h1>Subscribe</h1><p className="muted">Loading…</p></div>;
+
   return (
     <div className="wrap">
       <h1>Subscribe</h1>
@@ -21,12 +73,12 @@ export function App() {
         <a onClick={() => setTab("form")} style={{ cursor: "pointer", marginRight: 12 }}>Signup form</a>
         <a onClick={() => setTab("embed")} style={{ cursor: "pointer" }}>Embed snippet</a>
       </div>
-      {tab === "form" ? <SignupForm defaultList={listId} /> : <EmbedSnippet />}
+      {tab === "form" ? <SignupForm orgId={orgId} defaultList={listId} /> : <EmbedSnippet orgId={orgId} />}
     </div>
   );
 }
 
-export function SignupForm({ defaultList }: { defaultList?: string }) {
+export function SignupForm({ orgId, defaultList }: { orgId: string; defaultList?: string }) {
   const [email, setEmail] = useState("");
   const [listId, setListId] = useState(defaultList ?? "");
   const [msg, setMsg] = useState("");
@@ -45,7 +97,7 @@ export function SignupForm({ defaultList }: { defaultList?: string }) {
       const res = await fetch(`${BASE}/signup`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ orgId: ORG, email, listId, [HONEYPOT_FIELD]: trap }),
+        body: JSON.stringify({ orgId, email, listId, [HONEYPOT_FIELD]: trap }),
       });
       if (!res.ok) throw new Error(await res.text());
       const j = (await res.json()) as { status: string };
@@ -89,13 +141,13 @@ export function SignupForm({ defaultList }: { defaultList?: string }) {
   );
 }
 
-function EmbedSnippet() {
+function EmbedSnippet({ orgId }: { orgId: string }) {
   // BASE_URL, not a bare "/", because this app is served from a subpath so that
   // subscriber-web can own the root (see vite.config.ts). Hardcoding "/embed.js"
   // here would hand operators a snippet that 404s on their own site.
   const src = new URL(`${import.meta.env.BASE_URL}embed.js`, window.location.origin).href;
   const snippet =
-    `<div data-addressium data-org="${ORG}" data-list="YOUR_LIST_ID"></div>\n` +
+    `<div data-addressium data-org="${orgId}" data-list="YOUR_LIST_ID"></div>\n` +
     `<script async src="${src}"></script>`;
   const [copied, setCopied] = useState(false);
   const copy = async () => {
