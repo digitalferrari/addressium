@@ -68,6 +68,7 @@ import {
   type PinpointSegmentResponse,
   isHoneypotTripped,
   markScheduleActive,
+  ZERO_COUNTERS,
   recordScheduledCampaign,
   type CampaignScheduler,
   startImportJob,
@@ -923,11 +924,38 @@ export async function scheduleCampaignHandler(
         // separate `series_edition` row tied to this parent, so reports can
         // aggregate actual stored counters without guessing from an id prefix.
         //
-        // Do NOT stamp `descriptor.seriesId` here. `CampaignSeries` is the
-        // separate opt-in registry that owns reusable, series-wide ad fills;
-        // this inline recurring campaign has no such row. Stamping its campaign
-        // id made the sender require a nonexistent registry record and every
-        // ordinary recurring schedule dead-lettered before its first recipient.
+        // Ensure the `CampaignSeries` registry row EXISTS, then stamp
+        // `descriptor.seriesId` (#314).
+        //
+        // The comment that used to live here said not to stamp it, and it was
+        // right about the symptom: stamping a campaign id with no registry row
+        // made `sendCampaign` throw `unknown campaign series` and every
+        // recurring schedule dead-lettered before its first recipient. But the
+        // bug was one level up. Without a row a series can never have
+        // series-wide ad fills at all, so the Ad tags screen was writing into a
+        // void for every schedule created through the console — the fills were
+        // stored and nothing ever read them.
+        //
+        // Created unconditionally rather than lazily on first ad fill: a
+        // registry row is cheap, and the alternative is a screen whose
+        // behaviour depends on invisible state.
+        const existingSeries = await stores().series.get(body.orgId, body.campaignId);
+        await stores().series.put({
+          orgId: body.orgId,
+          seriesId: body.campaignId,
+          name: body.subject,
+          cadence: "daily",
+          // `templateId` is empty for the same reason the campaign record's is:
+          // the schedule payload carries an inline body, not a saved template
+          // id, and fabricating a reference would be worse than leaving it
+          // blank. The stored body (#298) is what the launch path reads.
+          templateId: existingSeries?.templateId ?? "",
+          // NEVER clobber fills an operator has already configured. This route
+          // runs again on every re-schedule of the same id.
+          adSlotFills: existingSeries?.adSlotFills ?? [],
+          aggregate: existingSeries?.aggregate ?? { ...ZERO_COUNTERS },
+        });
+        descriptor.seriesId = body.campaignId;
         await recordScheduledCampaign(stores(), {
           orgId: body.orgId,
           campaignId: body.campaignId,

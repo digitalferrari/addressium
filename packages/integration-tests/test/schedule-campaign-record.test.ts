@@ -242,11 +242,21 @@ test("a recurring series is recorded with no single send time", async () => {
   // No `sendAt` on a series, for the same reason the campaign has no
   // `schedule`: there is no single instant to point at (#248).
   assert.equal(state?.sendAt, undefined);
+  // Updated by #314. This used to assert `seriesId` was UNSET, because
+  // stamping it with no registry row made the sender throw `unknown campaign
+  // series` and dead-letter every recurring schedule. The guard was right and
+  // the missing row was the bug: without one, series-wide ad fills could never
+  // apply, and the Ad tags screen wrote fills nothing on the live path read.
+  // The route now creates the row and stamps the id, so the sender finds it.
   const payload = scheduler.recurring[0]?.payload as { descriptor?: { seriesId?: string } } | undefined;
   assert.equal(
     payload?.descriptor?.seriesId,
-    undefined,
-    "an inline recurring campaign is not a CampaignSeries registry row; the sender must not require one",
+    "daily",
+    "the sender needs this to find the series and apply its ad fills",
+  );
+  assert.ok(
+    await stores.series.get(ORG, "daily"),
+    "and the registry row it points at must exist, or the send throws",
   );
 });
 
@@ -540,4 +550,78 @@ test("the body is a sibling item, not a field on the campaign record", async () 
     "the campaign record must not carry the body",
   );
   assert.ok(await stores.campaignBodies.get(ORG, "body-sibling"), "the body lives beside it");
+});
+
+/**
+ * A recurring schedule gets a `CampaignSeries` registry row (#314).
+ *
+ * Without one, series-wide ad fills could never apply: `sendCampaign` reads the
+ * series only when `descriptor.seriesId` is set, and the route deliberately
+ * never set it — because stamping an id with no row made the sender throw
+ * `unknown campaign series` and dead-letter every recurring schedule. The guard
+ * was right; the missing row was the bug. Meanwhile the Ad tags screen wrote
+ * fills that nothing on the live path ever read.
+ */
+test("a recurring schedule creates its series registry row", async () => {
+  const scheduler = new CaptureScheduler();
+  await api.scheduleCampaignHandler(
+    scheduleEvent(composeBody("series-row", { when: { type: "recurring", cron: "cron(0 13 * * ? *)" } })),
+    { scheduler },
+  );
+
+  const series = await stores.series.get(ORG, "series-row");
+  assert.ok(series, "the registry row must exist, or ad fills can never apply");
+  assert.equal(series.seriesId, "series-row");
+  assert.deepEqual(series.adSlotFills, [], "a new series starts with no fills");
+});
+
+test("the descriptor is stamped with the series id", async () => {
+  // This is what makes `sendCampaign` read the series and apply its fills.
+  const scheduler = new CaptureScheduler();
+  await api.scheduleCampaignHandler(
+    scheduleEvent(composeBody("series-stamp", { when: { type: "recurring", cron: "cron(0 13 * * ? *)" } })),
+    { scheduler },
+  );
+
+  const payload = scheduler.recurring[0]?.payload as { descriptor?: { seriesId?: string } };
+  assert.equal(payload?.descriptor?.seriesId, "series-stamp");
+});
+
+test("re-scheduling never clobbers ad fills an operator configured", async () => {
+  // This route runs again on every re-schedule of the same id. Overwriting the
+  // fills would silently drop sold placements.
+  const scheduler = new CaptureScheduler();
+  await api.scheduleCampaignHandler(
+    scheduleEvent(composeBody("series-fills", { when: { type: "recurring", cron: "cron(0 13 * * ? *)" } })),
+    { scheduler },
+  );
+  const created = await stores.series.get(ORG, "series-fills");
+  await stores.series.put({
+    ...created!,
+    adSlotFills: [
+      { slot: "ad_top", html: "<AD>", binding: { kind: "series", seriesId: "series-fills" }, version: 1 },
+    ],
+  });
+
+  // Re-schedule: same id, edited subject.
+  await api.scheduleCampaignHandler(
+    scheduleEvent(
+      composeBody("series-fills", {
+        subject: "Edited",
+        when: { type: "recurring", cron: "cron(0 13 * * ? *)" },
+      }),
+    ),
+    { scheduler },
+  );
+
+  const after = await stores.series.get(ORG, "series-fills");
+  assert.equal(after?.adSlotFills.length, 1, "configured fills must survive a re-schedule");
+  assert.equal(after?.adSlotFills[0]?.html, "<AD>");
+});
+
+test("a one-off gets no series row", async () => {
+  // Series-wide fills are for series. A one-off carries its ads inline.
+  const scheduler = new CaptureScheduler();
+  await api.scheduleCampaignHandler(scheduleEvent(composeBody("no-series")), { scheduler });
+  assert.equal(await stores.series.get(ORG, "no-series"), undefined);
 });
