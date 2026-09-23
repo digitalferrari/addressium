@@ -36,6 +36,7 @@ import { can, type Grant } from "../rbac.js";
 import { idProblem, isValidId, suggestId } from "../ids.js";
 import { relativeTime } from "../time.js";
 import { api, type ApiKeyEntry, type ApiKeyScope } from "../api.js";
+import { SkeletonTable } from "../Skeleton.js";
 
 /**
  * Mirrors `ApiKeyScope` in `@addressium/core`. Each label says what an
@@ -259,7 +260,7 @@ export function ApiKeys({ org, grant }: { org: string; grant: Grant | null }) {
           revoking a key does not affect any operator's access.
         </p>
 
-        {loading && <div className="muted">Loading…</div>}
+        {loading && <SkeletonTable rows={4} />}
         {error && <p className="err">{error}</p>}
 
         {!loading && rows.length === 0 && (

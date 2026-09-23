@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { api, type SuppressionEntry, type SuppressionCheckResult } from "../api.js";
 import { useAsync } from "../useAsync.js";
+import { SkeletonTable } from "../Skeleton.js";
 
 export function Suppression({ org }: { org: string }) {
   const [revision, setRevision] = useState(0);
@@ -78,7 +79,7 @@ export function Suppression({ org }: { org: string }) {
           <h2>Suppressed addresses</h2>
           <input aria-label="Filter suppressions" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Filter email or source" />
         </div>
-        {loading && <p className="muted">Loading suppression records…</p>}
+        {loading && <SkeletonTable rows={5} label="Loading suppression records…" />}
         {!loading && rows.length === 0 && <p className="muted">{query ? "No suppression records match this filter." : "No local suppression records yet."}</p>}
         {rows.length > 0 && <table><thead><tr><th>Email</th><th>Source</th><th>Scope</th><th>Added</th><th /></tr></thead><tbody>
           {rows.map((entry) => <tr key={`${entry.email}:${entry.addedAt}`}><td>{entry.email}</td><td>{entry.source}</td><td>{entry.scope}</td><td>{new Date(entry.addedAt).toLocaleString()}</td><td><button className="btn ghost" disabled={busyEmail === entry.email} onClick={() => void lift(entry.email)}>Lift</button></td></tr>)}

@@ -29,6 +29,7 @@ import { useAsync } from "../useAsync.js";
 import { Kpi } from "../Kpi.js";
 import { can, type Grant } from "../rbac.js";
 import { api, type AnalyticsTrends, type CampaignReport, type ClickMapRow } from "../api.js";
+import { SkeletonTable } from "../Skeleton.js";
 
 type Tab = "links" | "map" | "funnel";
 
@@ -238,7 +239,7 @@ export function TrendsPanel({ trends, loading, error }: { trends?: AnalyticsTren
         </div>
         {trends && <span className="muted">{trends.from} → {trends.through}</span>}
       </div>
-      {loading && <p className="muted">Loading trends…</p>}
+      {loading && <SkeletonTable rows={4} label="Loading trends…" />}
       {error && <p className="muted">Trends unavailable: {error}</p>}
       {!loading && !error && trends && (
         <>

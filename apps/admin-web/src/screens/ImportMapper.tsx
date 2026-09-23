@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useAsync } from "../useAsync.js";
 import { api, type ColumnMapping, type ImportPreview, type ImportUploadTicket, type MappedImportReport, type MappingPlan, type NewListDefaults } from "../api.js";
+import { SkeletonScreen, SkeletonTable } from "../Skeleton.js";
 
 const INLINE_IMPORT_MAX_BYTES = 2 * 1024 * 1024;
 
@@ -326,7 +327,7 @@ function ImportHistory({ org, refresh }: { org: string; refresh: string }) {
   // `!batches.data` matters: useAsync drops `data` on every deps change, so
   // without it each 5-second poll would blank the whole table and redraw it —
   // a flicker on exactly the screen an operator is watching a job from.
-  if (batches.loading && !batches.data) return <div className="muted">Loading import history…</div>;
+  if (batches.loading && !batches.data) return <SkeletonScreen label="Loading import history…" />;
   if (batches.error && !batches.data) return <div className="error">{batches.error}</div>;
   const rows = batches.data ?? [];
   if (rows.length === 0) {
@@ -363,7 +364,7 @@ function ImportHistory({ org, refresh }: { org: string; refresh: string }) {
 
       {openId && (
         <div className="card">
-          {detail.loading && <div className="muted">Loading rows…</div>}
+          {detail.loading && <SkeletonTable rows={4} label="Loading rows…" />}
           {detail.error && <div className="error">{detail.error}</div>}
           {detail.data && (
             <>

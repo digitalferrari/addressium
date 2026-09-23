@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useAsync } from "../useAsync.js";
 import { api, type TeamMemberRow } from "../api.js";
+import { SkeletonScreen } from "../Skeleton.js";
 
 const ROLE_HELP: Record<string, string> = {
   developer_admin: "Everything, including managing this team",
@@ -38,7 +39,7 @@ export function Team({ org }: { org: string }) {
     finally { setBusy(false); }
   };
 
-  if (loaded.loading) return <div className="muted">Loading…</div>;
+  if (loaded.loading) return <SkeletonScreen />;
   if (loaded.error) return <div className="error">{loaded.error}</div>;
 
   return (

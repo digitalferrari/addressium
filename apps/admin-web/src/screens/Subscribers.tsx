@@ -9,6 +9,7 @@ import { useEffect, useState } from "react";
 import { useAsync } from "../useAsync.js";
 import { can, type Grant } from "../rbac.js";
 import { api, type SubscriberDetail, type SubscriberTimeline, type SuppressionCheckResult, type SuppressionImportReport } from "../api.js";
+import { SkeletonTable } from "../Skeleton.js";
 
 export function Subscribers({ org, grant }: { org: string; grant: Grant | null }) {
   const [q, setQ] = useState("");
@@ -70,7 +71,7 @@ export function Subscribers({ org, grant }: { org: string; grant: Grant | null }
         <p className="muted" style={{ margin: "6px 0 0", fontSize: 13 }}>
           Matches the START of an address. Results are paged.
         </p>
-        {subs.loading && <p className="muted">Loading…</p>}
+        {subs.loading && <SkeletonTable rows={6} />}
         {subs.error && <p className="err">{subs.error}</p>}
         {subs.data && subs.data.rows.length === 0 && <p className="muted">No subscribers match.</p>}
         {subs.data && subs.data.rows.length > 0 && (
@@ -181,7 +182,7 @@ export function Subscribers({ org, grant }: { org: string; grant: Grant | null }
 
       <div className="card">
         <div className="muted" style={{ marginBottom: 8 }}>Suppression list</div>
-        {supps.loading && <p className="muted">Loading…</p>}
+        {supps.loading && <SkeletonTable rows={4} />}
         {supps.error && <p className="err">{supps.error}</p>}
         {supps.data && supps.data.length === 0 && <p className="muted">No suppressed addresses.</p>}
         {supps.data && supps.data.length > 0 && (

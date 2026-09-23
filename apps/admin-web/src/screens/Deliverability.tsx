@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useAsync } from "../useAsync.js";
 import { api, type AlertRule } from "../api.js";
+import { SkeletonScreen } from "../Skeleton.js";
 
 const METRIC_LABEL: Record<string, string> = {
   complaint_rate: "Complaint rate",
@@ -53,7 +54,7 @@ export function Deliverability({ org }: { org: string }) {
     }
   };
 
-  if (loaded.loading) return <div className="muted">Loading…</div>;
+  if (loaded.loading) return <SkeletonScreen />;
   if (loaded.error) return <div className="error">{loaded.error}</div>;
 
   return (

@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useAsync } from "../useAsync.js";
 import { idProblem, suggestId } from "../ids.js";
 import { api } from "../api.js";
+import { SkeletonTable } from "../Skeleton.js";
 
 /**
  * Newsletters — create a list, open or close it (#130/#131).
@@ -140,7 +141,7 @@ export function Newsletters({ org }: { org: string }) {
         {msg && <div style={{ marginTop: 8 }}>{msg}</div>}
       </div>
 
-      {rows.loading && <div className="muted">Loading…</div>}
+      {rows.loading && <SkeletonTable rows={5} />}
       {rows.error && <div className="error">{rows.error}</div>}
       {rows.data && rows.data.length === 0 && (
         <div className="muted">No newsletters yet — create the first one above.</div>

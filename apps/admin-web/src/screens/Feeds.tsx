@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api, type Feed, type SaveFeedBody } from "../api.js";
 import { useAsync } from "../useAsync.js";
+import { SkeletonTable } from "../Skeleton.js";
 
 const FIELDS = ["title", "link", "description", "date", "author", "content"];
 
@@ -74,7 +75,7 @@ export function Feeds({ org }: { org: string }) {
       <p className="muted">Supported feed fields: {FIELDS.join(", ")}. The URL is fetched server-side with SSRF protection when a recurring edition runs.</p>
       <div style={{ display: "flex", gap: 8 }}><button className="btn" onClick={() => void save()}>Save feed</button><button className="btn ghost" onClick={() => setShowForm(false)}>Cancel</button></div>
     </div>}
-    {feeds.loading && <p className="muted">Loading feeds…</p>}
+    {feeds.loading && <SkeletonTable rows={3} label="Loading feeds…" />}
     {feeds.error && <p className="err">{feeds.error}</p>}
     {!feeds.loading && !feeds.error && rows.length === 0 && !showForm && <div className="card muted">No feeds configured yet.</div>}
     {rows.length > 0 && <div className="card" style={{ padding: 0, overflowX: "auto" }}>

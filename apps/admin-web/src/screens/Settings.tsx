@@ -35,6 +35,7 @@ import { Deliverability } from "./Deliverability.js";
 import { Privacy } from "./Privacy.js";
 import { Team } from "./Team.js";
 import { SendingIdentity } from "./SendingIdentity.js";
+import { SkeletonCard, SkeletonScreen, SkeletonTable } from "../Skeleton.js";
 
 type TabId = "domains" | "magic" | "alerts" | "privacy" | "team" | "customer";
 
@@ -121,7 +122,7 @@ function CustomerSyncTab({ org }: { org: string }) {
     setConfigured(loaded.data.configured);
   }, [loaded.data]);
 
-  if (loaded.loading) return <div className="muted">Loading…</div>;
+  if (loaded.loading) return <SkeletonScreen />;
   if (loaded.error) return <div className="error">{loaded.error}</div>;
   const save = async () => {
     setBusy(true); setMessage("");
@@ -163,7 +164,7 @@ function CustomerSyncTab({ org }: { org: string }) {
 function DomainsTab({ org, grant }: { org: string; grant: Grant | null }) {
   const loaded = useAsync(() => api.orgMeta(org), [org]);
 
-  if (loaded.loading) return <div className="muted">Loading…</div>;
+  if (loaded.loading) return <SkeletonScreen />;
   if (loaded.error) return <div className="error">{loaded.error}</div>;
 
   const domains = loaded.data?.domains ?? [];
@@ -276,7 +277,7 @@ function AdvancedSettingsCard({ org, grant }: { org: string; grant: Grant | null
     }
   };
 
-  if (loaded.loading) return <div className="muted" style={{ padding: 12 }}>Loading Advanced Settings…</div>;
+  if (loaded.loading) return <SkeletonCard lines={2} label="Loading Advanced Settings…" />;
 
   return (
     <div className="card">
@@ -329,7 +330,7 @@ function MagicLinkTab({ org }: { org: string }) {
       <div className="card">
         <h3>Magic-link tokens</h3>
         {loaded.loading ? (
-          <div className="muted">Loading…</div>
+          <SkeletonTable rows={3} />
         ) : loaded.error ? (
           // The claim table below is true of the deployment either way, but
           // whether THIS org mints tokens is a fact we just failed to read —
