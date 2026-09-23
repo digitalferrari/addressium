@@ -1930,3 +1930,62 @@ test("the suppression sync can READ the SES list and never write it", () => {
     `${id}: the sync must not be able to write to SES's suppression list`,
   );
 });
+
+/**
+ * The POST matcher's text transformation (#292).
+ *
+ * WAF's transformation enum has `LOWERCASE` but no `UPPERCASE`. The rule used
+ * the latter, so CloudFormation validation reported W3030 and the ACL would
+ * have been rejected at deploy — meaning the reference WAF an operator copies
+ * could not actually be applied.
+ *
+ * `NONE` rather than any other value, because no transformation is needed:
+ * HTTP methods are case-sensitive and uppercase by RFC 9110, so WAF's `method`
+ * field already reads `POST`.
+ */
+const signupCaptchaRule = () =>
+  aclRules(referenceAcls(), "REGIONAL").find((r) => r.Name === "SignupCaptcha")!;
+
+test("the POST matcher uses a transformation WAF actually supports (#292)", () => {
+  const statements = signupCaptchaRule().Statement.AndStatement.Statements as Record<string, any>[];
+  const method = statements.find((s) => s.ByteMatchStatement?.FieldToMatch?.Method);
+  assert.ok(method, "the CAPTCHA rule must still match on method");
+
+  const transforms = method.ByteMatchStatement.TextTransformations as { Type: string }[];
+  // The enum WAF accepts. `UPPERCASE` is conspicuously absent from it, which is
+  // the whole bug.
+  const VALID = new Set([
+    "NONE", "COMPRESS_WHITE_SPACE", "HTML_ENTITY_DECODE", "LOWERCASE",
+    "CMD_LINE", "URL_DECODE", "BASE64_DECODE", "HEX_DECODE", "MD5", "REPLACE_COMMENTS",
+    "ESCAPE_SEQ_DECODE", "SQL_HEX_DECODE", "CSS_DECODE", "JS_DECODE", "NORMALIZE_PATH",
+    "NORMALIZE_PATH_WIN", "REMOVE_NULLS", "REPLACE_NULLS", "BASE64_DECODE_EXT",
+    "URL_DECODE_UNI", "UTF8_TO_UNICODE",
+  ]);
+  for (const t of transforms) {
+    assert.ok(VALID.has(t.Type), `"${t.Type}" is not a WAF text transformation`);
+  }
+  assert.equal(transforms[0]?.Type, "NONE", "an HTTP method needs no transformation at all");
+});
+
+test("the CAPTCHA matches POST and only POST (#292)", () => {
+  const statements = signupCaptchaRule().Statement.AndStatement.Statements as Record<string, any>[];
+  const method = statements.find((s) => s.ByteMatchStatement?.FieldToMatch?.Method)!;
+  assert.equal(method.ByteMatchStatement.SearchString, "POST");
+  // EXACTLY, not STARTS_WITH: the latter would also match a method beginning
+  // "POST", and more importantly would not narrow anything useful.
+  assert.equal(method.ByteMatchStatement.PositionalConstraint, "EXACTLY");
+});
+
+test("the CAPTCHA stays scoped to /signup and excludes /signup/batch (#292, #188)", () => {
+  // The regression this guards: `STARTS_WITH "/signup"` also caught
+  // `/signup/batch`, which the subscriber site calls programmatically. A CAPTCHA
+  // challenge to a non-browser client is simply a broken endpoint.
+  const statements = signupCaptchaRule().Statement.AndStatement.Statements as Record<string, any>[];
+  const uri = statements.find((s) => s.ByteMatchStatement?.FieldToMatch?.UriPath)!;
+  assert.equal(uri.ByteMatchStatement.SearchString, "/signup");
+  assert.equal(
+    uri.ByteMatchStatement.PositionalConstraint,
+    "EXACTLY",
+    "STARTS_WITH would re-capture /signup/batch",
+  );
+});

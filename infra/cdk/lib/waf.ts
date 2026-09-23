@@ -67,7 +67,14 @@ const isPost: CfnWebACL.StatementProperty = {
     fieldToMatch: { method: {} },
     positionalConstraint: "EXACTLY",
     searchString: "POST",
-    textTransformations: [{ priority: 0, type: "UPPERCASE" }],
+    // `NONE`, not `UPPERCASE` (#292). WAF's transformation enum has LOWERCASE
+    // but no UPPERCASE, so the old value failed CloudFormation validation with
+    // W3030 and would have rejected the ACL at deploy.
+    //
+    // No transformation is needed regardless: HTTP methods are case-sensitive
+    // and uppercase by RFC 9110, so WAF's `method` field already reads `POST`.
+    // Reaching for a transform here was solving a problem that does not exist.
+    textTransformations: [{ priority: 0, type: "NONE" }],
   },
 };
 
