@@ -1913,6 +1913,7 @@ export class ControlPlaneStack extends Stack {
     adminRoute("AuditReadFn", "auditReadHandler", HttpMethod.GET, "/orgs/{org}/audit");
     adminRoute("PrivacyFn", "privacyHandler", HttpMethod.POST, "/privacy");
     adminRoute("BrandingPostFn", "brandingHandler", HttpMethod.POST, "/orgs/branding");
+    adminRoute("SettingsPostFn", "settingsHandler", HttpMethod.POST, "/orgs/settings");
     adminRoute("CustomerSyncGetFn", "customerSyncHandler", HttpMethod.GET, "/orgs/{org}/customer-sync");
     adminRoute("CustomerSyncPostFn", "customerSyncHandler", HttpMethod.POST, "/orgs/customer-sync");
     adminRoute("ReengagementGetFn", "reengagementHandler", HttpMethod.GET, "/orgs/{org}/reengagement");

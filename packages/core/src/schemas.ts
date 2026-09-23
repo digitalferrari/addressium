@@ -683,3 +683,9 @@ export type IssueApiKeyInput = z.infer<typeof issueApiKeySchema>;
 /** Revoke one API key. Revocation keeps the row — see `ApiKeyStore`. */
 export const revokeApiKeySchema = z.object({ orgId: idSchema, keyId: idSchema });
 export type RevokeApiKeyInput = z.infer<typeof revokeApiKeySchema>;
+
+export const saveSettingsSchema = z.object({
+  orgId: idSchema,
+  hourlyEnabled: z.boolean(),
+});
+export type SaveSettingsInput = z.infer<typeof saveSettingsSchema>;

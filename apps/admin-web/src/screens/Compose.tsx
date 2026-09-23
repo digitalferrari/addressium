@@ -9,6 +9,7 @@ import { api, type EmailBlock, type ScheduleWhen } from "../api.js";
 import {
   describeSchedule,
   buildEventBridgeCron,
+  getNextRuns,
   DAYS_OF_WEEK,
   type DayOfWeek,
   type RecurringFrequency
@@ -27,6 +28,7 @@ export function Compose({ org, onScheduled }: { org: string; onScheduled: () => 
   const templates = useAsync(() => api.templates(org), [org]);
   const segments = useAsync(() => api.segments(org), [org]);
   const feeds = useAsync(() => api.feeds(org), [org]);
+  const orgMeta = useAsync(() => api.orgMeta(org), [org]);
   const [listId, setListId] = useState("");
   const [segmentId, setSegmentId] = useState("");
   const [campaignId, setCampaignId] = useState("");
@@ -46,6 +48,7 @@ export function Compose({ org, onScheduled }: { org: string; onScheduled: () => 
   const [frequency, setFrequency] = useState<RecurringFrequency>("daily");
   const [selectedDays, setSelectedDays] = useState<DayOfWeek[]>([]);
   const [timeOfDay, setTimeOfDay] = useState("13:00");
+  const [nextRuns, setNextRuns] = useState<Date[] | null>(null);
 
   useEffect(() => {
     const nextCron = buildEventBridgeCron({
@@ -295,8 +298,9 @@ export function Compose({ org, onScheduled }: { org: string; onScheduled: () => 
         {when === "recurring" && (
           <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 12 }}>
             <div>
-              <label style={{ fontWeight: 600, display: "block", marginBottom: 4 }}>Frequency</label>
+              <label htmlFor="frequency-select" style={{ fontWeight: 600, display: "block", marginBottom: 4 }}>Frequency</label>
               <select
+                id="frequency-select"
                 value={frequency}
                 onChange={(e) => setFrequency(e.target.value as RecurringFrequency)}
                 style={{ width: "100%", padding: "6px 12px", borderRadius: 4, border: "1px solid #ccc" }}
@@ -305,6 +309,7 @@ export function Compose({ org, onScheduled }: { org: string; onScheduled: () => 
                 <option value="weekdays">Weekdays (Mon-Fri)</option>
                 <option value="weekends">Weekends (Sat-Sun)</option>
                 <option value="custom">Custom Days</option>
+                {orgMeta.data?.hourlyEnabled && <option value="hourly">Hourly (Testing/Debug)</option>}
               </select>
             </div>
 
@@ -392,11 +397,59 @@ export function Compose({ org, onScheduled }: { org: string; onScheduled: () => 
               fontSize: 14,
               color: "#166534",
               display: "flex",
-              alignItems: "center",
+              flexDirection: "column",
               gap: 8
             }}>
-              <strong>📅 Summary:</strong> {describeSchedule({ frequency, daysOfWeek: selectedDays, timeOfDay }, timezone)}
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <strong>📅 Summary:</strong> {describeSchedule({ frequency, daysOfWeek: selectedDays, timeOfDay }, timezone)}
+              </div>
+              <div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const runs = getNextRuns({ frequency, daysOfWeek: selectedDays, timeOfDay }, timezone);
+                    setNextRuns(runs);
+                  }}
+                  style={{
+                    backgroundColor: "#166534",
+                    color: "#fff",
+                    border: "none",
+                    borderRadius: 4,
+                    padding: "4px 8px",
+                    fontSize: 12,
+                    fontWeight: 600,
+                    cursor: "pointer"
+                  }}
+                >
+                  🔍 Preview Next 60 Runs
+                </button>
+              </div>
             </div>
+
+            {nextRuns && (
+              <div style={{
+                maxHeight: 180,
+                overflowY: "auto",
+                backgroundColor: "#f4f4f5",
+                border: "1px solid #e4e4e7",
+                borderRadius: 6,
+                padding: "10px 14px",
+                fontSize: 12,
+                color: "#3f3f46"
+              }}>
+                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6, borderBottom: "1px solid #ddd", paddingBottom: 4 }}>
+                  <strong>Calculated Run Times (Local Zone):</strong>
+                  <span style={{ cursor: "pointer", color: "#ef4444", fontWeight: 600 }} onClick={() => setNextRuns(null)}>✕ Close</span>
+                </div>
+                <ol style={{ margin: 0, paddingLeft: 20 }}>
+                  {nextRuns.map((r, i) => (
+                    <li key={i} style={{ marginBottom: 4 }}>
+                      {r.toLocaleString()}
+                    </li>
+                  ))}
+                </ol>
+              </div>
+            )}
 
             <div>
               <details style={{ fontSize: 12, cursor: "pointer", marginTop: 4 }}>

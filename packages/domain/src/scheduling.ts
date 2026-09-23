@@ -31,7 +31,7 @@ export const DAYS_OF_WEEK: { id: DayOfWeek; label: string; shortLabel: string }[
   { id: "SUN", label: "Sunday", shortLabel: "Sun" },
 ];
 
-export type RecurringFrequency = "daily" | "weekdays" | "weekends" | "custom";
+export type RecurringFrequency = "daily" | "weekdays" | "weekends" | "custom" | "hourly";
 
 export interface RecurringScheduleConfig {
   frequency: RecurringFrequency;
@@ -60,6 +60,8 @@ export function buildEventBridgeCron(config: RecurringScheduleConfig): string {
   const min = Math.max(0, Math.min(59, parseInt(parts[1] ?? "0", 10) || 0));
 
   switch (config.frequency) {
+    case "hourly":
+      return `cron(${min} * * * ? *)`;
     case "daily":
       return `cron(${min} ${hour} * * ? *)`;
     case "weekdays":
@@ -88,13 +90,25 @@ export function buildEventBridgeCron(config: RecurringScheduleConfig): string {
  * or returns null if the expression does not match standard newsletter recurring patterns.
  */
 export function parseEventBridgeCron(cron: string): RecurringScheduleConfig | null {
-  const match = cron.trim().match(/^cron\(\s*(\d{1,2})\s+(\d{1,2})\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s*\)$/i);
+  const match = cron.trim().match(/^cron\(\s*(\d{1,2})\s+(\d{1,2}|\*)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s*\)$/i);
   if (!match) return null;
   const min = parseInt(match[1]!, 10);
-  const hour = parseInt(match[2]!, 10);
-  if (isNaN(min) || isNaN(hour) || min < 0 || min > 59 || hour < 0 || hour > 23) return null;
+  const hourStr = match[2]!;
+
+  if (isNaN(min) || min < 0 || min > 59) return null;
   const dom = match[3]!;
   const dow = match[5]!.toUpperCase();
+
+  if (hourStr === "*") {
+    if (dom === "*" && dow === "?") {
+      const timeOfDay = `00:${min < 10 ? `0${min}` : min}`;
+      return { frequency: "hourly", timeOfDay };
+    }
+    return null;
+  }
+
+  const hour = parseInt(hourStr, 10);
+  if (isNaN(hour) || hour < 0 || hour > 23) return null;
   const timeOfDay = `${hour < 10 ? `0${hour}` : hour}:${min < 10 ? `0${min}` : min}`;
 
   if (dom === "*" && dow === "?") {
@@ -133,6 +147,11 @@ export function describeSchedule(
 
   const timeStr = formatTimeOfDay(config.timeOfDay);
   switch (config.frequency) {
+    case "hourly": {
+      const parts = config.timeOfDay.split(":");
+      const minStr = parts[1] || "00";
+      return `Every hour at minute ${minStr}${tzSuffix}`;
+    }
     case "daily":
       return `Every day at ${timeStr}${tzSuffix}`;
     case "weekdays":
@@ -148,4 +167,94 @@ export function describeSchedule(
       return `Every ${dayLabels.join(", ")} at ${timeStr}${tzSuffix}`;
     }
   }
+}
+
+/**
+ * Construct a local Date for a target timezone from specific calendar parts.
+ */
+function dateInTimezone(year: number, month: number, day: number, hour: number, minute: number, timezone: string): Date {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const isoStr = `${year}-${pad(month)}-${pad(day)}T${pad(hour)}:${pad(minute)}:00`;
+  if (!timezone) return new Date(isoStr + "Z");
+  const utcDate = new Date(isoStr + "Z");
+  const tzFormatter = new Intl.DateTimeFormat("en-US", {
+    timeZone: timezone,
+    year: "numeric", month: "numeric", day: "numeric",
+    hour: "numeric", minute: "numeric", second: "numeric",
+    hour12: false
+  });
+  const parts = tzFormatter.formatToParts(utcDate);
+  const findPart = (type: string) => parts.find(p => p.type === type)?.value || "0";
+  const tzYear = parseInt(findPart("year"), 10);
+  const tzMonth = parseInt(findPart("month"), 10);
+  const tzDay = parseInt(findPart("day"), 10);
+  const tzHour = parseInt(findPart("hour"), 10);
+  const tzMin = parseInt(findPart("minute"), 10);
+  const gotDate = new Date(Date.UTC(tzYear, tzMonth - 1, tzDay, tzHour, tzMin));
+  const diffMs = utcDate.getTime() - gotDate.getTime();
+  return new Date(utcDate.getTime() + diffMs);
+}
+
+/**
+ * Get uppercase short weekday in target timezone.
+ */
+function getDayOfWeekInTimezone(date: Date, timezone: string): string {
+  const formatter = new Intl.DateTimeFormat("en-US", {
+    timeZone: timezone || "UTC",
+    weekday: "short"
+  });
+  return formatter.format(date).toUpperCase();
+}
+
+/**
+ * Predicts the next N run times of a recurring campaign.
+ */
+export function getNextRuns(
+  config: RecurringScheduleConfig,
+  timezone?: string,
+  limit: number = 60
+): Date[] {
+  const runs: Date[] = [];
+  const parts = config.timeOfDay.split(":");
+  const targetHour = parseInt(parts[0] ?? "0", 10);
+  const targetMin = parseInt(parts[1] ?? "0", 10);
+
+  if (config.frequency === "hourly") {
+    const current = new Date();
+    current.setSeconds(0, 0);
+    current.setMinutes(targetMin);
+    if (current.getTime() <= Date.now()) {
+      current.setHours(current.getHours() + 1);
+    }
+    for (let i = 0; i < limit; i++) {
+      runs.push(new Date(current));
+      current.setHours(current.getHours() + 1);
+    }
+    return runs;
+  }
+
+  const now = new Date();
+  let searchDate = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+  for (let dayOffset = 0; dayOffset < 365 && runs.length < limit; dayOffset++) {
+    const year = searchDate.getFullYear();
+    const month = searchDate.getMonth() + 1;
+    const day = searchDate.getDate();
+    const runTime = dateInTimezone(year, month, day, targetHour, targetMin, timezone || "");
+    if (runTime.getTime() > now.getTime()) {
+      const dow = getDayOfWeekInTimezone(runTime, timezone || "");
+      let matches = false;
+      if (config.frequency === "daily") {
+        matches = true;
+      } else if (config.frequency === "weekdays") {
+        matches = ["MON", "TUE", "WED", "THU", "FRI"].includes(dow);
+      } else if (config.frequency === "weekends") {
+        matches = ["SAT", "SUN"].includes(dow);
+      } else if (config.frequency === "custom") {
+        matches = (config.daysOfWeek ?? []).includes(dow as any);
+      }
+      if (matches) runs.push(runTime);
+    }
+    searchDate.setDate(searchDate.getDate() + 1);
+  }
+  return runs;
 }

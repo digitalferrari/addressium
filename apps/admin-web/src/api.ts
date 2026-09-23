@@ -180,6 +180,7 @@ export interface OrgMeta {
   domains?: string[];
   /** True when this org mints magic-link tokens (it has a signing key). */
   magicLinkEnabled?: boolean;
+  hourlyEnabled?: boolean;
   /** Segment resolver selected by deployment: GSI or the OpenSearch mirror. */
   segmentEngine?: "gsi" | "opensearch";
   /** Configured AI analytics provider (vendor + model only; key never echoed) — #144. */
@@ -1098,6 +1099,8 @@ export const api = {
   seriesReport: (org: string, series: string) => call<SeriesReport>("GET", `/orgs/${org}/series/${series}/report`),
   getBranding: (org: string) => call<Branding | null>("GET", `/orgs/${org}/branding`),
   setBranding: (orgId: string, branding: Branding) => call<Branding>("POST", `/orgs/branding`, { orgId, branding }),
+  saveSettings: (orgId: string, settings: { hourlyEnabled: boolean }) =>
+    call<{ hourlyEnabled: boolean }>("POST", `/orgs/settings`, { orgId, ...settings }),
   setPresentation: (orgId: string, listId: string, presentation: ListPresentation) =>
     call<unknown>("POST", `/lists/presentation`, { orgId, listId, presentation }),
   /** `source` picks the reason and, transitively, the scope (§4.13): omitted stays manual/org-scoped

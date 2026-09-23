@@ -146,6 +146,7 @@ export interface Organization {
   orgId: OrgId;
   name: string;
   domains: string[];
+  hourlyEnabled?: boolean;
   /**
    * Cognito user pool shared with this org's main website, LINK-ONLY: the
    * operator creates and configures the pool, addressium only ever links to one

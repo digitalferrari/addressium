@@ -22,6 +22,14 @@ beforeEach(() => {
   ] as never);
   vi.spyOn(api, "templates").mockResolvedValue([] as never);
   vi.spyOn(api, "segments").mockResolvedValue([] as never);
+  vi.spyOn(api, "feeds").mockResolvedValue([] as never);
+  vi.spyOn(api, "orgMeta").mockResolvedValue({
+    orgId: "acme",
+    name: "Acme Org",
+    environment: "prod",
+    setupComplete: true,
+    hourlyEnabled: true,
+  } as never);
 });
 afterEach(() => {
   cleanup();
@@ -113,4 +121,25 @@ test.each(["raw_html", "mjml", "visual"] as const)("%s template loads a copy and
     when: { type: "recurring", cron: "cron(0 13 * * ? *)" },
   }));
   expect(saveTemplate).not.toHaveBeenCalled();
+});
+
+test("recurring frequency with hourly option when enabled, and next 60 runs simulator preview", async () => {
+  const user = await openCompose();
+  await user.click(screen.getByRole("radio", { name: "Recurring" }));
+
+  // Hourly option should be visible since orgMeta.hourlyEnabled is mocked as true
+  const freqSelect = screen.getByLabelText("Frequency");
+  await user.selectOptions(freqSelect, "hourly");
+
+  // Summary should reflect hourly
+  expect(screen.getByText(/Every hour at minute/i)).toBeInTheDocument();
+
+  // Test button to show next 60 runs
+  const previewBtn = screen.getByRole("button", { name: /Preview Next 60 Runs/i });
+  await user.click(previewBtn);
+
+  // List of calculated runtimes should render
+  expect(screen.getByText(/Calculated Run Times/i)).toBeInTheDocument();
+  const listItems = screen.getAllByRole("listitem");
+  expect(listItems.length).toBe(60);
 });

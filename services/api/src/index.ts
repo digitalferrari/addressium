@@ -1142,6 +1142,7 @@ export async function orgMetaHandler(event: HttpEvent): Promise<HttpResult> {
       // key ARN or kid — is what Settings needs to say "on for this org" rather
       // than describing a feature the org does not use.
       magicLinkEnabled: org.magicLink !== undefined,
+      hourlyEnabled: org.hourlyEnabled === true,
       segmentEngine: process.env.SEGMENT_ENGINE === "opensearch" ? "opensearch" : "gsi",
     });
   } catch (e) {
@@ -2807,6 +2808,22 @@ export async function brandingHandler(event: HttpEvent): Promise<HttpResult> {
   }
 }
 
+/** POST /orgs/settings — configure general tenant settings. */
+export async function settingsHandler(event: HttpEvent): Promise<HttpResult> {
+  try {
+    const parsed = schemas.saveSettingsSchema.parse(JSON.parse(event.body ?? "{}"));
+    requireGrant(event, "identity:manage", parsed.orgId);
+    const org = await stores().organizations.get(parsed.orgId);
+    if (!org) return json(404, { error: "organization not found" });
+    const updated = { ...org, hourlyEnabled: parsed.hourlyEnabled };
+    await stores().organizations.put(updated);
+    await audit(event, parsed.orgId, "settings.update", `hourlyEnabled=${parsed.hourlyEnabled}`);
+    return json(200, { hourlyEnabled: updated.hourlyEnabled });
+  } catch (e) {
+    return fail(e);
+  }
+}
+
 /** GET/POST /orgs/customer-sync — configure the external customer record sink. */
 export async function customerSyncHandler(event: HttpEvent): Promise<HttpResult> {
   try {
@@ -3162,6 +3179,7 @@ const ADMIN_ROUTES: Record<string, RouteHandler> = {
   "POST /orgs/{org}/import/mappings": importMappingsHandler,
   "POST /privacy": privacyHandler,
   "POST /orgs/branding": brandingHandler,
+  "POST /orgs/settings": settingsHandler,
   "GET /orgs/{org}/customer-sync": customerSyncHandler,
   "POST /orgs/customer-sync": customerSyncHandler,
   "GET /orgs/{org}/reengagement": reengagementHandler,

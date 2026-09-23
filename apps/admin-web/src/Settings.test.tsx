@@ -63,3 +63,23 @@ test("first customer-sync save keeps the safe blank-secret path available", asyn
   expect(screen.getByLabelText(/Endpoint secret/)).toHaveValue("");
   expect(screen.getByRole("button", { name: "Save customer sync" })).not.toBeDisabled();
 });
+
+test("advanced settings card allows managing hourlyRecurring flag", async () => {
+  meta();
+  const saveSettingsSpy = vi.spyOn(api, "saveSettings").mockResolvedValue({ hourlyEnabled: true });
+  const user = userEvent.setup();
+  render(<Settings org="acme" grant={{ role: "developer_admin", orgs: "*" }} />);
+
+  // Should load the advanced features card on Domains tab
+  const checkbox = await screen.findByLabelText(/Enable Hourly Recurring/i);
+  expect(checkbox).not.toBeChecked();
+
+  await user.click(checkbox);
+  expect(checkbox).toBeChecked();
+
+  const saveBtn = screen.getByRole("button", { name: "Save settings" });
+  await user.click(saveBtn);
+
+  expect(await screen.findByText(/Settings saved successfully/i)).toBeInTheDocument();
+  expect(saveSettingsSpy).toHaveBeenCalledWith("acme", { hourlyEnabled: true });
+});

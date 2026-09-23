@@ -88,7 +88,7 @@ export function Settings({ org, grant }: { org: string; grant: Grant | null }) {
 
       {active === "domains" && (
         <>
-          <DomainsTab org={org} />
+          <DomainsTab org={org} grant={grant} />
           {can(grant, "identity:manage", org) ? <SendingIdentity org={org} /> : (
             <p className="muted">Live SES verification and account quota require identity:manage.</p>
           )}
@@ -160,7 +160,7 @@ function CustomerSyncTab({ org }: { org: string }) {
  * verification readout — see the note below, which is the whole reason this tab
  * is two cards rather than one table.
  */
-function DomainsTab({ org }: { org: string }) {
+function DomainsTab({ org, grant }: { org: string; grant: Grant | null }) {
   const loaded = useAsync(() => api.orgMeta(org), [org]);
 
   if (loaded.loading) return <div className="muted">Loading…</div>;
@@ -244,6 +244,65 @@ function DomainsTab({ org }: { org: string }) {
           for.
         </p>
       </div>
+
+      <AdvancedSettingsCard org={org} grant={grant} />
+    </div>
+  );
+}
+
+function AdvancedSettingsCard({ org, grant }: { org: string; grant: Grant | null }) {
+  const loaded = useAsync(() => api.orgMeta(org), [org]);
+  const [hourlyEnabled, setHourlyEnabled] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState("");
+  const canManage = can(grant, "identity:manage", org);
+
+  useEffect(() => {
+    if (loaded.data) {
+      setHourlyEnabled(loaded.data.hourlyEnabled === true);
+    }
+  }, [loaded.data]);
+
+  const save = async () => {
+    setBusy(true);
+    setMsg("");
+    try {
+      await api.saveSettings(org, { hourlyEnabled });
+      setMsg("Settings saved successfully.");
+    } catch (e) {
+      setMsg(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (loaded.loading) return <div className="muted" style={{ padding: 12 }}>Loading Advanced Settings…</div>;
+
+  return (
+    <div className="card">
+      <h3>Advanced Settings</h3>
+      <p className="muted">
+        Configure deployment-level developer feature flags for this organization.
+      </p>
+      <label style={{ display: "flex", gap: 8, alignItems: "center", cursor: canManage ? "pointer" : "default" }}>
+        <input
+          type="checkbox"
+          checked={hourlyEnabled}
+          disabled={!canManage || busy}
+          onChange={(e) => setHourlyEnabled(e.target.checked)}
+        />
+        Enable Hourly Recurring Frequency (Testing/Debug feature)
+      </label>
+      {canManage ? (
+        <button className="btn" style={{ marginTop: 12 }} disabled={busy} onClick={save}>
+          {busy ? "Saving…" : "Save settings"}
+        </button>
+      ) : (
+        <p className="muted" style={{ marginTop: 8 }}>
+          Requires <code>identity:manage</code> capability to modify advanced settings.
+        </p>
+      )}
+      {msg && <p className={msg.startsWith("Settings saved") ? "muted" : "err"} style={{ marginTop: 8 }}>{msg}</p>}
     </div>
   );
 }
