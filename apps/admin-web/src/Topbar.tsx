@@ -130,18 +130,13 @@ export function Topbar({ orgName, org, view, orgEnv, claims, onNavigate }: Topba
         </div>
       )}
 
-      <button
-        className="iconbtn"
-        disabled
-        title="Notifications are not implemented in this build."
-        aria-label="Notifications (unavailable)"
-      >
-        {/* U+25CE, not 🔔: the sidebar and topbar are a monochrome glyph set
-            (▤ ◇ ✉ ⧉ ⚑) that one colour emoji would break, and the Unicode bell
-            renders as colour emoji on most platforms. ⚑ is already the Team
-            row's glyph, so this takes a shape the nav does not use. */}
-        <span aria-hidden="true">◉</span>
-      </button>
+      {/* The notification bell was REMOVED, not hidden (#294). It was a
+          permanently-disabled control announcing a feature that does not exist:
+          it offered nothing, and a disabled affordance reads as "broken" rather
+          than "not built". Operator alerting already has a real home — the
+          CloudWatch alarms publish to the ops SNS topic, which is where an
+          operator who needs paging configures it. Reinstate this only with a
+          notification centre behind it. */}
 
       <div
         className="avatar"
