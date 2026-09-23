@@ -53,6 +53,11 @@ export interface SendDescriptor {
   listId: string;
   subject: string;
   template: EmailTemplate;
+  /**
+   * Inbox preview line (#302). Rendered as a hidden div at the top of the body,
+   * so it shows beside the subject in the message list and nowhere in the email.
+   */
+  previewText?: string;
   /** Values resolved once for the campaign, such as fields from a feed edition. */
   campaignAttributes?: Record<string, string>;
   /** Parent series for a recurring edition; absent for one-off sends. */

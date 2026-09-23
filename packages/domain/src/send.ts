@@ -354,6 +354,8 @@ export interface SendOneInput {
   listId: string;
   subject: string;
   template: EmailTemplate;
+  /** Inbox preview line (#302), rendered hidden at the top of the body. */
+  previewText?: string;
   campaignAttributes?: Record<string, string>;
   /** Optional pacing — acquired only for an actual send (skips don't burn tokens). */
   throttle?: SendThrottle;
@@ -531,6 +533,7 @@ export async function sendToSubscriber(
         input.campaignAttributes,
       ),
       token,
+      input.previewText,
     );
     await sender.send({
       emailClass: input.emailClass ?? "marketing",
@@ -637,7 +640,10 @@ export async function sendCampaign(
   if (opts.archiveBody) {
     await opts.archiveBody.put(
       archive.s3Key,
-      renderForRecipient(template, {}, undefined),
+      // Preheader included: this generic render is what the archive and any
+      // past-editions view show, and an edition missing its preview line there
+      // would not match what subscribers received.
+      renderForRecipient(template, {}, undefined, input.previewText),
     );
   }
 
@@ -736,6 +742,7 @@ export async function sendCampaign(
         template,
         await mergeValues(list, subscriber, opts.unsubscribeLink, fallbacks, input.campaignAttributes),
         token,
+        input.previewText,
       );
 
       await sender.send({

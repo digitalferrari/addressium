@@ -33,6 +33,7 @@ export function Compose({ org, onScheduled }: { org: string; onScheduled: () => 
   const [segmentId, setSegmentId] = useState("");
   const [campaignId, setCampaignId] = useState("");
   const [subject, setSubject] = useState("");
+  const [previewText, setPreviewText] = useState("");
   const [bodyMode, setBodyMode] = useState<"blocks" | "html" | "mjml">("blocks");
   const [html, setHtml] = useState("");
   const [mjml, setMjml] = useState("");
@@ -97,6 +98,7 @@ export function Compose({ org, onScheduled }: { org: string; onScheduled: () => 
         : when === "at" ? { type: "at", at: new Date(at).toISOString() }
         : { type: "recurring", cron: cron.trim(), ...(timezone.trim() ? { timezone: timezone.trim() } : {}) };
       let template;
+      let editorSource: { mode: "blocks" | "html" | "mjml"; mjml?: string } = { mode: bodyMode };
       if (bodyMode === "html") {
         template = { html };
       } else if (bodyMode === "mjml") {
@@ -108,6 +110,12 @@ export function Compose({ org, onScheduled }: { org: string; onScheduled: () => 
           return;
         }
         template = { mjmlHtml: compiled.html };
+        // Keep the SOURCE alongside the compiled html (#298). Compiling here is
+        // what makes MJML work at all — there is no server-side compiler — but
+        // it also means the server only ever sees html, so without this a
+        // re-opened campaign would hand the operator compiled markup and their
+        // MJML would be gone.
+        editorSource = { mode: "mjml", mjml };
       } else {
         template = {
           blocks: blocks.map((b): EmailBlock =>
@@ -115,7 +123,7 @@ export function Compose({ org, onScheduled }: { org: string; onScheduled: () => 
           ),
         };
       }
-      const res = await api.scheduleCampaign({ orgId: org, campaignId: campaignId.trim(), listId, subject, template, when: whenPayload, ...(segmentId ? { segmentId } : {}), ...(when === "recurring" && feedId ? { feedId } : {}) });
+      const res = await api.scheduleCampaign({ orgId: org, campaignId: campaignId.trim(), listId, subject, ...(previewText.trim() ? { previewText: previewText.trim() } : {}), template, editorSource, when: whenPayload, ...(segmentId ? { segmentId } : {}), ...(when === "recurring" && feedId ? { feedId } : {}) });
       setMsg(`Scheduled "${res.scheduleId}" (${res.status}${res.at ? ` · ${new Date(res.at).toLocaleString()}` : ""}${res.timezone ? ` · ${res.timezone}` : ""}).`);
       onScheduled();
     } catch (e) {
@@ -159,6 +167,20 @@ export function Compose({ org, onScheduled }: { org: string; onScheduled: () => 
         <input value={campaignId} onChange={(e) => setCampaignId(e.target.value)} placeholder="e.g. daily-2026-07-21" style={{ width: "100%" }} />
         <label style={{ marginTop: 12 }}>Subject</label>
         <input value={subject} onChange={(e) => setSubject(e.target.value)} placeholder="Subject line" style={{ width: "100%" }} />
+        <label style={{ marginTop: 12 }}>Preview text (optional)</label>
+        <input
+          value={previewText}
+          onChange={(e) => setPreviewText(e.target.value)}
+          placeholder="Shown beside the subject in the inbox"
+          maxLength={200}
+          style={{ width: "100%" }}
+        />
+        <p className="muted" style={{ margin: "4px 0 0", fontSize: 12 }}>
+          {/* Set it or the client picks for you, and what it picks is usually
+              the first words of the body or an unsubscribe line. */}
+          Most clients show the first 100–150 characters. Leave it blank and the
+          client scrapes the top of the email instead.
+        </p>
       </div>
 
       <div className="card">

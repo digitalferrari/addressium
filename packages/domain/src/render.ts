@@ -114,13 +114,53 @@ export function buildLinkMap(t: EmailTemplate): EmailArchive["linkMap"] {
  * a forgotten argument must not silently produce them for an org that has the
  * feature on.
  */
+/**
+ * The inbox preview line (#302), as a hidden element at the very top of the body.
+ *
+ * Mail clients show it beside the subject in the message list; nothing should
+ * ever see it inside the opened email. The style set is the one that survives
+ * Gmail, Outlook and Apple Mail together — `display:none` alone is stripped by
+ * some clients, so the zero box dimensions and `opacity:0` are load-bearing
+ * rather than belt-and-braces.
+ *
+ * The trailing run of `&zwnj;&nbsp;` is deliberate: without it clients pull the
+ * first words of real body copy in after the preheader to fill the preview,
+ * which is precisely the behaviour a preheader exists to prevent.
+ *
+ * Merge values apply — a preheader saying "Your ledger, {{first_name}}" is a
+ * normal thing to want — and it is escaped, so it can never inject markup.
+ */
+export function preheaderHtml(previewText: string, attrs: Record<string, string>): string {
+  const text = escapeHtml(applyMerge(previewText, attrs));
+  if (text.trim() === "") return "";
+  const filler = "&zwnj;&nbsp;".repeat(60);
+  return (
+    '<div style="display:none;font-size:1px;color:#ffffff;line-height:1px;' +
+    'max-height:0px;max-width:0px;opacity:0;overflow:hidden;">' +
+    `${text}${filler}</div>`
+  );
+}
+
 export function renderForRecipient(
   t: EmailTemplate,
   attrs: Record<string, string>,
   magicToken: string | undefined,
+  previewText?: string,
 ): string {
-  if (t.html != null) return renderHtmlForRecipient(t.html, attrs, magicToken);
+  const preheader = previewText ? preheaderHtml(previewText, attrs) : "";
+  if (t.html != null) {
+    const body = renderHtmlForRecipient(t.html, attrs, magicToken);
+    if (!preheader) return body;
+    // After <body> when there is one, so the hidden div is inside the rendered
+    // document rather than floating before <!DOCTYPE>. Clients that see it
+    // outside the body element may not treat it as preview text at all.
+    const m = body.match(/<body[^>]*>/i);
+    return m
+      ? body.replace(m[0], `${m[0]}${preheader}`)
+      : `${preheader}${body}`;
+  }
   const parts: string[] = [];
+  if (preheader) parts.push(preheader);
   let li = 0;
   for (const block of t.blocks ?? []) {
     if (block.kind === "text") {

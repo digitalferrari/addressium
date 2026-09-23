@@ -801,6 +801,8 @@ export async function scheduleCampaignHandler(
       listId: body.listId,
       subject: body.subject,
       template,
+      // Inbox preview line (#302) — rendered hidden at the top of the body.
+      ...(body.previewText ? { previewText: body.previewText } : {}),
       // Carried through to the sender (#203). Before this the console offered a
       // segment picker whose value was dropped here, so a "send to my test
       // cohort" campaign mailed the entire list.

@@ -469,7 +469,15 @@ export interface ScheduleCampaignBody {
   segmentId?: string;
   feedId?: string;
   subject: string;
+  /** Inbox preview line (#302) — hidden at the top of the body, shown beside the subject. */
+  previewText?: string;
   template: EmailTemplateBody;
+  /**
+   * What the operator was editing, kept so the campaign can be re-opened (#298).
+   * Never sent: MJML is compiled here, so only the compiled html reaches
+   * `template` and the source would otherwise be lost on a re-open.
+   */
+  editorSource?: { mode: "blocks" | "html" | "mjml"; mjml?: string };
   when: ScheduleWhen;
 }
 
