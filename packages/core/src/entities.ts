@@ -887,11 +887,12 @@ export interface AuditEntry {
  * integration plausibly needs, and each one names a read or write an integration
  * actually performs rather than a console screen.
  *
- * Scopes are RECORDED at issuance and checked by `authenticateApiKey`. No route
- * in this build authenticates with an API key — the operator API is future work
- * (#266) — so today the check runs only where a caller verifies a key
- * explicitly. The console says so rather than implying an enforcement that no
- * HTTP surface performs yet.
+ * Scopes are RECORDED at issuance and checked by `authenticateApiKey`, which the
+ * `/v1` machine API calls on every request (#291). A key reaches only the routes
+ * its scopes name, and the check runs against the STORED key each time — there
+ * is deliberately no API Gateway authorizer in front of those routes, because an
+ * authorizer caches per identity and a revoked key would keep working until the
+ * cache expired. See docs/MACHINE-API.md.
  */
 export type ApiKeyScope =
   | "subscribers:read"

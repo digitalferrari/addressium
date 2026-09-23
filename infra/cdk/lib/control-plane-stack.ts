@@ -2101,6 +2101,32 @@ export class ControlPlaneStack extends Stack {
     // Deliberately not a relaxation of `archiveHandler`, which is gated on
     // `reports:view` and decorates the body with per-link click counts —
     // commercial analytics that must not be published.
+    // ---- machine API (#291) ----
+    //
+    // API-key authenticated, on its own `/v1` prefix, with NO JWT authorizer.
+    // That omission is the design, not an oversight: an API Gateway authorizer
+    // caches per identity source, so a revoked key would keep working until the
+    // cache expired. Authentication happens inside the handler, against the
+    // stored key, every request — which is what makes "revoked keys fail" mean
+    // immediately.
+    //
+    // Its own Lambda, so a machine caller's traffic cannot exhaust the
+    // console's reserved concurrency (or the reverse), and so its IAM is scoped
+    // to what these three routes actually touch.
+    const machineApiFn = fn("MachineApiFn", apiEntry, "machineRouter", apiEnv);
+    table.grantReadWriteData(machineApiFn);
+    reservePublic(machineApiFn);
+    const machineInt = new HttpLambdaIntegration("MachineApiInt", machineApiFn, {
+      scopePermissionToRoute: false,
+    });
+    for (const [method, path] of [
+      [HttpMethod.GET, "/v1/orgs/{org}/subscribers/{email}"],
+      [HttpMethod.POST, "/v1/orgs/{org}/suppression"],
+      [HttpMethod.GET, "/v1/orgs/{org}/campaigns"],
+    ] as [HttpMethod, string][]) {
+      api.addRoutes({ path, methods: [method], integration: machineInt });
+    }
+
     const publicArchiveFn = fn("PublicArchiveFn", apiEntry, "publicArchiveHandler", {
       ...apiEnv,
       ARCHIVE_BUCKET: archiveBucket.bucketName,

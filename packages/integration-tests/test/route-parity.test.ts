@@ -37,7 +37,7 @@ const API = resolve(REPO_ROOT, "services/api/src/index.ts");
  * the test package depend on a service (which TypeScript project references
  * forbid anyway).
  */
-function routerTable(name: "ADMIN_ROUTES" | "PUBLIC_ROUTES"): string[] {
+function routerTable(name: "ADMIN_ROUTES" | "PUBLIC_ROUTES" | "MACHINE_ROUTES"): string[] {
   const src = readFileSync(API, "utf8");
   const start = src.indexOf(`const ${name}: Record<string, RouteHandler> = {`);
   if (start < 0) throw new Error(`${name} not found in services/api/src/index.ts`);
@@ -45,7 +45,11 @@ function routerTable(name: "ADMIN_ROUTES" | "PUBLIC_ROUTES"): string[] {
   return [...body.matchAll(/"((?:GET|POST|PUT|DELETE|PATCH) \/[^"]*)":/g)].map((m) => m[1]!);
 }
 
-const ROUTE_KEYS = { admin: routerTable("ADMIN_ROUTES"), public: routerTable("PUBLIC_ROUTES") };
+const ROUTE_KEYS = {
+  admin: routerTable("ADMIN_ROUTES"),
+  public: routerTable("PUBLIC_ROUTES"),
+  machine: routerTable("MACHINE_ROUTES"),
+};
 
 /** Every `adminRoute(id, handler, HttpMethod.X, "/path")` call in the stack. */
 function adminRoutesDeclaredInCdk(): string[] {
@@ -271,5 +275,49 @@ test("every route the unauthenticated SPAs call is registered WITHOUT an authori
         `${rel} calls ${raw} (${path}), which is NOT a public route — it will 401`,
       );
     }
+  }
+});
+
+/**
+ * The machine API's routes (#291).
+ *
+ * They are registered from a LOOP over a `[method, path]` array rather than
+ * from literal `api.addRoutes({ path: "..." })` calls, so the regex the public
+ * sweep uses cannot see them — which means neither of the guards above covers
+ * this surface. Scraped from the array instead.
+ *
+ * Worth the separate scrape: these are the only routes that authenticate a
+ * CREDENTIAL, so a CDK route with no handler is a 404 on a customer's
+ * integration, and a handler with no route is a capability that silently does
+ * not exist.
+ */
+function machineRoutesDeclaredInCdk(): string[] {
+  const src = readFileSync(STACK, "utf8");
+  const block = src.match(/\[HttpMethod\.GET, "\/v1[\s\S]{0,600}?\] as \[HttpMethod, string\]\[\]/)?.[0];
+  assert.ok(block, "the machine route array is no longer recognizable — update this scrape");
+  const out: string[] = [];
+  for (const m of block.matchAll(/\[HttpMethod\.([A-Z]+),\s*"([^"]+)"\]/g)) out.push(`${m[1]} ${m[2]}`);
+  return out;
+}
+
+test("every MACHINE route in CDK has a handler in the router (#291)", () => {
+  const declared = machineRoutesDeclaredInCdk();
+  assert.ok(declared.length > 0, "the scrape must actually match the machine route array");
+  const missing = declared.filter((r) => !ROUTE_KEYS.machine.includes(r));
+  assert.deepEqual(missing, [], `machine routes with no handler — a 404 on a customer integration: ${missing.join(", ")}`);
+});
+
+test("MACHINE_ROUTES declares no route CDK never registers (#291)", () => {
+  const declared = machineRoutesDeclaredInCdk();
+  const orphaned = ROUTE_KEYS.machine.filter((r) => !declared.includes(r));
+  assert.deepEqual(orphaned, [], `handlers with no route — a capability that silently does not exist: ${orphaned.join(", ")}`);
+});
+
+test("the machine surface is disjoint from admin and public (#291)", () => {
+  // A machine route that also appeared in ADMIN_ROUTES would be reachable with
+  // a console JWT, which is exactly the separation this API is built around.
+  for (const r of ROUTE_KEYS.machine) {
+    assert.ok(!ROUTE_KEYS.admin.includes(r), `${r} is also an admin route`);
+    assert.ok(!ROUTE_KEYS.public.includes(r), `${r} is also an unauthenticated public route`);
   }
 });

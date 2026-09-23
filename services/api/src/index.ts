@@ -41,6 +41,7 @@ import {
   ZodError,
   type AlertConfig,
   type Subscription,
+  type ApiKeyScope,
 } from "@addressium/core";
 import {
   HmacConfirmationSigner,
@@ -122,6 +123,7 @@ import {
   listApiKeys,
   revokeApiKey,
   authenticateApiKey,
+  isSendableEmail,
   resolveReengagementPolicy,
   deleteMergeTag,
   saveCampaignSeries,
@@ -3465,6 +3467,133 @@ export async function publicArchiveHandler(event: HttpEvent): Promise<HttpResult
 }
 
 
+// ---------------------------------------------------------------------------
+// Machine API (#291) — API-key authenticated, deliberately separate from the
+// console's JWT surface.
+//
+// These routes carry NO JWT authorizer. Authentication happens inside the
+// handler, on purpose: an API Gateway Lambda authorizer caches its result per
+// identity source, so a revoked key would keep working until that cache
+// expired. "Revoked keys fail" has to mean immediately.
+//
+// A key is never converted into a grant. `requireGrant` reads JWT claims and
+// answers "which console role is this person"; a machine credential has no
+// person and no role, only scopes. Keeping the two apart is what stops a key
+// from inheriting a console capability nobody granted it.
+// ---------------------------------------------------------------------------
+
+/**
+ * Every machine-route failure looks identical, whatever went wrong (#291).
+ *
+ * Unknown key, revoked key, key belonging to another org, key without the
+ * scope: all 401, all the same body. Returning 403 for "insufficient scope"
+ * would confirm the key is real and belongs here, which is exactly the fact an
+ * attacker probing keys wants. `authenticateApiKey` already throws one shared
+ * error for the same reason; this keeps the HTTP surface from undoing that.
+ */
+const MACHINE_UNAUTHORIZED: HttpResult = {
+  statusCode: 401,
+  headers: { "content-type": "application/json" },
+  body: JSON.stringify({ error: "unauthorized" }),
+};
+
+/**
+ * Authenticate a machine request, or return the single failure response.
+ *
+ * The key comes ONLY from the Authorization header. Never a query parameter:
+ * those are written to CloudFront and API Gateway access logs, so a key passed
+ * that way is a credential leaked to anyone who can read logs.
+ */
+async function machineAuth(
+  event: HttpEvent,
+  requiredScope: ApiKeyScope,
+): Promise<{ orgId: string } | { deny: HttpResult }> {
+  const orgId = event.pathParameters?.org ?? "";
+  if (!orgId) return { deny: MACHINE_UNAUTHORIZED };
+
+  const auth = header(event.headers, "authorization");
+  const match = /^Bearer\s+(.+)$/i.exec(auth.trim());
+  if (!match) return { deny: MACHINE_UNAUTHORIZED };
+
+  try {
+    // Org and scope are checked INSIDE this call, against the stored key, so a
+    // cross-org key is rejected before the handler can read anything.
+    await authenticateApiKey(stores(), clock, match[1]!, { orgId, requiredScope });
+    return { orgId };
+  } catch {
+    // Deliberately swallowed. The reason a key failed is exactly what must not
+    // reach the caller.
+    return { deny: MACHINE_UNAUTHORIZED };
+  }
+}
+
+/** GET /v1/orgs/{org}/subscribers/{email} — scope `subscribers:read`. */
+export async function machineGetSubscriberHandler(event: HttpEvent): Promise<HttpResult> {
+  const auth = await machineAuth(event, "subscribers:read");
+  if ("deny" in auth) return auth.deny;
+  try {
+    const email = decodeURIComponent(event.pathParameters?.email ?? "").trim().toLowerCase();
+    if (!email) return json(400, { error: "email required" });
+    const found = await stores().subscribers.findByEmail(auth.orgId, email);
+    // 404 rather than a 200 with null: absence is a distinct answer, and an
+    // integration branching on it should not have to inspect a body.
+    if (!found) return json(404, { error: "not found" });
+    const subs = await stores().subscriptions.listBySubscriber(auth.orgId, found.sub);
+    return json(200, {
+      subscriberId: found.sub,
+      email: found.email,
+      status: found.status,
+      attributes: found.attributes,
+      subscriptions: subs.map((s) => ({ listId: s.listId, status: s.status, updatedAt: s.updatedAt })),
+    });
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+/** POST /v1/orgs/{org}/suppression — scope `suppression:write`. */
+export async function machineSuppressHandler(event: HttpEvent): Promise<HttpResult> {
+  const auth = await machineAuth(event, "suppression:write");
+  if ("deny" in auth) return auth.deny;
+  try {
+    const body = JSON.parse(event.body ?? "{}") as { email?: string };
+    const email = (body.email ?? "").trim().toLowerCase();
+    if (!isSendableEmail(email)) return json(400, { error: "a valid email is required" });
+    // Unsubscribes everywhere AND suppresses, which is what an integration
+    // means by "stop mailing this person" — suppressing alone would leave the
+    // subscriptions confirmed and the next import could revive them.
+    const found = await stores().subscribers.findByEmail(auth.orgId, email);
+    if (found) {
+      await unsubscribeAll(stores(), clock, { orgId: auth.orgId, subscriberId: found.sub, email });
+    } else {
+      await stores().suppression.add({
+        orgId: auth.orgId, email, source: "unsubscribe", scope: "org",
+        addedAt: clock.now().toISOString(),
+      });
+    }
+    return json(202, { email, suppressed: true });
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+/** GET /v1/orgs/{org}/campaigns — scope `campaigns:read`. */
+export async function machineListCampaignsHandler(event: HttpEvent): Promise<HttpResult> {
+  const auth = await machineAuth(event, "campaigns:read");
+  if ("deny" in auth) return auth.deny;
+  try {
+    const campaigns = await stores().campaigns.list(auth.orgId);
+    return json(200, {
+      campaigns: campaigns.map((c) => ({
+        campaignId: c.campaignId, subject: c.subject, status: c.status,
+        type: c.type, counters: c.counters,
+      })),
+    });
+  } catch (e) {
+    return fail(e);
+  }
+}
+
 const PUBLIC_ROUTES: Record<string, RouteHandler> = {
   "POST /signup": signupHandler,
   "POST /signup/batch": signupBatchHandler,
@@ -3509,10 +3638,25 @@ async function dispatch(
   return handler(event);
 }
 
+/**
+ * Machine API (#291). A THIRD table, not entries in the public one, because the
+ * distinction is enforcement: public routes are genuinely unauthenticated,
+ * while every route here authenticates an API key inside its handler. Mixing
+ * them would make "which routes need a key" a question you answer by reading
+ * handlers.
+ */
+const MACHINE_ROUTES: Record<string, RouteHandler> = {
+  "GET /v1/orgs/{org}/subscribers/{email}": machineGetSubscriberHandler,
+  "POST /v1/orgs/{org}/suppression": machineSuppressHandler,
+  "GET /v1/orgs/{org}/campaigns": machineListCampaignsHandler,
+};
+
 export const adminRouter = (event: HttpEvent): Promise<HttpResult> =>
   dispatch(ADMIN_ROUTES, event);
 export const publicRouter = (event: HttpEvent): Promise<HttpResult> =>
   dispatch(PUBLIC_ROUTES, event);
+export const machineRouter = (event: HttpEvent): Promise<HttpResult> =>
+  dispatch(MACHINE_ROUTES, event);
 
 export { applyMigrations, type Migration } from "./migrations.js";
 
@@ -3520,4 +3664,5 @@ export { applyMigrations, type Migration } from "./migrations.js";
 export const ROUTE_KEYS = {
   admin: Object.keys(ADMIN_ROUTES),
   public: Object.keys(PUBLIC_ROUTES),
+  machine: Object.keys(MACHINE_ROUTES),
 };

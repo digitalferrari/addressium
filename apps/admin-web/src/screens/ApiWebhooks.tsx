@@ -50,8 +50,14 @@ export function ApiWebhooks({ org, grant }: { org: string; grant: Grant | null }
           remain intentionally deferred under #267.
         </p>
         <p className="muted" style={{ marginBottom: 0 }}>
-          API keys above are key <b>management</b> only: no route in this build is authenticated by
-          one, and their scopes do not gate the operator console.
+          {/* This said keys were "management only: no route in this build is
+              authenticated by one" — true until #291 shipped the /v1 machine
+              API. Left accurate rather than aspirational: the console is where
+              an operator decides what a credential can do, so it has to state
+              what the scopes actually gate. */}
+          Keys authenticate the <b>/v1 machine API</b>, and their scopes gate it: a key reaches
+          only the routes its scopes name. They do <b>not</b> grant console access — a key cannot
+          issue credentials, manage the team, or change its own scopes.
         </p>
       </div>
     </div>
