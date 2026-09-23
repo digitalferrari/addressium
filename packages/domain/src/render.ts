@@ -51,7 +51,13 @@ export function applySeriesAdFills(
       // Slot ids are validated at the API boundary, but escape them anyway so
       // this helper remains safe when called with a store fixture directly.
       const escaped = slot.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      html = html.replace(new RegExp(`\\{\\{\\s*${escaped}\\s*\\}\\}`, "g"), () => fill);
+      // Wrapped opaque (#313): advertiser markup is third-party and must not be
+      // rewritten. Without this the per-recipient magic-link token was appended
+      // to every ad anchor and handed to the ad server, and ad clicks were
+      // counted as editorial engagement in the click map. The block path has
+      // always been safe — an `ad` block renders verbatim and is never mapped —
+      // and this gives raw HTML the same guarantee.
+      html = html.replace(new RegExp(`\\{\\{\\s*${escaped}\\s*\\}\\}`, "g"), () => opaque(fill));
     }
     return { ...template, html };
   }
@@ -245,6 +251,40 @@ function isAnchorBoundary(ch: string | undefined): boolean {
  * avoids js/polynomial-redos), invoking `onText` for each run between anchors and
  * `onAnchor` for each `<a …>` open tag with its href and the index just past it.
  */
+/**
+ * Marks a span of THIRD-PARTY html that we pass through untouched (#313).
+ *
+ * Advertiser markup must not be rewritten. Before this, `renderHtmlForRecipient`
+ * appended the per-recipient magic-link token to EVERY anchor it found —
+ * including ones spliced in from an ad tag — so an org with magic links enabled
+ * handed a subscriber credential to the ad server on every impression. Ad links
+ * also landed in the click map classed "editorial", counting advertiser clicks
+ * as editorial engagement.
+ *
+ * The block renderer never had this problem: an `ad` block is emitted verbatim
+ * and `buildLinkMap` only maps `kind: "editorial"`. This gives the raw-HTML path
+ * the same guarantee.
+ *
+ * Comment delimiters so the marker survives a round trip through an email
+ * designer, and so an operator reading the source can see why a region is
+ * exempt.
+ */
+export const OPAQUE_OPEN = "<!--addressium:opaque-->";
+export const OPAQUE_CLOSE = "<!--/addressium:opaque-->";
+
+/** Wrap third-party html so the anchor scanner passes over it. */
+export function opaque(html: string): string {
+  return `${OPAQUE_OPEN}${html}${OPAQUE_CLOSE}`;
+}
+
+/**
+ * Walk the HTML once with plain `indexOf` (no global regex over untrusted input —
+ * avoids js/polynomial-redos), invoking `onText` for each run between anchors and
+ * `onAnchor` for each `<a …>` open tag with its href and the index just past it.
+ *
+ * Spans between the opaque markers are handed to `onText` whole: they are never
+ * scanned for anchors, so nothing inside them is tokenized or link-mapped.
+ */
 function scanAnchors(
   html: string,
   onText: (text: string) => void,
@@ -253,7 +293,23 @@ function scanAnchors(
   const lower = html.toLowerCase();
   let i = 0;
   for (;;) {
-    const lt = lower.indexOf("<a", i);
+    // An opaque region BEFORE the next anchor short-circuits the scan: emit it
+    // verbatim and resume after it. Checked first so an anchor inside the
+    // region can never be reached.
+    const opaqueAt = lower.indexOf(OPAQUE_OPEN, i);
+    const nextA = lower.indexOf("<a", i);
+    if (opaqueAt >= 0 && (nextA < 0 || opaqueAt < nextA)) {
+      const close = lower.indexOf(OPAQUE_CLOSE, opaqueAt);
+      // An unclosed marker means the rest of the document is third-party. Fail
+      // CLOSED: passing it through untouched loses tracking, whereas scanning
+      // it would leak the token, which is the thing this exists to prevent.
+      const end = close < 0 ? html.length : close + OPAQUE_CLOSE.length;
+      onText(html.slice(i, end));
+      if (close < 0) return;
+      i = end;
+      continue;
+    }
+    const lt = nextA;
     if (lt < 0) {
       onText(html.slice(i));
       return;
