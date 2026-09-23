@@ -10,6 +10,7 @@ import { useAsync } from "../useAsync.js";
 import { can, type Grant } from "../rbac.js";
 import { api, type SubscriberDetail, type SubscriberTimeline, type SuppressionCheckResult, type SuppressionImportReport } from "../api.js";
 import { SkeletonCard, SkeletonTable } from "../Skeleton.js";
+import { RefreshButton } from "../RefreshButton.js";
 
 export function Subscribers({ org, grant }: { org: string; grant: Grant | null }) {
   const [q, setQ] = useState("");
@@ -55,7 +56,16 @@ export function Subscribers({ org, grant }: { org: string; grant: Grant | null }
 
   return (
     <div>
-      <div className="pagehead"><div><h1>Subscribers</h1><p>The addressium subscriber record is the primary identity. Search, inspect, unsubscribe or suppress.</p></div></div>
+      <div className="pagehead">
+        <div><h1>Subscribers</h1><p>The addressium subscriber record is the primary identity. Search, inspect, unsubscribe or suppress.</p></div>
+        {/* Both reads: the table joins subscribers against the suppression list,
+            so refreshing one of them would leave the Suppressed column stale. */}
+        <RefreshButton
+          refreshing={subs.refreshing || supps.refreshing}
+          disabled={subs.loading}
+          onClick={() => { void subs.refetch(); void supps.refetch(); }}
+        />
+      </div>
       {msg && <p className="muted">{msg}</p>}
 
       <div className="card">

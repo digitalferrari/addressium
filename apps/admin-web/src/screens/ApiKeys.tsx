@@ -37,6 +37,7 @@ import { idProblem, isValidId, suggestId } from "../ids.js";
 import { relativeTime } from "../time.js";
 import { api, type ApiKeyEntry, type ApiKeyScope } from "../api.js";
 import { SkeletonTable } from "../Skeleton.js";
+import { RefreshButton } from "../RefreshButton.js";
 
 /**
  * Mirrors `ApiKeyScope` in `@addressium/core`. Each label says what an
@@ -62,7 +63,7 @@ export function ApiKeys({ org, grant }: { org: string; grant: Grant | null }) {
   const [rev, setRev] = useState(0);
   // The list itself is `apikeys:manage` server-side — a credential inventory is
   // not a report — so a caller without it is not asked to load one.
-  const { data, error, loading } = useAsync(
+  const { data, error, loading, refreshing, refetch } = useAsync(
     () => (mayManage && org ? api.apiKeys(org) : Promise.resolve<ApiKeyEntry[]>([])),
     [org, rev, mayManage],
   );
@@ -252,7 +253,13 @@ export function ApiKeys({ org, grant }: { org: string; grant: Grant | null }) {
       <div className="card">
         <div className="cardhead" style={{ margin: "-18px -18px 16px" }}>
           <h2>API keys</h2>
-          <span className="pill p-good">Built</span>
+          <div className="row">
+            {/* Re-reads the key LIST only. The one-time plaintext of a freshly
+                issued key lives in component state and is unrecoverable, so
+                nothing here may clear it. */}
+            <RefreshButton refreshing={refreshing} disabled={loading} onClick={() => void refetch()} />
+            <span className="pill p-good">Built</span>
+          </div>
         </div>
         <p className="muted">
           Credentials for machines rather than people. Keys are stored hashed, shown once, and

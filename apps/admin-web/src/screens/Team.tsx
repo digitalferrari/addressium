@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useAsync } from "../useAsync.js";
 import { api, type TeamMemberRow } from "../api.js";
 import { SkeletonScreen } from "../Skeleton.js";
+import { RefreshButton } from "../RefreshButton.js";
 
 const ROLE_HELP: Record<string, string> = {
   developer_admin: "Everything, including managing this team",
@@ -40,11 +41,20 @@ export function Team({ org }: { org: string }) {
   };
 
   if (loaded.loading) return <SkeletonScreen />;
-  if (loaded.error) return <div className="error">{loaded.error}</div>;
+  // `&& !members` is what makes Refresh safe here. This used to be a bare
+  // `loaded.error` early return, so a refresh that failed replaced the entire
+  // screen — the member table, the invite form, everything — with one line of
+  // error text. It now only takes over when there is nothing to show instead;
+  // a failed refresh reports inline below and leaves the roster standing.
+  if (loaded.error && !members) return <div className="error">{loaded.error}</div>;
 
   return (
     <div>
-      <h2>Roles &amp; access</h2>
+      <div className="pagehead">
+        <div><h2>Roles &amp; access</h2></div>
+        <RefreshButton refreshing={loaded.refreshing} onClick={() => void loaded.refetch()} />
+      </div>
+      {loaded.error && <p className="err">{loaded.error}</p>}
       <p className="muted">
         Members of this deployment&rsquo;s admin console. Roles are enforced server-side; the
         organizations listed here scope what each member can act on.

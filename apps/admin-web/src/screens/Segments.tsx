@@ -14,6 +14,7 @@ import {
   type RowKind,
 } from "./segment-predicate.js";
 import { SkeletonTable } from "../Skeleton.js";
+import { RefreshButton } from "../RefreshButton.js";
 
 /** Labels for the condition kinds, in the order the picker offers them. */
 const KIND_LABELS: { kind: RowKind; label: string }[] = [
@@ -88,7 +89,12 @@ export function Segments({ org }: { org: string }) {
 
   return (
     <div>
-      <div className="pagehead"><div><h1>Segments</h1><p>Saved predicates over lists, entitlements and subscriber attributes.</p></div></div>
+      <div className="pagehead">
+        <div><h1>Segments</h1><p>Saved predicates over lists, entitlements and subscriber attributes.</p></div>
+        {/* Only the saved-segment list. The builder below is editor state the
+            operator may be halfway through; a refresh must not reset it. */}
+        <RefreshButton refreshing={segments.refreshing} disabled={segments.loading} onClick={() => void segments.refetch()} />
+      </div>
       <p className="muted">
         Reusable audience filters that target within a list. {openSearch
           ? <>This deployment also supports open-recency rules through the OpenSearch mirror.</>

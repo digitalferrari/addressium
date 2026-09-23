@@ -3,6 +3,7 @@ import { useAsync } from "../useAsync.js";
 import { idProblem, suggestId } from "../ids.js";
 import { api } from "../api.js";
 import { SkeletonTable } from "../Skeleton.js";
+import { RefreshButton } from "../RefreshButton.js";
 
 /**
  * Newsletters — create a list, open or close it (#130/#131).
@@ -82,6 +83,14 @@ export function Newsletters({ org }: { org: string }) {
           <h1>Newsletters</h1>
           <p>Each newsletter is a list with its own opt-in policy, from-address and compliance footer.</p>
         </div>
+        {/* `rows` is the read the table renders. `lists` is a second, identical
+            read of `api.lists` that feeds only the error line below — see the
+            note there; refreshing both keeps the two from disagreeing. */}
+        <RefreshButton
+          refreshing={rows.refreshing || lists.refreshing}
+          disabled={rows.loading}
+          onClick={() => { void rows.refetch(); void lists.refetch(); }}
+        />
       </div>
       <p className="muted">A <strong>closed</strong> newsletter keeps its subscribers and stops accepting new ones — it also disappears from the public directory.</p>
 

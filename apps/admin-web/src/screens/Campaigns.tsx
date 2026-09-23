@@ -15,6 +15,7 @@
  */
 import { useMemo, useState } from "react";
 import { useAsync } from "../useAsync.js";
+import { RefreshButton } from "../RefreshButton.js";
 import { relativeTime } from "../time.js";
 import { can, type Grant } from "../rbac.js";
 import { api, scheduleHasSent, type CampaignRow, type SendScheduleState } from "../api.js";
@@ -258,7 +259,24 @@ export function Campaigns({ org, grant, onCompose }: { org: string; grant: Grant
 
   return (
     <div>
-      <div className="pagehead"><div><h1>Campaigns</h1><p>One-offs and recurring series. Reporting is per campaign and lifecycle state is authoritative.</p></div>{onCompose && <button className="btn btn-primary" onClick={onCompose}>＋ New campaign</button>}</div>
+      <div className="pagehead">
+        <div><h1>Campaigns</h1><p>One-offs and recurring series. Reporting is per campaign and lifecycle state is authoritative.</p></div>
+        {/* One `.row` wrapper, not two children: `.pagehead` is
+            `justify-content: space-between`, so a third child would be pushed
+            into the middle of the header rather than sitting beside New. */}
+        <div className="row">
+          {/* Both reads. The table is a join of the two, so refreshing only
+              the campaigns would leave every lifecycle badge stale.
+              `refetch` keeps the rows on screen: the skeleton below is keyed
+              on the FIRST load, and a refresh must not re-trigger it. */}
+          <RefreshButton
+            refreshing={campaigns.refreshing || schedules.refreshing}
+            disabled={loading}
+            onClick={() => { void campaigns.refetch(); void schedules.refetch(); }}
+          />
+          {onCompose && <button className="btn btn-primary" onClick={onCompose}>＋ New campaign</button>}
+        </div>
+      </div>
       <p className="muted">
         One-offs and recurring series. Reporting is per campaign, on the Campaign report screen.
         Start, pause and archive act on the schedule's lifecycle record — nothing is ever deleted.

@@ -3,12 +3,13 @@
  * #263): whether a sent one-off still reads ACTIVE is a property of this
  * component's rendering, not of `api.ts`.
  */
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { relativeTime } from "../time.js";
 import { can, type Grant } from "../rbac.js";
 import { api, scheduleHasSent, type SendScheduleState } from "../api.js";
 import { describeSchedule } from "@addressium/domain";
 import { SkeletonTable } from "../Skeleton.js";
+import { RefreshButton } from "../RefreshButton.js";
 
 /**
  * When a row fires: a one-off's send time, a series' cron (#248).
@@ -50,17 +51,55 @@ export function Schedules({
   const [rows, setRows] = useState<SendScheduleState[] | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState("");
+  const [refreshing, setRefreshing] = useState(false);
   const canManage = can(grant, "campaigns:schedule", org);
+  /**
+   * Bumped on every org change. A refresh still in flight across one compares
+   * generations and drops its result, so a slow read of org A can never land
+   * its rows under org B's header. The `useAsync` screens get this from the
+   * hook; this screen holds its own state and has to do it itself.
+   */
+  const generation = useRef(0);
 
   const load = () => {
     setError("");
-    api.schedules(org).then(setRows).catch((e) => setError(String(e)));
+    const mine = generation.current;
+    api.schedules(org)
+      .then((r) => { if (generation.current === mine) setRows(r); })
+      .catch((e) => { if (generation.current === mine) setError(String(e)); });
   };
   useEffect(() => {
+    generation.current += 1;
     setRows(null);
+    setRefreshing(false);
     load();
+    return () => { generation.current += 1; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [org]);
+
+  /**
+   * The operator-driven re-read. Unlike the mount path it does NOT clear
+   * `rows`: the table an operator is looking at stays on screen, and a failed
+   * refresh costs them freshness rather than the rows themselves. Single
+   * flight, so a second press cannot spawn an overlapping read.
+   *
+   * This screen is deliberately not on `useAsync` — it keeps the manual state
+   * it already had rather than being converted as part of adding a button.
+   */
+  const refresh = async () => {
+    if (refreshing) return;
+    setRefreshing(true);
+    setError("");
+    const mine = generation.current;
+    try {
+      const fresh = await api.schedules(org);
+      if (generation.current === mine) setRows(fresh);
+    } catch (e) {
+      if (generation.current === mine) setError(String(e));
+    } finally {
+      if (generation.current === mine) setRefreshing(false);
+    }
+  };
 
   const act = async (scheduleId: string, action: "start" | "pause" | "archive") => {
     setBusy(`${scheduleId}:${action}`);
@@ -96,7 +135,11 @@ export function Schedules({
 
   return (
     <div>
-      <h1 className="h1">Schedules · {org || "—"}</h1>
+      <div className="pagehead">
+        {/* The h1 text is unchanged — existing tests query it. */}
+        <div><h1 className="h1">Schedules · {org || "—"}</h1></div>
+        <RefreshButton refreshing={refreshing} disabled={rows === null} onClick={() => void refresh()} />
+      </div>
       <p className="muted" style={{ marginTop: -8 }}>
         Start, pause or archive scheduled sends. Nothing is ever deleted — a paused series
         stops its next edition and can be resumed; archive puts it away for good while keeping history.

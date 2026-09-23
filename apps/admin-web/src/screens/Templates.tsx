@@ -4,9 +4,10 @@ import { isValidId } from "../ids.js";
 import { VisualEditor } from "../VisualEditor.js";
 import { api, type Template, type TemplateMode } from "../api.js";
 import { SkeletonTable } from "../Skeleton.js";
+import { RefreshButton } from "../RefreshButton.js";
 
 export function Templates({ org }: { org: string }) {
-  const { data, error, loading } = useAsync(() => api.templates(org), [org]);
+  const { data, error, loading, refreshing, refetch } = useAsync(() => api.templates(org), [org]);
   const [rev, setRev] = useState(0);
   const list = useAsync(() => api.templates(org), [org, rev]);
   const [templateId, setTemplateId] = useState("");
@@ -52,7 +53,19 @@ export function Templates({ org }: { org: string }) {
 
   return (
     <div>
-      <div className="pagehead"><div><h1>Templates</h1><p>Three authoring modes — pick the right one for your team.</p></div></div>
+      <div className="pagehead">
+        <div><h1>Templates</h1><p>Three authoring modes — pick the right one for your team.</p></div>
+        {/* `list` is what the table renders (`rows = list.data ?? data`); `data`
+            is a second, identical read of `api.templates` that only backs it
+            before the first `list` result. Both are refreshed so the fallback
+            cannot serve a stale row set after a refresh. The editor form below
+            is untouched — an operator may be mid-template. */}
+        <RefreshButton
+          refreshing={list.refreshing || refreshing}
+          disabled={list.loading || loading}
+          onClick={() => { void list.refetch(); void refetch(); }}
+        />
+      </div>
       <p className="muted">
         Reusable message templates. <strong>Raw HTML</strong> is sanitized on save and rendered per
         recipient (merge tags escaped, links tokenized for click tracking). <strong>MJML</strong> and the

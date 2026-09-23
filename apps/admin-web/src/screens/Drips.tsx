@@ -12,6 +12,7 @@ import {
   type SubscriberRow,
 } from "../api.js";
 import { SkeletonTable } from "../Skeleton.js";
+import { RefreshButton } from "../RefreshButton.js";
 
 interface DraftStep { stepId: string; waitSeconds: string; listId: string; templateId: string; subject: string }
 
@@ -185,7 +186,20 @@ export function Drips({ org, grant }: { org: string; grant: Grant | null }) {
           <h1>Automations</h1>
           <p>Linear drip sequences on Step Functions — waits and sends, in order.</p>
         </div>
-        <button className="btn" onClick={() => document.getElementById("new-sequence")?.scrollIntoView({ behavior: "smooth" })}>＋ New sequence</button>
+        <div className="row">
+          {/* The sequence LIST only — deliberately not `reengagement`. An
+              effect keyed on `reengagement.data` re-seeds the policy form from
+              every new response, so refreshing it would overwrite whatever the
+              operator has typed into the re-engagement card. Same reason the
+              list and template pickers are left alone: they feed the editor
+              below, and a refresh must not cost anyone a half-filled form. */}
+          <RefreshButton
+            refreshing={sequences.refreshing}
+            disabled={sequences.loading}
+            onClick={() => void sequences.refetch()}
+          />
+          <button className="btn" onClick={() => document.getElementById("new-sequence")?.scrollIntoView({ behavior: "smooth" })}>＋ New sequence</button>
+        </div>
       </div>
       <p className="muted" style={{ marginTop: -8 }}>
         Automated multi-step sends triggered on signup or manually. Drip steps render the selected

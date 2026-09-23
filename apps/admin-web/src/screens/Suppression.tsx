@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { api, type SuppressionEntry, type SuppressionCheckResult } from "../api.js";
 import { useAsync } from "../useAsync.js";
 import { SkeletonTable } from "../Skeleton.js";
+import { RefreshButton } from "../RefreshButton.js";
 
 export function Suppression({ org }: { org: string }) {
   const [revision, setRevision] = useState(0);
@@ -11,7 +12,7 @@ export function Suppression({ org }: { org: string }) {
   const [message, setMessage] = useState("");
   const [busyEmail, setBusyEmail] = useState("");
   const [importing, setImporting] = useState(false);
-  const { data, error, loading } = useAsync(() => api.suppressions(org), [org, revision]);
+  const { data, error, loading, refreshing, refetch } = useAsync(() => api.suppressions(org), [org, revision]);
 
   const rows = useMemo(() => {
     const needle = query.trim().toLowerCase();
@@ -58,6 +59,7 @@ export function Suppression({ org }: { org: string }) {
           <p>Addresses that must not receive mail, with local and SES status kept visible.</p>
         </div>
         <div className="row">
+          <RefreshButton refreshing={refreshing} disabled={loading} onClick={() => void refetch()} />
           <button className="btn ghost" disabled={importing} onClick={() => void importSes(true)}>Preview SES import</button>
           <button className="btn" disabled={importing} onClick={() => void importSes(false)}>Import SES list</button>
         </div>

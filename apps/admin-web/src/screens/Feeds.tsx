@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { api, type Feed, type SaveFeedBody } from "../api.js";
 import { useAsync } from "../useAsync.js";
 import { SkeletonTable } from "../Skeleton.js";
+import { RefreshButton } from "../RefreshButton.js";
 
 const FIELDS = ["title", "link", "description", "date", "author", "content"];
 
@@ -59,8 +60,26 @@ export function Feeds({ org }: { org: string }) {
     } catch (e) { setMessage((e as Error).message); }
   };
 
+  /**
+   * `localFeeds` holds the post-save optimistic list and WINS over `feeds.data`
+   * (see `rows` above), so a refresh that only refetched would appear to do
+   * nothing. It is cleared only once the server's answer is actually in hand —
+   * clearing it first would flash the pre-save list on screen mid-refresh,
+   * which is the very blanking this control exists to avoid.
+   */
+  const refresh = async () => {
+    const [fresh] = await Promise.all([feeds.refetch(), lists.refetch()]);
+    if (fresh) setLocalFeeds(undefined);
+  };
+
   return <div>
-    <div className="pagehead"><div><h1>Feeds</h1><p>Pull RSS, Atom or JSON articles into recurring newsletter editions.</p></div><button className="btn" onClick={() => begin()}>＋ Add feed</button></div>
+    <div className="pagehead">
+      <div><h1>Feeds</h1><p>Pull RSS, Atom or JSON articles into recurring newsletter editions.</p></div>
+      <div className="row">
+        <RefreshButton refreshing={feeds.refreshing || lists.refreshing} disabled={feeds.loading} onClick={() => void refresh()} />
+        <button className="btn" onClick={() => begin()}>＋ Add feed</button>
+      </div>
+    </div>
     {message && <p className="muted">{message}</p>}
     {showForm && <div className="card">
       <div className="cardhead" style={{ margin: "-18px -18px 16px" }}><h2>{editing ? "Edit feed" : "Add feed"}</h2></div>
