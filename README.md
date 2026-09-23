@@ -190,17 +190,20 @@ ADDRESSIUM_PUBLIC_ORG_ID=<your-org-id> npm run deploy
 #   npm run deploy:infra    npm run deploy:spas
 ```
 
-`confirmUrlBase` has **no usable default** — leave it and every confirmation
-email links to `https://your-site.example/confirm`, so no subscriber can ever
-confirm. It is a `cdk` context value, and note that **`npm run deploy -- -c …`
-does not reach `cdk`**: the root script ends in a nested
-`npm --workspace @addressium/infra-cdk run deploy`, which swallows the flag. Pass
-it on a direct invocation instead:
+`confirmUrlBase` and `preferencesUrlBase` are **required** — set them in
+`infra/cdk/addressium.config.json` (gitignored) to your public distribution plus
+`/confirm` and `/preferences`:
 
-```bash
-cd infra/cdk && npx cdk deploy addressium-dev \
-  -c confirmUrlBase=https://<your-public-distribution>/confirm
+```json
+"confirmUrlBase": "https://<your-public-distribution>/confirm",
+"preferencesUrlBase": "https://<your-public-distribution>/preferences"
 ```
+
+The stack **refuses to synthesize** without them (#294). They used to default to
+`https://your-site.example/...`, which failed silently: signup returned 200, the
+mail sent, and every link in it was dead. A deploy that forgot `-c` reverted a
+working stack to that placeholder with no error, so there is now deliberately no
+default at all.
 
 Details: [`scripts/README.md`](scripts/README.md) ·
 [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md)

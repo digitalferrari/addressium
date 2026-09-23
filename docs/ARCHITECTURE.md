@@ -2517,9 +2517,13 @@ list an operator reads before trusting an install:
 - **The audit log has no observed object.** The WORM-safe `Put`-only writer is
   implemented and privileged routes call it, but no real audit object has been
   read back from the bucket.
-- **`confirmUrlBase` has no usable default.** Left unset, every confirmation
-  email links to `https://your-site.example/confirm` and no subscriber can ever
-  confirm. `deploy:check` warns.
+- **`confirmUrlBase` and `preferencesUrlBase` are required, and the stack
+  refuses to synth without them** (#294). They previously defaulted to a
+  `your-site.example` placeholder and were readable only from `cdk` context, so
+  any deploy that omitted `-c` silently reverted a working stack to dead links —
+  signup and the preference-centre request both returned 200, both sent mail,
+  and nothing reported a fault. They now live in `addressium.config.json`, and a
+  missing value fails at synth rather than at a subscriber's mailbox.
 
 ### 13.8 GDPR erasure and the analytics lake
 

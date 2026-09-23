@@ -51,6 +51,11 @@ function template(
       // `context` argument still overrides it — the rate-derivation tests below
       // pass their own.
       sesMaxSendRate: "14",
+      // Required by the stack for the same reason as sesMaxSendRate: there is
+      // no placeholder fallback, because a placeholder here breaks subscriber
+      // confirmation silently. A per-test `context` still overrides these.
+      confirmUrlBase: "https://tests.example/confirm",
+      preferencesUrlBase: "https://tests.example/preferences",
       ...context,
     },
   });
@@ -877,6 +882,8 @@ test("a prod stack refuses cdk destroy; a dev stack does not (#190)", () => {
       "aws:cdk:bundling-stacks": [],
       "aws:cdk:disable-asset-staging": true,
       sesMaxSendRate: "14",
+      confirmUrlBase: "https://tests.example/confirm",
+      preferencesUrlBase: "https://tests.example/preferences",
     },
   });
   const base = {
@@ -2051,16 +2058,42 @@ test("subscriber-facing URL bases come from context, not the placeholder (#294)"
 });
 
 /**
- * The seam the bug actually lived in.
+ * The stack REFUSES to synthesize without them (#294).
  *
- * The two tests above construct `ControlPlaneStack` directly with context, so
- * they pass whether or not `bin/addressium.ts` maps the config file INTO that
- * context — which is precisely the step that was missing. Verified by mutation:
- * deleting the passthrough left all of them green.
+ * This is the guarantee that matters, and it is stronger than any assertion
+ * about a configured value. The original defect was a placeholder default, so
+ * every path that forgot the setting produced a deployable template with dead
+ * subscriber links and no error. Removing the default means the mistake cannot
+ * reach a live stack from ANY path — the deploy preflight, a bare
+ * `deploy:infra`, a direct `npx cdk deploy`, or CI.
  *
- * So this asserts the mapping itself, by reading the entry point's source. It
- * is a coarse check, but it fails when the passthrough is deleted, which is the
- * property that matters and the one no template assertion can have.
+ * Verified by mutation: restoring either fallback makes these pass again.
+ */
+test("the stack refuses to synth without the subscriber URL bases (#294)", () => {
+  for (const missing of ["confirmUrlBase", "preferencesUrlBase"]) {
+    const context: Record<string, unknown> = {
+      confirmUrlBase: "https://tests.example/confirm",
+      preferencesUrlBase: "https://tests.example/preferences",
+    };
+    // Empty string, not delete: that is what an unset key in the config file
+    // actually produces, and `?? placeholder` would NOT have caught it.
+    context[missing] = "";
+    assert.throws(
+      () => template({}, context),
+      (err: Error) => err.message.includes(missing) && err.message.includes("required"),
+      `synth must fail when ${missing} is empty`,
+    );
+  }
+});
+
+/**
+ * The config-to-context seam.
+ *
+ * The stack reads these from CONTEXT, so `bin/addressium.ts` has to map the
+ * config file into it. A template assertion cannot see that mapping — it passes
+ * context directly — so this reads the entry point's source instead. Coarse,
+ * but it fails when the passthrough is deleted, which no template assertion
+ * does (confirmed by mutation).
  */
 test("bin/addressium.ts maps the URL bases from config into context (#294)", () => {
   const entry = readFileSync(
@@ -2068,12 +2101,10 @@ test("bin/addressium.ts maps the URL bases from config into context (#294)", () 
     "utf8",
   );
   for (const key of ["confirmUrlBase", "preferencesUrlBase"]) {
-    // Read off the config...
     assert.ok(
       new RegExp(`${key}:\\s*cfg\\.${key}`).test(entry),
       `loadConfig does not read ${key} from addressium.config.json`,
     );
-    // ...and placed into App context, which is the only thing the stack reads.
     assert.ok(
       new RegExp(`\\{\\s*${key}:\\s*config\\.${key}\\s*\\}`).test(entry),
       `${key} is never passed into App context, so the config value is ignored`,

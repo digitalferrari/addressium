@@ -171,8 +171,8 @@ Pass with `-c key=value` on `cdk deploy`, or add to `cdk.json` → `context`:
 | `enableAnalytics` | **off** | When `true`, adds the deferred analytics tier: a Kinesis stream off the DynamoDB table, Firehose → S3, a Glue database + two tables (`events` and `entities`, #199), and an Athena workgroup, plus the export/snapshot/replay Lambdas. Off by default (#64); the core design does not depend on it. |
 | `enableOpenSearchMirror` | **off** | When `true`, provisions the OpenSearch Serverless mirror fed by DynamoDB Streams (segment search at scale). Off by default (#64). |
 | `auditRetentionYears` | `7` | Object Lock default retention on the audit bucket, in years (7 → 2555 days). See §9. |
-| `confirmUrlBase` | `https://your-site.example/confirm` | Base URL used in double-opt-in confirmation links. **Not derived — it is a literal placeholder**, and leaving it puts a dead link in every confirmation email: the signup succeeds, the mail sends, and no subscriber can ever confirm. Set it to your public distribution's origin plus `/confirm`, which is where `subscriber-web` serves that route. `deploy:check` warns when it is unset. |
-| `preferencesUrlBase` | `https://your-site.example/preferences` | Base URL used in subscription-management emails. Set it to the subscriber distribution's `/preferences` route so the emailed management link opens the SPA page. |
+| `confirmUrlBase` | **none — required** | Base URL used in double-opt-in confirmation links. Set it to your public distribution's origin plus `/confirm`, where `subscriber-web` serves that route. There is deliberately no default: it used to fall back to `https://your-site.example/confirm`, which put a dead link in every confirmation email while signup returned 200 and the mail sent. The stack now refuses to synthesize without it (#294). |
+| `preferencesUrlBase` | **none — required** | Base URL used in subscription-management emails. Set it to the subscriber distribution's `/preferences` route so the emailed management link opens the SPA page. Same story as `confirmUrlBase`, on the surface subscribers use to leave — and it was the one that had never been set at all. |
 | `sesMaxSendRate` | `14` | Your account's SES send rate in messages/second (a fresh production account gets 14) — set it to your real quota. Everything that sends divides this down rather than each taking it whole, so the aggregate stays inside the limit (#176). |
 | `senderMaxConcurrency` | `5` | How many sender Lambdas may run at once. Sets the SQS event source's cap *and* the divisor the sender applies to `sesMaxSendRate`, from one value — the two drifting apart is worse than neither, because it looks configured. |
 
@@ -241,24 +241,30 @@ ADDRESSIUM_PUBLIC_ORG_ID=<your-org-id> npm run deploy
 > `AssumeCommand` output, and `~/.aws/config` needs only `role_arn` plus a
 > `source_profile`.
 
-> **`confirmUrlBase` has no usable default.** Omit it and every confirmation
-> email links to `https://your-site.example/confirm`, a domain you do not own —
-> the signup succeeds, the mail sends, and nobody can confirm. `deploy:check`
-> only *warns*.
+> **`confirmUrlBase` and `preferencesUrlBase` are REQUIRED** (#294). They are
+> the links addressium mails subscribers, and the stack now **refuses to
+> synthesize** without them. Set them in `infra/cdk/addressium.config.json`:
 >
-> **It cannot ride on `npm run deploy`.** `npm run deploy -- -c key=val` appends
-> the flag to the nested `npm --workspace @addressium/infra-cdk run deploy`,
-> where npm consumes `-c` itself and `cdk` never sees it. Deploy directly when
-> you need to set it:
->
-> ```bash
-> cd infra/cdk && npx cdk deploy addressium-dev \
->   -c confirmUrlBase=https://<your-public-distribution>/confirm
+> ```json
+> "confirmUrlBase": "https://<your-public-distribution>/confirm",
+> "preferencesUrlBase": "https://<your-public-distribution>/preferences"
 > ```
 >
-> Do **not** hardcode it into the tracked `infra/cdk/cdk.json`: that file ships
-> to everyone, and a real hostname there is worse than the placeholder — it
-> silently routes other operators' confirmation tokens to your distribution.
+> They used to default to `https://your-site.example/...`, a domain nobody owns,
+> and were readable only from `cdk` context — so they had to be passed as `-c`
+> on *every* deploy, and forgetting once silently reverted a working stack:
+> signup returned 200, the mail sent, every link in it was dead, and no alarm,
+> log or exit code said so. There is now no default, and `npm run deploy` also
+> refuses on a placeholder value before it ships anything.
+>
+> `-c confirmUrlBase=…` still overrides the file for a one-off deploy, but note
+> **`npm run deploy -- -c key=val` does not reach `cdk`**: npm consumes `-c` at
+> the nested workspace invocation. Use a direct `npx cdk deploy` for that.
+>
+> Do **not** hardcode either into the tracked `infra/cdk/cdk.json`: that file
+> ships to everyone, and a real hostname there is worse than the placeholder —
+> it silently routes other operators' confirmation tokens to your
+> distribution.
 
 > **`npm run deploy` is now the whole deploy** (#294). It used to be
 > `deploy:check && cdk deploy`, with `scripts/publish-spas.mjs` referenced only

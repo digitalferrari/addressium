@@ -915,6 +915,37 @@ export class ControlPlaneStack extends Stack {
      * Everything that sends divides this down rather than each taking it whole,
      * so the aggregate stays inside the quota (#176).
      */
+    /**
+     * Subscriber-facing base URLs. REQUIRED, with no fallback — deliberately.
+     *
+     * These used to default to a `your-site.example` placeholder, a domain
+     * nobody owns, and nothing anywhere reported it: signup returned 200, the
+     * preference-centre request returned 200, both sent mail, and every link in
+     * that mail was dead. Double opt-in and the preference centre were broken in
+     * a way that looks exactly like working.
+     *
+     * A deploy that omits these is always a mistake, so it fails at synth,
+     * before it can reach a live stack — the same treatment `sesMaxSendRate`
+     * gets, for the same reason. Failing HERE rather than only in the deploy
+     * preflight is what covers the paths no preflight sees: a bare
+     * `deploy:infra`, a direct `npx cdk deploy`, and CI.
+     */
+    const requiredUrlBase = (key: string, suffix: string): string => {
+      const value = this.node.tryGetContext(key) as string | undefined;
+      if (value === undefined || String(value).trim() === "") {
+        throw new Error(
+          `${key} is required. Set it in infra/cdk/addressium.config.json to the ` +
+            `PublicSiteUrl stack output plus ${suffix}, e.g. ` +
+            `"https://d1234abcd.cloudfront.net${suffix}". It is the link addressium ` +
+            `mails subscribers; there is deliberately no default, because a ` +
+            `placeholder here fails silently rather than loudly.`,
+        );
+      }
+      return String(value).trim();
+    };
+    const confirmUrlBase = requiredUrlBase("confirmUrlBase", "/confirm");
+    const preferencesUrlBase = requiredUrlBase("preferencesUrlBase", "/preferences");
+
     const sesRateContext = this.node.tryGetContext("sesMaxSendRate") as string | undefined;
     if (sesRateContext === undefined || String(sesRateContext).trim() === "") {
       throw new Error(
@@ -1001,9 +1032,7 @@ export class ControlPlaneStack extends Stack {
     };
     const signupFn = fn("SignupFn", apiEntry, "signupHandler", {
       ...apiEnv,
-      CONFIRM_URL_BASE:
-        (this.node.tryGetContext("confirmUrlBase") as string | undefined) ??
-        "https://your-site.example/confirm",
+      CONFIRM_URL_BASE: confirmUrlBase,
     });
     signupFn.addToRolePolicy(
       sesSendScoped(),
@@ -1013,9 +1042,7 @@ export class ControlPlaneStack extends Stack {
     reservePublic(signupFn);
     const signupBatchFn = fn("SignupBatchFn", apiEntry, "signupBatchHandler", {
       ...apiEnv,
-      CONFIRM_URL_BASE:
-        (this.node.tryGetContext("confirmUrlBase") as string | undefined) ??
-        "https://your-site.example/confirm",
+      CONFIRM_URL_BASE: confirmUrlBase,
     });
     signupBatchFn.addToRolePolicy(
       sesSendScoped(),
@@ -1552,18 +1579,14 @@ export class ControlPlaneStack extends Stack {
     // not starve the surface people use to LEAVE.
     const preferencesFn = fn("PreferencesFn", apiEntry, "preferencesHandler", {
       ...apiEnv,
-      PREFERENCES_URL_BASE:
-        (this.node.tryGetContext("preferencesUrlBase") as string | undefined) ??
-        "https://your-site.example/preferences",
+      PREFERENCES_URL_BASE: preferencesUrlBase,
     });
     table.grantReadWriteData(preferencesFn);
     confirmSecret.grantRead(preferencesFn);
     reservePublic(preferencesFn, 20);
     const preferenceRequestFn = fn("PreferenceRequestFn", apiEntry, "preferenceRequestHandler", {
       ...apiEnv,
-      PREFERENCES_URL_BASE:
-        (this.node.tryGetContext("preferencesUrlBase") as string | undefined) ??
-        "https://your-site.example/preferences",
+      PREFERENCES_URL_BASE: preferencesUrlBase,
     });
     table.grantReadData(preferenceRequestFn);
     confirmSecret.grantRead(preferenceRequestFn);

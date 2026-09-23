@@ -91,6 +91,22 @@ jobs:
           const region = config.region ?? "us-east-1";
           if (!["dev", "staging", "prod"].includes(stage)) throw new Error(`invalid deployment stage: ${stage}`);
           if (!/^[a-z0-9-]+$/.test(region)) throw new Error(`invalid AWS region: ${region}`);
+          // The stack refuses to synth without these, so a deploy missing them
+          // fails anyway (#294) — but it fails deep inside `cdk deploy`, after
+          // the change-set gate has already run. Checking here names the secret
+          // to edit instead. They are the links addressium mails subscribers;
+          // there is deliberately no default, because the placeholder they used
+          // to fall back to broke double opt-in silently.
+          for (const key of ["confirmUrlBase", "preferencesUrlBase"]) {
+            const value = (config[key] ?? "").trim();
+            if (!value || value.includes("your-site.example")) {
+              throw new Error(
+                `${key} is ${value ? "the placeholder" : "missing"} in the ADDRESSIUM_CONFIG_JSON secret. ` +
+                  "Set it to the PublicSiteUrl stack output plus the path, e.g. " +
+                  `"https://d1234abcd.cloudfront.net/${key === "confirmUrlBase" ? "confirm" : "preferences"}".`,
+              );
+            }
+          }
           fs.appendFileSync(process.env.GITHUB_OUTPUT, `stage=${stage}\nregion=${region}\n`);
           NODE
       - name: Configure AWS credentials via OIDC
