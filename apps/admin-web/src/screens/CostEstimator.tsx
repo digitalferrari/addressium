@@ -127,6 +127,44 @@ export function CostEstimator() {
             {input.sendsPerYear.toLocaleString()} sends × {usd(est.perSendTotalUsd)} +{" "}
             {usd(est.fixedMonthlyUsd)}/mo × 12 + accrued event storage.
           </p>
+
+          {/*
+            The same annual figure at the cadences people actually budget in.
+            All four are slices of `annualUsd`, so they always reconcile to the
+            total above — a second model here could disagree with it.
+
+            Per campaign is annual ÷ sends, NOT the per-send total: it carries
+            each send's share of the fixed monthly cost, which is the number
+            that answers "what does one more campaign cost me". At one send a
+            year that is a whole year of fixed cost on a single campaign, which
+            is correct and worth being able to see.
+          */}
+          <div className="kpis" style={{ marginTop: 12 }}>
+            <div className="kpi">
+              <div className="n num">{usd(est.annualUsd / 365)}</div>
+              <div className="l">per day</div>
+            </div>
+            <div className="kpi">
+              <div className="n num">{usd(est.annualUsd / 12)}</div>
+              <div className="l">per month</div>
+            </div>
+            <div className="kpi">
+              <div className="n num">
+                {input.sendsPerYear > 0 ? usd(est.annualUsd / input.sendsPerYear) : "—"}
+              </div>
+              <div className="l">per campaign</div>
+            </div>
+            <div className="kpi">
+              <div className="n num">{usd(est.annualUsd)}</div>
+              <div className="l">per year</div>
+            </div>
+          </div>
+          <p className="muted" style={{ fontSize: 12, marginTop: 8 }}>
+            Per campaign is the annual total split across{" "}
+            {input.sendsPerYear.toLocaleString()} send{input.sendsPerYear === 1 ? "" : "s"}, so it
+            includes each send's share of the {usd(est.fixedMonthlyUsd)}/month fixed cost —{" "}
+            {usd(est.perSendTotalUsd)} of it is the send itself.
+          </p>
         </div>
       </div>
     </section>
