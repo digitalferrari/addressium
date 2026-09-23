@@ -1350,13 +1350,16 @@ each. Three things about that are deliberate:
   supposed to prevent.
 
 **It checkpoints and resumes** (#182). The sweep enumerates every subscriber in
-an org with an N+1 subscription read each, and used to do so with no record of
-progress — a retry restarted from zero, so an org large enough to matter was
+an org and used to do so with no record of progress — a retry restarted from zero, so an org large enough to matter was
 never fully swept: it burned the same first N subscribers on every attempt and
 the tail was never reached. Each invocation now walks a bounded number of
 subscribers (1000 by default) and returns a cursor if there is more; the
 `SweepCheckpoint` item carries it forward, and the absence of a cursor is how
-completion is known. The checkpoint is written *after* the work, so a crash
+completion is known. Subscriptions are read only for subscribers whose decision can
+actually turn on them — cold and not yet enrolled (#293) — so the cost is
+proportional to enrollments rather than to the org; `needsSubscriptionLookup`
+and `decideReengagement` are kept adjacent because they have to agree, and a
+test asserts they do. The checkpoint is written *after* the work, so a crash
 re-does a page rather than skipping one — every action in the sweep is
 idempotent (send claims, step spacing), so a repeat is a near no-op while a skip
 would leave people permanently unswept.
