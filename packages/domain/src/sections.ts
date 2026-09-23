@@ -22,6 +22,46 @@
  * markers come back intact.
  */
 
+/**
+ * The per-edition identifier the ad server and analytics both key on (#301).
+ *
+ * This format is an EXTERNAL CONTRACT, not an internal choice. It appears as
+ * `p=` on every ad impression and click URL, and as `utm_id` on every story
+ * link, and neither the ad server nor the analytics reporting changes at
+ * cutover — so it must be reproduced exactly.
+ *
+ * `base64(cleanedDisplayName + "YYYY-MM-DD HH:MM:SS")`, with a literal space
+ * before the time. Two independent samples decoded from delivered mail:
+ *
+ *   VDNadtagsinSDDevDailyNewsnewvdntemplate2026-03-11 11:26:00
+ *   LocalNewsFlash2023-06-02 14:16:00
+ *
+ * addressium's own edition `campaignId` is a cleaner identifier and is what we
+ * use internally. Substituting it here would silently break continuity in
+ * reporting nobody would notice until a monthly reconciliation — which is
+ * exactly why this is the one place copying the legacy implementation is
+ * correct rather than lazy.
+ *
+ * The name is stripped to `[A-Za-z0-9-]`; the TIMESTAMP keeps its spaces and
+ * colons, which is why the result is not url-safe and callers must encode it.
+ */
+export function placementId(displayName: string, sendTime: Date | string): string {
+  const cleaned = displayName.replace(/[^A-Za-z0-9-]/g, "");
+  const d = typeof sendTime === "string" ? sendTime : formatSendTime(sendTime);
+  // btoa is not available in every Node target; Buffer is, and both services
+  // that need this run on Node.
+  return Buffer.from(`${cleaned}${d}`, "utf8").toString("base64");
+}
+
+/** `YYYY-MM-DD HH:MM:SS` in UTC — the shape the legacy timestamps carry. */
+export function formatSendTime(at: Date): string {
+  const p = (n: number) => String(n).padStart(2, "0");
+  return (
+    `${at.getUTCFullYear()}-${p(at.getUTCMonth() + 1)}-${p(at.getUTCDate())} ` +
+    `${p(at.getUTCHours())}:${p(at.getUTCMinutes())}:${p(at.getUTCSeconds())}`
+  );
+}
+
 export interface SectionStory {
   headline: string;
   url: string;

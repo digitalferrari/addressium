@@ -409,6 +409,10 @@ export function composeFromRegions(
   ads?: FreshContent["ads"],
   /** Document-level values: newsletter name, section headings, preheader. */
   labels?: Record<string, string>,
+  /** Per-edition placement id for ad tags (#301). */
+  placement?: string,
+  /** Segment id the ad tags key on. */
+  listId?: string,
 ): string {
   // A bare array fills the main run only. The category sections are separately
   // sourced — in the legacy pipeline they were WordPress category queries, not
@@ -448,6 +452,16 @@ export function composeFromRegions(
   // region cannot swallow them.
   out = out.split("{{MARQUEEAD}}").join(ads?.marquee ? opaque(ads.marquee) : "");
   out = out.split("{{SAFERTB}}").join(ads?.footer ? opaque(ads.footer) : "");
+  // Ad-tag substitutions the ad server expects (#301). Despite the brace
+  // syntax these are resolved HERE, not by the ESP — `{{Address}}` is the one
+  // token that passes through to per-recipient templating, and it is
+  // deliberately left alone.
+  if (placement) {
+    out = out.split("{{MessageVersionInstance.Id}}").join(placement);
+  }
+  if (listId) {
+    out = out.split("{LIST_ID}").join(listId);
+  }
   for (const [token, value] of Object.entries(labels ?? {})) {
     out = out.split(`{{${token}}}`).join(escapeHtml(value));
   }
