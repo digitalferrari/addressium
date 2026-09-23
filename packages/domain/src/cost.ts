@@ -45,7 +45,30 @@ export const PRICES = {
   secretMonth: 0.40,
   /** CloudWatch alarm, per alarm-month. */
   alarmMonth: 0.10,
+  /** CloudWatch dashboard, per dashboard-month (first 3 are free). */
+  dashboardMonth: 3.00,
+  /** CloudWatch Logs ingest, per GB. */
+  logsIngestGb: 0.50,
+  /** S3 Standard storage, per GB-month. */
+  s3StorageGbMonth: 0.023,
+  /** S3 PUT/COPY/POST/LIST request. */
+  s3PutRequest: 5.00 / 1_000_000,
 } as const;
+
+/**
+ * Bytes of CloudWatch Logs a send generates, measured rather than guessed.
+ *
+ * The send path logs PER SLICE, not per recipient: `services/sender` has two
+ * `console.*` calls and both are error paths, and `packages/domain/src/send.ts`
+ * has none. So the sender contributes only Lambda's own START/END/REPORT lines
+ * once per slice — a few thousand lines a year, not a few million.
+ *
+ * The events handler is the real volume: roughly four engagement events per
+ * email, batched ten to an invocation.
+ */
+const LOG_BYTES_PER_INVOCATION = 600;
+const EVENTS_PER_EMAIL = 4;
+const EVENTS_BATCH_SIZE = 10;
 
 /** Work the pipeline does per unit, derived from the send and event paths. */
 const UNITS = {
@@ -82,6 +105,8 @@ export interface SendCostInput {
   orgs: number;
   /** CloudWatch alarms retained. */
   alarms: number;
+  /** CloudWatch dashboards. The stack ships one ops dashboard. */
+  dashboards: number;
   /** Secrets Manager secrets. */
   secrets: number;
 }
@@ -94,6 +119,7 @@ export const DEFAULT_COST_INPUT: SendCostInput = {
   bounceRate: 0.02,
   orgs: 1,
   alarms: 30,
+  dashboards: 1,
   secrets: 2,
 };
 
@@ -204,8 +230,31 @@ export function estimateSendCost(input: SendCostInput): SendCostEstimate {
       usd: round(input.secrets * PRICES.secretMonth),
       detail: `${input.secrets} × $0.40/month`,
     },
+    {
+      // The ops dashboard. Counted because it is the single largest of the
+      // items this model used to omit — and, at $3, still smaller than one
+      // day of SES at this volume. Worth stating rather than hiding.
+      label: "CloudWatch dashboard",
+      usd: round(input.dashboards * PRICES.dashboardMonth),
+      detail: `${input.dashboards} × $3.00/month`,
+    },
   ];
   const fixedMonthlyUsd = round(fixedMonthly.reduce((s, l) => s + l.usd, 0));
+
+  // Logs, measured from what the code actually emits. The sender contributes
+  // one invocation's worth per SLICE; the events handler one per batch of ten
+  // engagement events. Neither logs per recipient, which is why this is cents
+  // rather than the dominant line it would otherwise be.
+  const eventInvocations = (events * input.sendsPerYear) / EVENTS_BATCH_SIZE;
+  const logGb =
+    ((eventInvocations + senderInvocations * input.sendsPerYear) * LOG_BYTES_PER_INVOCATION) / 1e9;
+  const logsUsd = round(logGb * PRICES.logsIngestGb);
+
+  // One rendered body archived per campaign, kept indefinitely.
+  const archiveUsd = round(
+    input.sendsPerYear * PRICES.s3PutRequest +
+      ((input.sendsPerYear * 60_000) / 1e9) * PRICES.s3StorageGbMonth * 6,
+  );
 
   const storageUsd = round(
     averageStorageGb(events, input.sendsPerYear) * PRICES.ddbStorageGbMonth * 12,
@@ -216,7 +265,9 @@ export function estimateSendCost(input: SendCostInput): SendCostEstimate {
     perSendTotalUsd,
     fixedMonthly,
     fixedMonthlyUsd,
-    annualUsd: round(perSendTotalUsd * input.sendsPerYear + fixedMonthlyUsd * 12 + storageUsd),
+    annualUsd: round(
+      perSendTotalUsd * input.sendsPerYear + fixedMonthlyUsd * 12 + storageUsd + logsUsd + archiveUsd,
+    ),
     eventsPerSend: Math.round(events),
   };
 }

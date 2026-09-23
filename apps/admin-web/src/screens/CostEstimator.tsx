@@ -52,8 +52,14 @@ export function CostEstimator() {
       <h2>Cost estimator</h2>
       <p className="muted">
         Estimated AWS cost of sending, at <strong>us-east-1 on-demand list prices</strong> (captured
-        2026-07). Excludes any WAF you attach yourself, data transfer, and the free tiers most
-        accounts still have — so treat this as an upper bound.
+        2026-07). Covers SES, DynamoDB, Lambda, SQS/SNS, KMS, Secrets Manager,
+        CloudWatch alarms and dashboards, log ingest and the S3 body archive.
+        {/* The old copy said "upper bound" while omitting several line items,
+            which is a worse failure than the omission: an estimate people
+            believe is a ceiling has to actually be one. Now it lists what is in
+            and what is out, and claims neither. */}
+        {" "}Excludes any WAF you attach yourself, CloudFront and data transfer,
+        and the free tiers most accounts still have.
       </p>
 
       <div style={{ display: "flex", gap: 32, flexWrap: "wrap" }}>
@@ -78,6 +84,7 @@ export function CostEstimator() {
           {num("bounceRate", "Bounce + complaint rate", "0.02 = 2%", 0.005)}
           {num("orgs", "Organizations", "$1/mo KMS key each")}
           {num("alarms", "CloudWatch alarms")}
+          {num("dashboards", "CloudWatch dashboards", "$3/mo each")}
           {num("secrets", "Secrets Manager secrets")}
         </div>
 
@@ -125,7 +132,8 @@ export function CostEstimator() {
           <h3 style={{ marginTop: 20 }}>Annual — {usd(est.annualUsd)}</h3>
           <p className="muted" style={{ fontSize: 12 }}>
             {input.sendsPerYear.toLocaleString()} sends × {usd(est.perSendTotalUsd)} +{" "}
-            {usd(est.fixedMonthlyUsd)}/mo × 12 + accrued event storage.
+            {usd(est.fixedMonthlyUsd)}/mo × 12 + accrued event storage + log ingest
+            and the body archive.
           </p>
 
           {/*
