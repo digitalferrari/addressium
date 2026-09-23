@@ -81,6 +81,11 @@ function stubClient(reasons: { Code?: string }[] | null) {
         calls.push({ kind: "put", input: JSON.parse(String(request.body)) as Record<string, unknown> });
         return { response: { statusCode: 200, headers: {}, body: json({}) } };
       }
+      // The SENDID# registration+counter for a record-less id (#293).
+      if (target.endsWith(".UpdateItem")) {
+        calls.push({ kind: "update", input: JSON.parse(String(request.body)) as Record<string, unknown> });
+        return { response: { statusCode: 200, headers: {}, body: json({}) } };
+      }
       throw new Error(`unexpected target: ${target}`);
     },
   };
@@ -132,18 +137,26 @@ test("bounce for a record-less edition id: event is kept, counter skipped, no th
   // `campaigns.list`, which returns only CAMPAIGNREC# rows — without the marker
   // a subject's events under a drip or edition id survived their erasure
   // request.
-  assert.deepEqual(calls.map((c) => c.kind), ["transact", "put", "put"]);
+  assert.deepEqual(calls.map((c) => c.kind), ["transact", "put", "update"]);
   const item = calls[1]?.input?.Item as Record<string, { S: string }> | undefined;
   assert.ok(item, "the fallback PutItem carries the event row");
   assert.equal(item.pk?.S, `ORG#${ORG}#CAMPAIGN#${EDITION}`);
   assert.ok(item.sk?.S.startsWith("EVENT#"), "the fallback writes the event row");
 
-  const marker = calls[2]?.input?.Item as Record<string, { S: string }> | undefined;
-  assert.ok(marker, "the id is registered for erasure");
+  const marker = calls[2]?.input as Record<string, unknown>;
+  const key = marker?.Key as Record<string, { S: string }>;
+  assert.ok(key, "the id is registered for erasure");
   // Org partition, NOT a CAMPAIGNREC# row: these ids must never surface in
   // `campaigns.list`, which feeds the console, trends and reports.
-  assert.equal(marker.pk?.S, `ORG#${ORG}`);
-  assert.equal(marker.sk?.S, `SENDID#${EDITION}`);
+  assert.equal(key.pk?.S, `ORG#${ORG}`);
+  assert.equal(key.sk?.S, `SENDID#${EDITION}`);
+  // `ADD` on a top-level attribute, not `SET data.counters.<f>`: the latter
+  // fails when the item does not exist yet, which is this row's normal state on
+  // the first event (#221 shipped exactly that bug once).
+  assert.ok(
+    String(marker.UpdateExpression).includes("ADD"),
+    `counter must use ADD, got ${String(marker.UpdateExpression)}`,
+  );
 });
 
 test("open for a record-less edition id (unique-event path) falls back the same way", async () => {
@@ -159,9 +172,9 @@ test("open for a record-less edition id (unique-event path) falls back the same 
 
   // Event row, then the SENDID# marker that makes these events reachable by
   // erasure (#293) — same as the bounce path above.
-  assert.deepEqual(calls.map((c) => c.kind), ["transact", "put", "put"]);
-  const marker = calls[2]?.input?.Item as Record<string, { S: string }> | undefined;
-  assert.equal(marker?.sk?.S, `SENDID#${EDITION}`);
+  assert.deepEqual(calls.map((c) => c.kind), ["transact", "put", "update"]);
+  const key = (calls[2]?.input as Record<string, unknown>)?.Key as Record<string, { S: string }>;
+  assert.equal(key?.sk?.S, `SENDID#${EDITION}`);
 });
 
 test("repeat open where BOTH the marker exists and the campaign row is absent still records the event once", async () => {
@@ -174,7 +187,18 @@ test("repeat open where BOTH the marker exists and the campaign row is absent st
 
   await stores.events.append(evt("open"));
 
-  assert.deepEqual(calls.map((c) => c.kind), ["transact", "put"]);
+  // Event row, then a registration that does NOT count (#293). This branch used
+  // to return before registering, so an id whose only event was a repeat open
+  // stayed invisible to erasure — and `opens` counts PEOPLE, so the same person
+  // opening twice must not move it.
+  assert.deepEqual(calls.map((c) => c.kind), ["transact", "put", "update"]);
+  const marker = calls[2]?.input as Record<string, unknown>;
+  const key = marker?.Key as Record<string, { S: string }>;
+  assert.equal(key?.sk?.S, `SENDID#${EDITION}`, "the id is registered for erasure");
+  assert.ok(
+    !String(marker.UpdateExpression).includes("ADD"),
+    `a repeat open must not move a counter, got ${String(marker.UpdateExpression)}`,
+  );
 });
 
 test("exact redelivery stays a silent no-op even on a record-less id", async () => {

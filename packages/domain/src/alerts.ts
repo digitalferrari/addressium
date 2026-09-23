@@ -132,8 +132,20 @@ export async function checkDeliverability(
   // history — worst exactly when a campaign is generating the most events.
   // Counters are maintained transactionally with each append, so they are
   // exact rather than approximate.
+  //
+  // Three sources, cheapest first (#293):
+  //  1. the campaign record's counters — normal campaigns and recurring editions;
+  //  2. the SENDID# counters — drip steps, re-engagement steps and any other id
+  //     that mints a campaignId but never gets a record. These used to fall
+  //     straight through to the fold below, so deliverability evaluation for
+  //     them was O(events) on EVERY bounce and complaint;
+  //  3. folding the event log, still correct and still needed for ids whose
+  //     events predate the SENDID# index.
   const campaign = await stores.campaigns.get(orgId, campaignId);
-  const counters = campaign?.counters ?? deriveCounters(await stores.events.all(orgId, campaignId));
+  const counters =
+    campaign?.counters ??
+    (await stores.sendIdCounters?.(orgId, campaignId)) ??
+    deriveCounters(await stores.events.all(orgId, campaignId));
   const breaches = evaluateAlerts(config, counters);
   if (breaches.length === 0) return { breaches, halted: false };
 

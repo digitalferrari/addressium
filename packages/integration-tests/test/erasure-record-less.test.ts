@@ -79,3 +79,39 @@ test("a record-less send id is NOT listed as a campaign (#293)", async () => {
   const listed = (await stores.campaigns.list(ORG)).map((c) => c.campaignId);
   assert.ok(!listed.includes(RECORD_LESS), `record-less id leaked into campaigns.list: ${listed}`);
 });
+
+test("a record-less send id accumulates counters instead of folding events (#293)", async () => {
+  const CID = "drip:welcome:2:2026-02-02T00:00:00.000Z";
+  for (let i = 0; i < 5; i++) {
+    await stores.events.append({ orgId: ORG, subscriberId: `c${i}`, campaignId: CID, type: "sent", at: new Date().toISOString() });
+  }
+  await stores.events.append({ orgId: ORG, subscriberId: "c0", campaignId: CID, type: "bounce", at: new Date().toISOString() });
+
+  const counters = await stores.sendIdCounters(ORG, CID);
+  assert.ok(counters, "the id has no counter row");
+  assert.equal(counters.sent, 5, "one per sent event");
+  assert.equal(counters.bounces, 1);
+  // The point of the index: deliverability can read ONE item instead of folding
+  // the whole event log on every bounce and complaint.
+  assert.equal(counters.opens, 0, "untouched counters read as zero, not undefined");
+});
+
+test("a repeat open registers the id but does not double-count people (#293)", async () => {
+  // `opens` counts PEOPLE. A second open by the same person is genuine history
+  // (#183) but must not move the counter — and it must still register the id,
+  // or an id whose only event is a repeat open stays invisible to erasure.
+  const CID = "drip:welcome:3:2026-02-02T00:00:00.000Z";
+  const at = () => new Date().toISOString();
+  await stores.events.append({ orgId: ORG, subscriberId: "r1", campaignId: CID, type: "open", at: at() });
+  await stores.events.append({ orgId: ORG, subscriberId: "r1", campaignId: CID, type: "open", at: at() });
+
+  const counters = await stores.sendIdCounters(ORG, CID);
+  assert.ok(counters, "the id was never registered");
+  assert.equal(counters.opens, 1, "two opens by one person is one person");
+});
+
+test("an unknown send id returns undefined so the caller still folds (#293)", async () => {
+  // Ids whose events predate this index must keep working — the fold is the
+  // correct fallback, not an error.
+  assert.equal(await stores.sendIdCounters(ORG, "never-seen"), undefined);
+});

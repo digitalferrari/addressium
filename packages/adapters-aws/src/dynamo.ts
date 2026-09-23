@@ -939,7 +939,24 @@ export class DynamoStores implements Stores {
       // condition; here there is no transaction, so ask. Erasure depends on
       // this marker, and a test-only path that skipped it would make the
       // erasure tests pass for the wrong reason.
-      if (!(await this.campaigns.get(e.orgId, e.campaignId))) await this.registerSendId(e);
+      if (!(await this.campaigns.get(e.orgId, e.campaignId))) {
+        // Uniqueness has to be honoured here too. `opens`/`clicks` count PEOPLE,
+        // and the transactional path gets that from the UNIQ# marker's condition
+        // — which this path has no transaction to read. Writing the marker and
+        // checking it explicitly keeps the two paths producing the SAME numbers;
+        // otherwise dynalite tests would assert counts production never yields.
+        let countsThisEvent = true;
+        if (unique) {
+          const markerKey = { pk: `${org(e.orgId)}#CAMPAIGN#${e.campaignId}`, sk: `UNIQ#${e.type}#${e.subscriberId}` };
+          const seen = (await this.doc.send(
+            new GetCommand({ TableName: this.tableName, Key: markerKey }),
+          )).Item;
+          if (seen) countsThisEvent = false;
+          else await this.put({ ...markerKey, data: { at: e.at } });
+        }
+        if (countsThisEvent) await this.registerSendId(e);
+        else await this.registerSendIdWithoutCounting(e);
+      }
       return;
     }
     try {
@@ -950,15 +967,24 @@ export class DynamoStores implements Stores {
       const eventExists = reasons[0]?.Code === "ConditionalCheckFailed";
       // An exact redelivery: the row is already there, counters already moved.
       if (eventExists) return;
+      const campaignMissing = reasons[1]?.Code === "ConditionalCheckFailed";
       const markerExists = unique && reasons[2]?.Code === "ConditionalCheckFailed";
       if (markerExists) {
         // A real second open by the same person. Keep the event — it is genuine
         // history, and #183 deliberately made repeats distinguishable — but do
         // not move a counter whose unit is people, not events.
         await this.put(eventItem);
+        // Register the id even here. This branch used to return first, so a
+        // repeat open could be the ONLY event under a record-less id and leave
+        // it unregistered — invisible to erasure, which is the bug #293 fixed.
+        //
+        // Registered but NOT counted: `opens`/`clicks` count PEOPLE, and this is
+        // the same person opening again. `deliveryDelays` is a spare slot used
+        // only to keep the write shape identical; it is incremented by zero
+        // below via the dedicated no-count path.
+        if (campaignMissing) await this.registerSendIdWithoutCounting(e);
         return;
       }
-      const campaignMissing = reasons[1]?.Code === "ConditionalCheckFailed";
       if (campaignMissing) {
         // Sends that run under an id with no CAMPAIGN item: recurring-series
         // editions (`<base>-<editionKey>`, feed.ts), drip sub-campaigns and
@@ -1063,14 +1089,74 @@ export class DynamoStores implements Stores {
    * must NOT appear in `campaigns.list`: that feeds the console, the trends loop
    * and the reports, none of which should show a drip step as a campaign.
    *
-   * Idempotent by key, so the second event under the same id just overwrites it.
+   * It also COUNTS (#293 item 3). `checkDeliverability` runs on every bounce and
+   * complaint, and for an id with no campaign record it fell back to folding the
+   * whole event log — so the cost of evaluating deliverability grew with the
+   * campaign's own event history, worst exactly when a campaign is generating
+   * the most events. Measured: 500 events appended, one check folded all 500.
+   *
+   * `SET #d = if_not_exists(#d, :data) ADD #f :one` rather than
+   * `SET data.counters.<f>`, deliberately:
+   *   - the two paths do not overlap, so DynamoDB accepts them together;
+   *   - it works when the item does not exist yet, which `SET data.counters.x`
+   *     does NOT — this codebase has already shipped that exact bug (#221);
+   *   - `firstSeenAt` is written once instead of being overwritten every event.
+   *
+   * `campaignId` stays inside `data`, where `recordLessSendIds` reads it.
    */
-  private async registerSendId(e: EngagementEvent): Promise<void> {
-    await this.put({
-      pk: org(e.orgId),
-      sk: `SENDID#${e.campaignId}`,
-      data: { orgId: e.orgId, campaignId: e.campaignId, firstSeenAt: e.at },
-    });
+  private async registerSendId(e: EngagementEvent, countField?: keyof HotCounters): Promise<void> {
+    const field = countField ?? DynamoStores.COUNTER_FIELD[e.type];
+    await this.doc.send(
+      new UpdateCommand({
+        TableName: this.tableName,
+        Key: { pk: org(e.orgId), sk: `SENDID#${e.campaignId}` },
+        UpdateExpression: "SET #d = if_not_exists(#d, :data) ADD #f :one",
+        ExpressionAttributeNames: { "#d": "data", "#f": field },
+        ExpressionAttributeValues: {
+          ":data": { orgId: e.orgId, campaignId: e.campaignId, firstSeenAt: e.at },
+          ":one": 1,
+        },
+      }),
+    );
+  }
+
+  /**
+   * Register the id without moving any counter — the repeat open/click case,
+   * where the unit is people and this is the same person again (#293).
+   */
+  private async registerSendIdWithoutCounting(e: EngagementEvent): Promise<void> {
+    await this.doc.send(
+      new UpdateCommand({
+        TableName: this.tableName,
+        Key: { pk: org(e.orgId), sk: `SENDID#${e.campaignId}` },
+        UpdateExpression: "SET #d = if_not_exists(#d, :data)",
+        ExpressionAttributeNames: { "#d": "data" },
+        ExpressionAttributeValues: {
+          ":data": { orgId: e.orgId, campaignId: e.campaignId, firstSeenAt: e.at },
+        },
+      }),
+    );
+  }
+
+  /**
+   * Counters for a send id that has no campaign record, or undefined if the id
+   * has never been seen (#293). Shaped like `HotCounters` so callers can treat
+   * it the same as a campaign's own counters.
+   */
+  async sendIdCounters(orgId: string, campaignId: string): Promise<HotCounters | undefined> {
+    const raw = (await this.doc.send(
+      new GetCommand({ TableName: this.tableName, Key: { pk: org(orgId), sk: `SENDID#${campaignId}` } }),
+    )).Item as Record<string, unknown> | undefined;
+    if (!raw) return undefined;
+    const zero: HotCounters = {
+      sent: 0, delivered: 0, opens: 0, clicks: 0, bounces: 0, complaints: 0,
+      unsubscribes: 0, rejects: 0, renderingFailures: 0, deliveryDelays: 0,
+    };
+    for (const key of Object.keys(zero) as (keyof HotCounters)[]) {
+      const v = raw[key];
+      if (typeof v === "number") zero[key] = v;
+    }
+    return zero;
   }
 
   /**

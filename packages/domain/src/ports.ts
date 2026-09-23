@@ -9,6 +9,7 @@ import type {
   ApiKey,
   Campaign,
   CampaignSeries,
+  HotCounters,
   DripSequence,
   Feed,
   EmailArchive,
@@ -897,6 +898,17 @@ export interface Stores {
   sendClaims: SendClaimStore;
   version: VersionStore;
   campaigns: CampaignStore;
+  /**
+   * Counters for a send id that has NO campaign record (#293) — drip steps,
+   * re-engagement steps, editions that predate their record.
+   *
+   * Optional because it is an optimization with a correct fallback:
+   * `checkDeliverability` folds the event log when this is absent or returns
+   * undefined, which is what it always did. Implementing it turns that fold —
+   * which runs on every bounce and complaint, and grows with the campaign's own
+   * event history — into a single read.
+   */
+  sendIdCounters?(orgId: string, campaignId: string): Promise<HotCounters | undefined>;
   /** Halt markers for record-less send ids (recurring editions, drip, re-engagement). */
   halts: HaltStore;
   series: CampaignSeriesStore;
