@@ -127,11 +127,23 @@ test("bounce for a record-less edition id: event is kept, counter skipped, no th
 
   await stores.events.append(evt("bounce")); // must not throw
 
-  assert.deepEqual(calls.map((c) => c.kind), ["transact", "put"]);
+  // Two puts now: the event row, then a SENDID# marker registering this id so
+  // ERASURE can reach these events (#293). `deleteForSubscriber` walks
+  // `campaigns.list`, which returns only CAMPAIGNREC# rows — without the marker
+  // a subject's events under a drip or edition id survived their erasure
+  // request.
+  assert.deepEqual(calls.map((c) => c.kind), ["transact", "put", "put"]);
   const item = calls[1]?.input?.Item as Record<string, { S: string }> | undefined;
   assert.ok(item, "the fallback PutItem carries the event row");
   assert.equal(item.pk?.S, `ORG#${ORG}#CAMPAIGN#${EDITION}`);
   assert.ok(item.sk?.S.startsWith("EVENT#"), "the fallback writes the event row");
+
+  const marker = calls[2]?.input?.Item as Record<string, { S: string }> | undefined;
+  assert.ok(marker, "the id is registered for erasure");
+  // Org partition, NOT a CAMPAIGNREC# row: these ids must never surface in
+  // `campaigns.list`, which feeds the console, trends and reports.
+  assert.equal(marker.pk?.S, `ORG#${ORG}`);
+  assert.equal(marker.sk?.S, `SENDID#${EDITION}`);
 });
 
 test("open for a record-less edition id (unique-event path) falls back the same way", async () => {
@@ -145,7 +157,11 @@ test("open for a record-less edition id (unique-event path) falls back the same 
 
   await stores.events.append(evt("open"));
 
-  assert.deepEqual(calls.map((c) => c.kind), ["transact", "put"]);
+  // Event row, then the SENDID# marker that makes these events reachable by
+  // erasure (#293) — same as the bounce path above.
+  assert.deepEqual(calls.map((c) => c.kind), ["transact", "put", "put"]);
+  const marker = calls[2]?.input?.Item as Record<string, { S: string }> | undefined;
+  assert.equal(marker?.sk?.S, `SENDID#${EDITION}`);
 });
 
 test("repeat open where BOTH the marker exists and the campaign row is absent still records the event once", async () => {

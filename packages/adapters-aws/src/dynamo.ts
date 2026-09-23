@@ -935,6 +935,11 @@ export class DynamoStores implements Stores {
       // Degraded path — see the constructor. Ordering matters even here: write
       // the event first so a crash loses a count rather than an event.
       await this.put(eventItem);
+      // The transactional path learns "no campaign record" from the cancelled
+      // condition; here there is no transaction, so ask. Erasure depends on
+      // this marker, and a test-only path that skipped it would make the
+      // erasure tests pass for the wrong reason.
+      if (!(await this.campaigns.get(e.orgId, e.campaignId))) await this.registerSendId(e);
       return;
     }
     try {
@@ -966,6 +971,7 @@ export class DynamoStores implements Stores {
         // the event, skip the counter. Deliverability evaluation for these ids
         // folds the event log instead of reading stored counters (alerts.ts).
         await this.put(eventItem);
+        await this.registerSendId(e);
         return;
       }
       throw err;
@@ -1008,10 +1014,17 @@ export class DynamoStores implements Stores {
      * happened, which is not what erasure asks for.
      */
     deleteForSubscriber: async (orgId, subscriberId) => {
-      const campaigns = await this.campaigns.list(orgId);
+      // BOTH kinds of send id (#293). `campaigns.list` returns only
+      // `CAMPAIGNREC#` rows, so drip, re-engagement and any other id that never
+      // gets a campaign record was invisible here — and the subject's events
+      // survived their erasure request, which is a compliance defect rather
+      // than a tidiness one.
+      const recorded = (await this.campaigns.list(orgId)).map((c) => c.campaignId);
+      const recordLess = await this.recordLessSendIds(orgId);
+      const campaignIds = [...new Set([...recorded, ...recordLess])];
       let removed = 0;
-      for (const c of campaigns) {
-        const pk = `${org(orgId)}#CAMPAIGN#${c.campaignId}`;
+      for (const campaignId of campaignIds) {
+        const pk = `${org(orgId)}#CAMPAIGN#${campaignId}`;
         let ExclusiveStartKey: Record<string, unknown> | undefined;
         do {
           const res = await this.doc.send(
@@ -1036,6 +1049,46 @@ export class DynamoStores implements Stores {
       return removed;
     },
   };
+
+  /**
+   * Mark a send id that has events but no campaign record, so ERASURE can find
+   * it (#293, #164).
+   *
+   * `deleteForSubscriber` walks `campaigns.list`, which returns only
+   * `CAMPAIGNREC#` rows — so events under a drip, re-engagement or pre-record
+   * edition id were unreachable, and a subject's personal data SURVIVED their
+   * erasure request. Proven against the real adapter with dynalite.
+   *
+   * An org-partition marker rather than a `CAMPAIGNREC#` row, because these ids
+   * must NOT appear in `campaigns.list`: that feeds the console, the trends loop
+   * and the reports, none of which should show a drip step as a campaign.
+   *
+   * Idempotent by key, so the second event under the same id just overwrites it.
+   */
+  private async registerSendId(e: EngagementEvent): Promise<void> {
+    await this.put({
+      pk: org(e.orgId),
+      sk: `SENDID#${e.campaignId}`,
+      data: { orgId: e.orgId, campaignId: e.campaignId, firstSeenAt: e.at },
+    });
+  }
+
+  /**
+   * Send ids that have engagement events but NO campaign record (#293).
+   *
+   * Written by `appendEvent`'s campaign-missing branch: recurring editions that
+   * predate their record, drip sub-campaigns and re-engagement steps. Erasure
+   * needs them because events live in the CAMPAIGN partition keyed by id, and
+   * an id nothing lists is an id nothing can erase.
+   */
+  private async recordLessSendIds(orgId: string): Promise<string[]> {
+    const rows = await this.queryAll<{ campaignId: string }>({
+      TableName: this.tableName,
+      KeyConditionExpression: "pk = :pk AND begins_with(sk, :s)",
+      ExpressionAttributeValues: { ":pk": org(orgId), ":s": "SENDID#" },
+    });
+    return rows.map((r) => r.campaignId).filter(Boolean);
+  }
 
   entitlements: EntitlementStore = {
     put: (e) =>
