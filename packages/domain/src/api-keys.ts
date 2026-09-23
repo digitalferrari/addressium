@@ -250,7 +250,23 @@ export async function authenticateApiKey(
   if (found.revokedAt) throw rejected;
   if (opts?.requiredScope && !found.scopes.includes(opts.requiredScope)) throw rejected;
 
-  const used: ApiKey = { ...found, lastUsedAt: clock.now().toISOString() };
-  await stores.apiKeys.put(used);
-  return toApiKeyView(used);
+  // Stamp ONLY `lastUsedAt`, and only while the key is still unrevoked (#291).
+  //
+  // This used to `put` the whole record back, so a revoke landing between the
+  // read above and the write here was silently overwritten: `revokedAt`
+  // vanished, the console showed the key as active, and a credential the
+  // operator believed they had killed kept working. Keys are revoked BECAUSE
+  // they have leaked and are in use, so that race is likely precisely when it
+  // is most damaging.
+  //
+  // A conditional failure means the key was revoked (or deleted) mid-request,
+  // which is exactly the same answer as any other bad key — including to the
+  // caller, who must not learn which.
+  const at = clock.now().toISOString();
+  try {
+    await stores.apiKeys.touch(found.orgId, found.keyId, at);
+  } catch {
+    throw rejected;
+  }
+  return toApiKeyView({ ...found, lastUsedAt: at });
 }

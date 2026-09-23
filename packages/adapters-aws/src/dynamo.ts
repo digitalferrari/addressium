@@ -673,6 +673,33 @@ export class DynamoStores implements Stores {
    */
   apiKeys: ApiKeyStore = {
     get: (orgId, keyId) => this.get<ApiKey>(org(orgId), `APIKEY#${keyId}`),
+    /**
+     * Stamp `lastUsedAt` alone, and refuse if the key is revoked (#291).
+     *
+     * `attribute_exists(pk)` is not belt-and-braces: a nested `SET data.x` on a
+     * MISSING item fails on real DynamoDB, and this codebase has already
+     * shipped that bug once (#221). It also makes "the key was deleted" a
+     * rejection rather than a resurrection.
+     */
+    touch: async (orgId, keyId, at) => {
+      try {
+        await this.doc.send(
+          new UpdateCommand({
+            TableName: this.tableName,
+            Key: { pk: org(orgId), sk: `APIKEY#${keyId}` },
+            UpdateExpression: "SET #d.#l = :at",
+            ExpressionAttributeNames: { "#d": "data", "#l": "lastUsedAt", "#r": "revokedAt" },
+            ExpressionAttributeValues: { ":at": at },
+            ConditionExpression: "attribute_exists(pk) AND attribute_not_exists(#d.#r)",
+          }),
+        );
+      } catch (e) {
+        if ((e as Error).name === "ConditionalCheckFailedException") {
+          throw new ConcurrentModificationError("api key");
+        }
+        throw e;
+      }
+    },
     findByHash: async (keyHash) => {
       const ptr = await this.get<{ orgId: string; keyId: string }>(
         `APIKEYHASH#${keyHash}`,

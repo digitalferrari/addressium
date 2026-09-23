@@ -599,6 +599,20 @@ export interface ApiKeyStore {
   /** Resolve a key by its SHA-256 digest, across orgs. See the note above. */
   findByHash(keyHash: string): Promise<ApiKey | undefined>;
   put(k: ApiKey): Promise<void>;
+  /**
+   * Stamp `lastUsedAt` and NOTHING else, refusing if the key is revoked (#291).
+   *
+   * `authenticateApiKey` used to write the whole record back. A revoke landing
+   * between its read and that write was silently overwritten — `revokedAt`
+   * disappeared, the console showed the key as active, and a credential the
+   * operator believed they had killed kept working. Keys are revoked BECAUSE
+   * they have leaked and are in use, so the racing request is likely and the
+   * consequence is the worst case.
+   *
+   * Throws `ConcurrentModificationError` when the key is revoked or gone, which
+   * the caller turns into the same rejection as any other bad key.
+   */
+  touch(orgId: string, keyId: string, at: string): Promise<void>;
   /** Every key the org has ever been issued, revoked ones included. */
   list(orgId: string): Promise<ApiKey[]>;
   delete(orgId: string, keyId: string): Promise<void>;

@@ -187,3 +187,58 @@ test("campaigns and suppression also work with a scoped key", async () => {
   assert.equal((await ROUTES[1].call(keys.full)).statusCode, 200);
   assert.equal((await ROUTES[2].call(keys.full)).statusCode, 202);
 });
+
+/**
+ * A concurrent request must not UN-REVOKE a key (#291).
+ *
+ * `authenticateApiKey` used to write the whole record back after checking
+ * `revokedAt`, so a revoke landing between that read and that write was
+ * silently overwritten: `revokedAt` vanished, the console showed the key as
+ * active, and a credential the operator believed they had killed kept working.
+ *
+ * It matters more than a generic lost update. Keys are revoked BECAUSE they
+ * have leaked and are being used, so the racing request is likely at exactly
+ * the moment the consequence is worst.
+ *
+ * Against dynalite rather than memStores: the fix is a DynamoDB
+ * ConditionExpression on a NESTED attribute, and `attribute_exists(pk)` is what
+ * keeps that legal on a missing item (#221 shipped that bug once already). The
+ * memory store cannot prove any of that.
+ */
+test("a request landing mid-revoke cannot resurrect the key", async () => {
+  const domain = await import("@addressium/domain");
+  const clock = new domain.SystemClock();
+  const plaintext = (await domain.issueApiKey(stores, clock, {
+    orgId: ORG, keyId: "race", name: "race", scopes: ["campaigns:read"] as never,
+  }, "admin-1")).plaintext;
+
+  // Revoke from inside `findByHash` — the exact instant the window opens.
+  let armed = true;
+  const realFind = stores.apiKeys.findByHash.bind(stores.apiKeys);
+  stores.apiKeys.findByHash = async (h: string) => {
+    const row = await realFind(h);
+    if (armed) {
+      armed = false;
+      await domain.revokeApiKey(stores, clock, ORG, "race");
+    }
+    return row;
+  };
+
+  await assert.rejects(
+    () => domain.authenticateApiKey(stores, clock, plaintext, { orgId: ORG }),
+    /invalid API key/,
+    "the request must lose the race, not win it",
+  );
+  stores.apiKeys.findByHash = realFind;
+
+  const after = await stores.apiKeys.get(ORG, "race");
+  assert.ok(after?.revokedAt, "the revoke was overwritten — the key is live again");
+
+  // And it stays dead for every later request.
+  const res = await api.machineListCampaignsHandler({
+    pathParameters: { org: ORG },
+    headers: { authorization: `Bearer ${plaintext}` },
+    requestContext: { http: { method: "GET", path: "/v1" } },
+  } as never);
+  assert.equal(res.statusCode, 401);
+});

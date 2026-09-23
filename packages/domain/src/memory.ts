@@ -576,6 +576,13 @@ export class MemMergeTags implements MergeTagStore {
  * resolvable, which is the exact divergence STORE-PATTERN warns about.
  */
 export class MemApiKeys implements ApiKeyStore {
+  /** Same contract as the Dynamo store: stamp only, refuse if revoked (#291). */
+  async touch(orgId: string, keyId: string, at: string) {
+    const current = await this.get(orgId, keyId);
+    if (!current || current.revokedAt) throw new ConcurrentModificationError("api key");
+    await this.put({ ...current, lastUsedAt: at });
+  }
+
   private byId = new Map<string, ApiKey>();
   private byHash = new Map<string, ApiKey>();
   async get(orgId: string, keyId: string) {
