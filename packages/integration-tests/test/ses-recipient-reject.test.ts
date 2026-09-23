@@ -121,3 +121,24 @@ test("recipient matching is case-insensitive", async () => {
     (e: Error) => e instanceof RecipientRejectedError,
   );
 });
+
+test("an error naming BOTH the sender and the recipient aborts the slice", async () => {
+  // SES lists every failing identity in one message. An error that names the
+  // FROM address as well is an account-wide fault that merely mentions the
+  // recipient in passing — the naming check alone would have let it through and
+  // skipped every recipient, reporting a send that mailed nobody.
+  const sender = new SesEmailSender(
+    "cs-acme",
+    throwingClient(
+      "MessageRejected",
+      "Email address is not verified. The following identities failed the check in region US-EAST-1: news@acme.example, reader@example.com",
+    ),
+  );
+  await assert.rejects(
+    () => sender.send(base),
+    (e: Error) => {
+      assert.ok(!(e instanceof RecipientRejectedError), "must abort: the sender is unverified too");
+      return true;
+    },
+  );
+});

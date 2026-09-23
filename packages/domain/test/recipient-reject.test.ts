@@ -30,9 +30,11 @@ const magic: MagicLinkSigner = { mint: async () => "TOK" };
 class RejectingSender implements EmailSender {
   public readonly sent: SentMessage[] = [];
   public attempts = 0;
+  public firstAttempt: string | undefined;
   constructor(private readonly bad: Set<string>) {}
   async send(msg: SentMessage): Promise<void> {
     this.attempts++;
+    this.firstAttempt ??= msg.to;
     if (this.bad.has(msg.to)) {
       throw new RecipientRejectedError(
         msg.to,
@@ -159,3 +161,34 @@ test("scattered bad addresses do not trip the breaker", async () => {
   assert.equal(res.sent, 26);
   assert.equal(res.rejected, 4);
 });
+
+test("the breaker strands nobody: a retry re-attempts the same recipients", async () => {
+  // The breaker fires on a systemic fault, so its rejections are NOT evidence
+  // that those addresses are bad. Committing them eagerly meant each retry kept
+  // the previous run's claims and marched 10 further into the list — with SQS
+  // maxReceiveCount at 5, that permanently skipped 50 recipients for the
+  // edition, whom a redrive after fixing the fault would never mail.
+  const { stores, clock } = await seed(40);
+  const all = new Set(Array.from({ length: 40 }, (_, i) => `r${i}@x.example`));
+
+  const first = new RejectingSender(all);
+  await assert.rejects(() => sendCampaign(stores, first, magic, clock, descriptor));
+
+  const second = new RejectingSender(all);
+  await assert.rejects(() => sendCampaign(stores, second, magic, clock, descriptor));
+
+  assert.deepEqual(
+    second.sent.length === 0 && firstAttempted(second) === firstAttempted(first),
+    true,
+    "the retry must re-attempt the SAME recipients, not march past them",
+  );
+  // And it must leave no trace: a reject event here would be a false record that
+  // the address is bad, when the sender was at fault.
+  const events = await stores.events.all(ORG, "daily-1");
+  assert.equal(events.filter((e) => e.type === "reject").length, 0);
+});
+
+/** The first address a run actually attempted. */
+function firstAttempted(s: RejectingSender): string | undefined {
+  return s.firstAttempt;
+}

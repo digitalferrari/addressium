@@ -715,14 +715,43 @@ export async function sendCampaign(
   let alreadySent = 0;
   const claimedRecipients: string[] = [];
   let untokenized = 0;
-  /** Per-recipient SES rejections this slice (#293). */
+  /** Per-recipient SES rejections COMMITTED this slice (#293). */
   let rejected = 0;
   /**
-   * Consecutive rejections, reset by any success. The breaker reads this rather
-   * than the total so a list with a scattering of genuinely bad addresses keeps
-   * sending, while a systemic fault — every recipient rejected — aborts fast.
+   * The current run of consecutive rejections, not yet believed.
+   *
+   * Held back until a success proves the sender is actually working. The
+   * breaker reads its length, so a scattering of bad addresses keeps sending
+   * while a systemic fault aborts within MAX_CONSECUTIVE_REJECTS calls —
+   * leaving no claims and no events, so the retry re-attempts those recipients.
    */
-  let consecutiveRejects = 0;
+  const pendingRejects: Array<{ subscriberId: string; message: string }> = [];
+  /** Commit the buffered run: keep the claims, log, and record `reject` events. */
+  const flushRejects = async (): Promise<number> => {
+    const n = pendingRejects.length;
+    for (const r of pendingRejects) {
+      // A fixed literal: a CloudWatch metric filter matches it, because this
+      // path no longer reaches the DLQ and would otherwise be silent.
+      console.error("send: recipient rejected", {
+        orgId: input.orgId,
+        campaignId: input.campaignId,
+        subscriberId: r.subscriberId,
+        error: r.message,
+      });
+      await stores.events.append({
+        orgId: input.orgId,
+        subscriberId: r.subscriberId,
+        campaignId: input.campaignId,
+        // NOT `bounce`: no receiver refused anything, so suppressing the address
+        // would punish a subscriber for our fault (#241). The claim is KEPT —
+        // retrying this address fails identically.
+        type: "reject",
+        at: clock.now().toISOString(),
+      });
+    }
+    pendingRejects.length = 0;
+    return n;
+  };
 
   // Deliverability halt (§4.13, #165). checkDeliverability flips the campaign to
   // "halted" on a bounce/complaint breach — or, for send ids with no Campaign
@@ -810,34 +839,27 @@ export async function sendCampaign(
       // mailed, with DLQ depth as the only signal.
       if (e instanceof RecipientRejectedError) {
         const rejection: RecipientRejectedError = e;
-        // A fixed literal: a CloudWatch metric filter matches it, because this
-        // path no longer reaches the DLQ and would otherwise be silent.
-        console.error("send: recipient rejected", {
-          orgId: input.orgId,
-          campaignId: input.campaignId,
-          subscriberId: subscriber.sub,
-          error: rejection.message,
-        });
-        await stores.events.append({
-          orgId: input.orgId,
-          subscriberId: subscriber.sub,
-          campaignId: input.campaignId,
-          // NOT `bounce`: no receiver refused anything, so suppressing the
-          // address would punish a subscriber for our fault. `reject` already
-          // means exactly this (#241).
-          type: "reject",
-          at: clock.now().toISOString(),
-        });
-        rejected++;
-        // The breaker. An account-wide fault that the adapter misclassified —
-        // an unverified FROM identity raises the same MessageRejected — would
-        // otherwise write one reject per recipient and report a completed send
-        // that mailed nobody, which is worse than aborting. Consecutive, so a
-        // scattering of genuinely bad addresses never trips it.
-        if (++consecutiveRejects >= MAX_CONSECUTIVE_REJECTS) {
+        // BUFFERED, not committed. The run of consecutive rejections is only
+        // believed once a success proves the sender is working: a rejection
+        // that turns out to be part of an account-wide fault must leave NO
+        // trace, or the retry would skip those recipients forever.
+        //
+        // Committing eagerly stranded them. With the breaker at 10 and SQS
+        // maxReceiveCount at 5, each retry kept its predecessor's claims,
+        // marched 10 further into the list and tripped again — 50 recipients
+        // permanently skipped for the edition, whom a redrive after fixing the
+        // fault would never mail.
+        pendingRejects.push({ subscriberId: subscriber.sub, message: rejection.message });
+        if (pendingRejects.length >= MAX_CONSECUTIVE_REJECTS) {
+          // An account-level fault wearing a per-recipient disguise. Give every
+          // claim in the run back so the retry re-attempts these same
+          // recipients, and write nothing.
+          for (const r of pendingRejects) {
+            await stores.sendClaims.release(input.orgId, sendClaimKey(input.campaignId, r.subscriberId));
+          }
           throw new Error(
-            `send aborted: ${consecutiveRejects} consecutive recipient rejections — ` +
-              `this is an account-level fault, not ${consecutiveRejects} bad addresses ` +
+            `send aborted: ${pendingRejects.length} consecutive recipient rejections — ` +
+              `this is an account-level fault, not ${pendingRejects.length} bad addresses ` +
               `(last: ${rejection.message})`,
           );
         }
@@ -850,7 +872,9 @@ export async function sendCampaign(
       await stores.sendClaims.release(input.orgId, sendClaimKey(input.campaignId, subscriber.sub));
       throw e;
     }
-    consecutiveRejects = 0;
+    // A success proves the sender works, so the buffered run really was a set
+    // of individually-bad addresses. Commit it.
+    if (pendingRejects.length > 0) rejected += await flushRejects();
 
     const evt: EngagementEvent = {
       orgId: input.orgId,
@@ -862,6 +886,10 @@ export async function sendCampaign(
     await stores.events.append(evt);
     sent++;
   }
+
+  // A run that ended the loop without a later success: it never reached the
+  // breaker, so these are genuinely individual bad addresses at the tail.
+  if (pendingRejects.length > 0) rejected += await flushRejects();
 
   if (!halted && schedule?.kind === "one_off" && !(await isHalted())) {
     // A claim alone may belong to another worker still inside sender.send.

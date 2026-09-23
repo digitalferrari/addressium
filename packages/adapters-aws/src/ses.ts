@@ -117,7 +117,16 @@ export class SesEmailSender implements EmailSender {
       await this.sendCommand(msg, headers);
     } catch (e) {
       const err = e as { name?: string; message?: string };
-      if (err?.name === "MessageRejected" && namesRecipient(err.message, msg.to)) {
+      // Names the recipient AND NOT the sender. SES lists every failing identity
+      // in one message, so an error naming both is an account-wide fault that
+      // merely mentions the recipient in passing — treating that as
+      // per-recipient would skip every recipient and report a completed send
+      // that mailed nobody.
+      if (
+        err?.name === "MessageRejected" &&
+        namesRecipient(err.message, msg.to) &&
+        !namesRecipient(err.message, msg.from)
+      ) {
         throw new RecipientRejectedError(msg.to, err.message ?? "MessageRejected");
       }
       throw e;
