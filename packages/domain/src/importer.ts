@@ -8,6 +8,7 @@
  */
 import { randomUUID } from "node:crypto";
 import type { Subscriber, Subscription, SubscriptionStatus } from "@addressium/core";
+import { ConcurrentModificationError } from "./ports.js";
 import type { Clock, Stores } from "./ports.js";
 
 export interface ImportReport {
@@ -136,6 +137,8 @@ export async function importCsvSubscribers(
       orgId: opts.orgId,
       subscriberId: subscriber.sub,
       listId: opts.listId,
+      // Guard the read-check-write above against a concurrent unsubscribe
+      // (#293 item 4). Filled in at the write below.
       // Default to `pending`, NOT `confirmed` (#192). The API handler documents
       // this default, and silently marking an uploaded list confirmed bypasses
       // double opt-in and records no consent — a GDPR Art. 7 problem and a
@@ -143,7 +146,34 @@ export async function importCsvSubscribers(
       status: opts.status ?? "pending",
       updatedAt: now,
     };
-    await stores.subscriptions.put(subscription);
+    // The status check above is a READ, then a CHECK, then a WRITE. An
+    // unsubscribe landing between the read and the write would be overwritten
+    // with `confirmed` — the same resurrection bug the check was added to
+    // prevent, just in a narrower window. `ifRev` makes the write fail instead,
+    // and the retry re-reads and re-applies the check.
+    //
+    // `undefined` is the correct value for a brand-new row AND for one written
+    // before `rev` existed: both are expressed as attribute_not_exists.
+    let expectedRev = existingSubscription?.rev;
+    for (let attempt = 0; ; attempt++) {
+      try {
+        await stores.subscriptions.put(subscription, { ifRev: expectedRev });
+        break;
+      } catch (e) {
+        if (!(e instanceof ConcurrentModificationError) || attempt >= 2) {
+          // Failing is the SAFE direction here: the row is reported as an error
+          // rather than overwritten by a write that lost its race.
+          report.errors.push(`concurrent update for ${email}; not imported`);
+          break;
+        }
+        const now = await stores.subscriptions.get(opts.orgId, subscriber.sub, opts.listId);
+        if (now?.status === "unsubscribed") {
+          report.skipped++;
+          break;
+        }
+        expectedRev = now?.rev;
+      }
+    }
   }
   return report;
 }

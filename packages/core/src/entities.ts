@@ -425,6 +425,19 @@ export interface Subscription {
    * is a fact worth surfacing rather than papering over.
    */
   consent?: SubscriptionConsent;
+  /**
+   * Optimistic-concurrency counter, owned by the STORE (#293 item 4).
+   *
+   * A subscription's status is the one field two writers realistically race
+   * for, and the loser is the one that matters: an unsubscribe overwritten by a
+   * concurrent customer-sync or import means someone who opted out keeps
+   * receiving mail. Unsubscribes also cluster right after a send, which is
+   * exactly when other writers are busiest.
+   *
+   * Absent on records written before this existed — `ifRev: undefined` is how a
+   * caller says "this must still be one of those".
+   */
+  rev?: number;
 }
 
 export interface Segment {

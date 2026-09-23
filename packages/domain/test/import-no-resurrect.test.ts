@@ -94,3 +94,72 @@ test("re-importing a pending row still upgrades it", async () => {
 
   assert.equal((await stores.subscriptions.get(ORG, sub.sub, LIST))?.status, "confirmed");
 });
+
+/**
+ * The RACE the status check alone does not close (#293 item 4).
+ *
+ * The check is a read, then a check, then a write. An unsubscribe landing
+ * between the read and the write was still overwritten with `confirmed` — the
+ * same resurrection bug, in a narrower window. `ifRev` makes the import's write
+ * fail instead, and the retry re-reads and re-applies the check.
+ *
+ * Deterministic, not timing-based: the unsubscribe is injected from inside the
+ * store's own `get`, which is exactly the instant the window opens.
+ */
+test("an unsubscribe landing mid-import is not overwritten", async () => {
+  const { stores, clock } = await seed();
+  await importCsvSubscribers(stores, clock, { ...csv("reader@x.example"), status: "pending" } as never);
+  const sub = (await stores.subscribers.list(ORG))[0]!;
+
+  // Arm a one-shot: the next time the importer reads this subscription, slip an
+  // unsubscribe in behind it before it can write.
+  let armed = true;
+  const realGet = stores.subscriptions.get.bind(stores.subscriptions);
+  stores.subscriptions.get = async (o: string, s: string, l: string) => {
+    const row = await realGet(o, s, l);
+    if (armed && s === sub.sub) {
+      armed = false;
+      await stores.subscriptions.put({
+        orgId: ORG, subscriberId: sub.sub, listId: LIST,
+        status: "unsubscribed", updatedAt: clock.now().toISOString(),
+        ...(row?.rev !== undefined ? { rev: row.rev } : {}),
+      });
+    }
+    return row;
+  };
+
+  await importCsvSubscribers(stores, clock, { ...csv("reader@x.example"), status: "confirmed" } as never);
+
+  assert.equal(
+    (await stores.subscriptions.get(ORG, sub.sub, LIST))?.status,
+    "unsubscribed",
+    "the import overwrote an unsubscribe that landed mid-flight",
+  );
+});
+
+test("the revision counter cannot go backwards", async () => {
+  // Callers build a FRESH Subscription with no `rev`, so counting the next rev
+  // from the caller's object would reset a row at N back to 1 — and a writer
+  // still holding revision N would then match again and win a race it had
+  // already lost. The store counts from `ifRev` instead.
+  const { stores, clock } = await seed();
+  const key = { orgId: ORG, subscriberId: "s1", listId: LIST };
+  await stores.subscriptions.put({ ...key, status: "pending", updatedAt: clock.now().toISOString() });
+  for (let i = 0; i < 4; i++) {
+    const cur = await stores.subscriptions.get(ORG, "s1", LIST);
+    await stores.subscriptions.put({ ...cur!, status: "pending", updatedAt: clock.now().toISOString() });
+  }
+  const atFive = await stores.subscriptions.get(ORG, "s1", LIST);
+  assert.equal(atFive?.rev, 5);
+
+  // A fresh object — no `rev` field at all — written conditionally.
+  await stores.subscriptions.put(
+    { ...key, status: "confirmed", updatedAt: clock.now().toISOString() },
+    { ifRev: 5 },
+  );
+
+  assert.equal(
+    (await stores.subscriptions.get(ORG, "s1", LIST))?.rev, 6,
+    "the counter reset instead of advancing",
+  );
+});

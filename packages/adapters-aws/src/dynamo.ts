@@ -487,8 +487,8 @@ export class DynamoStores implements Stores {
   subscriptions: SubscriptionStore = {
     get: (orgId, sub, listId) =>
       this.get<Subscription>(`${org(orgId)}#LIST#${listId}`, `SUBSCRIPTION#${sub}`),
-    put: (s) =>
-      this.put({
+    put: async (s, opts) => {
+      const item = {
         pk: `${org(s.orgId)}#LIST#${s.listId}`,
         sk: `SUBSCRIPTION#${s.subscriberId}`,
         gsi2pk: `${org(s.orgId)}#SUB#${s.subscriberId}`,
@@ -508,8 +508,40 @@ export class DynamoStores implements Stores {
               gsi3sk: s.subscriberId,
             }
           : {}),
+        // Filled in below: the next rev depends on whether this is a
+        // conditional write, and using the caller's `s.rev` alone lets the
+        // counter go BACKWARDS (see below).
         data: s,
-      }),
+      };
+      if (opts && "ifRev" in opts) {
+        // Count from `ifRev`, NOT from `s.rev` (#293 item 4).
+        //
+        // Callers like the importer build a FRESH `Subscription` with no `rev`
+        // at all, so `(s.rev ?? 0) + 1` would store `rev: 1` on a row that was
+        // at 5 — resetting the counter. Once rev can go backwards, a writer
+        // still holding revision 5 matches again later and its stale write
+        // wins, which is precisely the race this guard exists to lose.
+        item.data = { ...s, rev: (opts.ifRev ?? s.rev ?? 0) + 1 };
+        // `ifRev: undefined` means "this must still be a record written before
+        // `rev` existed" — expressed as attribute_not_exists, not as equality
+        // against a value that is not there.
+        await this.putConditional(
+          item,
+          opts.ifRev === undefined
+            ? { ConditionExpression: "attribute_not_exists(#d.#r)" }
+            : {
+                ConditionExpression: "#d.#r = :r",
+                ExpressionAttributeValues: { ":r": opts.ifRev },
+              },
+          "subscription",
+        );
+        return;
+      }
+      // Unconditional: the store still owns the counter, so a caller cannot
+      // forge a rev to win a race it lost.
+      item.data = { ...s, rev: (s.rev ?? 0) + 1 };
+      await this.put(item);
+    },
     listConfirmed: (orgId, listId) => this.subscriptions.confirmedRange(orgId, listId),
     /**
      * A key-range query over the sparse confirmed index (#182).
@@ -965,8 +997,21 @@ export class DynamoStores implements Stores {
       if (!(err instanceof TransactionCanceledException)) throw err;
       const reasons = err.CancellationReasons ?? [];
       const eventExists = reasons[0]?.Code === "ConditionalCheckFailed";
-      // An exact redelivery: the row is already there, counters already moved.
-      if (eventExists) return;
+      if (eventExists) {
+        // An exact redelivery: the row is already there, counters already moved.
+        //
+        // But the event `Put` and the `SENDID#` registration are separate
+        // writes, so a crash between them leaves the event stored and the id
+        // unregistered — invisible to erasure. The redelivery lands here, so
+        // re-register. Cancellation reasons are per item, so `reasons[1]` still
+        // tells us whether the campaign record is missing. Registering without
+        // counting is correct: the first delivery already counted, or already
+        // decided not to.
+        if (reasons[1]?.Code === "ConditionalCheckFailed") {
+          await this.registerSendIdWithoutCounting(e);
+        }
+        return;
+      }
       const campaignMissing = reasons[1]?.Code === "ConditionalCheckFailed";
       const markerExists = unique && reasons[2]?.Code === "ConditionalCheckFailed";
       if (markerExists) {

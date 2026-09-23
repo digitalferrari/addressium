@@ -201,9 +201,9 @@ test("repeat open where BOTH the marker exists and the campaign row is absent st
   );
 });
 
-test("exact redelivery stays a silent no-op even on a record-less id", async () => {
+test("exact redelivery writes no event, but re-registers a record-less id", async () => {
   // reasons[0] = the event row already exists: counters already moved (or were
-  // already skipped) on the first delivery — nothing to do.
+  // already skipped) on the first delivery. reasons[1] = no campaign record.
   const { client, calls } = stubClient([
     { Code: "ConditionalCheckFailed" },
     { Code: "ConditionalCheckFailed" },
@@ -212,7 +212,33 @@ test("exact redelivery stays a silent no-op even on a record-less id", async () 
 
   await stores.events.append(evt("bounce"));
 
-  assert.deepEqual(calls.map((c) => c.kind), ["transact"], "no fallback write on exact redelivery");
+  // No event Put — the row is already there.
+  assert.ok(!calls.some((c) => c.kind === "put"), "an exact redelivery must not rewrite the event");
+  // But it DOES re-register the id (#293). The event Put and the SENDID#
+  // registration are separate writes, so a crash between them leaves the event
+  // stored and the id unregistered — invisible to erasure. The redelivery is
+  // the only chance to repair that, and it must not move a counter, because the
+  // first delivery already decided.
+  const marker = calls.find((c) => c.kind === "update")?.input as Record<string, unknown> | undefined;
+  assert.ok(marker, "the redelivery did not re-register the record-less id");
+  assert.ok(
+    !String(marker.UpdateExpression).includes("ADD"),
+    `a redelivery must not double-count, got ${String(marker.UpdateExpression)}`,
+  );
+});
+
+test("exact redelivery on a NORMAL campaign is a pure no-op", async () => {
+  // reasons[1] = None: the campaign record exists and its counter moved on the
+  // first delivery. Nothing to repair, so nothing must be written.
+  const { client, calls } = stubClient([
+    { Code: "ConditionalCheckFailed" },
+    { Code: "None" },
+  ]);
+  const stores = new DynamoStores("addressium", client);
+
+  await stores.events.append(evt("bounce"));
+
+  assert.deepEqual(calls.map((c) => c.kind), ["transact"], "no write on exact redelivery");
 });
 
 test("any OTHER cancellation reason still throws", async () => {

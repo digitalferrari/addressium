@@ -36,6 +36,7 @@ import {
 } from "./import-mapping.js";
 import { parseCsv } from "./importer.js";
 import { parseImportFile } from "./import-file.js";
+import { ConcurrentModificationError } from "./ports.js";
 import type { Clock, Stores } from "./ports.js";
 
 /** Compliance fields a newly created list cannot be given a sensible default for. */
@@ -397,9 +398,16 @@ async function writeSubscriptions(
     // A `decline` is still allowed through: recording another "no" against an
     // already-unsubscribed row changes nothing about their mailability and
     // keeps the consent record honest.
+    // Read-check-write, so it needs the same concurrency guard as the CSV path
+    // (#293 item 4): an unsubscribe landing between the read and the write
+    // would otherwise be overwritten.
+    let expectedRev: number | undefined;
+    let guarded = false;
     if (status !== "unsubscribed") {
       const existing = await stores.subscriptions.get(opts.orgId, subscriberId, listId);
       if (existing?.status === "unsubscribed") return;
+      expectedRev = existing?.rev;
+      guarded = true;
     }
     const subscription: Subscription = {
       orgId: opts.orgId,
@@ -417,7 +425,23 @@ async function writeSubscriptions(
         ...(opts.sourceFile ? { sourceUrl: opts.sourceFile } : {}),
       },
     };
-    await stores.subscriptions.put(subscription);
+    if (guarded) {
+      for (let attempt = 0; ; attempt++) {
+        try {
+          await stores.subscriptions.put(subscription, { ifRev: expectedRev });
+          break;
+        } catch (e) {
+          // Failing is the SAFE direction: skip the row rather than overwrite a
+          // write that beat us to it.
+          if (!(e instanceof ConcurrentModificationError) || attempt >= 2) return;
+          const now = await stores.subscriptions.get(opts.orgId, subscriberId, listId);
+          if (now?.status === "unsubscribed") return;
+          expectedRev = now?.rev;
+        }
+      }
+    } else {
+      await stores.subscriptions.put(subscription);
+    }
     // The pointer is what makes a batch reversible: `consent.importBatchId` is
     // on the subscription, but finding every subscription with a given batch id
     // means scanning the org. Written for declines too — an import that recorded

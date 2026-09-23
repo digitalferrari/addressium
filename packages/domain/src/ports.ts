@@ -263,7 +263,13 @@ export interface SubscriberStore {
 
 export interface SubscriptionStore {
   get(orgId: string, sub: string, listId: string): Promise<Subscription | undefined>;
-  put(s: Subscription): Promise<void>;
+  /**
+   * `opts.ifRev` makes the write conditional on the row still carrying that
+   * revision (#293 item 4) — pass the `rev` you read, and a concurrent write
+   * makes this throw rather than silently winning. Omit `opts` for an
+   * unconditional write, which is correct for a first insert.
+   */
+  put(s: Subscription, opts?: { ifRev?: number }): Promise<void>;
   /**
    * Every confirmed subscription on a list, ordered by subscriber id.
    *

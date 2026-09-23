@@ -205,8 +205,22 @@ export class MemSubscriptions implements SubscriptionStore {
   async get(orgId: string, sub: string, listId: string) {
     return this.map.get(subnKey(orgId, sub, listId));
   }
-  async put(s: Subscription) {
-    this.map.set(subnKey(s.orgId, s.subscriberId, s.listId), s);
+  async put(s: Subscription, opts?: { ifRev?: number }) {
+    const key = subnKey(s.orgId, s.subscriberId, s.listId);
+    if (opts && "ifRev" in opts) {
+      const current = this.map.get(key);
+      // A missing record has no rev either, so `ifRev: undefined` on a record
+      // that has since been deleted still passes — there is nothing to lose.
+      if (current?.rev !== opts.ifRev) throw new ConcurrentModificationError("subscription");
+      // Count from `ifRev`, not `s.rev`: callers build a FRESH Subscription
+      // with no rev, so counting from it would reset a row at 5 back to 1 and
+      // let a writer holding revision 5 win a race it had already lost.
+      this.map.set(key, { ...s, rev: (opts.ifRev ?? s.rev ?? 0) + 1 });
+      return;
+    }
+    // The store owns the counter, so a caller cannot forge a rev to win a race
+    // it lost (#293 item 4) — same rule as the Dynamo store.
+    this.map.set(key, { ...s, rev: (s.rev ?? 0) + 1 });
   }
   async listConfirmed(orgId: string, listId: string) {
     return (
