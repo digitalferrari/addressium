@@ -13,6 +13,7 @@ import {
   type Row,
   type RowKind,
 } from "./segment-predicate.js";
+import { SkeletonTable } from "../Skeleton.js";
 
 /** Labels for the condition kinds, in the order the picker offers them. */
 const KIND_LABELS: { kind: RowKind; label: string }[] = [
@@ -93,7 +94,7 @@ export function Segments({ org }: { org: string }) {
           ? <>This deployment also supports open-recency rules through the OpenSearch mirror.</>
           : <>The shipped v1 engine ranges over one list, so a “Subscribed to list” condition is the base of every <code>ALL</code> rule.</>}
       </p>
-      {segments.loading && <div className="card muted">Loading…</div>}
+      {segments.loading && <SkeletonTable rows={4} />}
       {segments.error && <p className="err">{segments.error}</p>}
       {segments.data && segments.data.length > 0 && (
         <div className="card">

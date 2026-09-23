@@ -8,6 +8,7 @@ import { relativeTime } from "../time.js";
 import { can, type Grant } from "../rbac.js";
 import { api, scheduleHasSent, type SendScheduleState } from "../api.js";
 import { describeSchedule } from "@addressium/domain";
+import { SkeletonTable } from "../Skeleton.js";
 
 /**
  * When a row fires: a one-off's send time, a series' cron (#248).
@@ -36,7 +37,16 @@ function scheduleWhen(r: SendScheduleState, now?: number): string {
   return "—";
 }
 
-export function Schedules({ org, grant }: { org: string; grant: Grant | null }) {
+export function Schedules({
+  org,
+  grant,
+  onViewReport,
+}: {
+  org: string;
+  grant: Grant | null;
+  /** Open a campaign report. Omitted in tests and anywhere without a view switch. */
+  onViewReport?: (campaignId: string) => void;
+}) {
   const [rows, setRows] = useState<SendScheduleState[] | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState("");
@@ -92,7 +102,7 @@ export function Schedules({ org, grant }: { org: string; grant: Grant | null }) 
         stops its next edition and can be resumed; archive puts it away for good while keeping history.
       </p>
       {error && <p className="err">{error}</p>}
-      {rows === null && !error && <div className="card muted">Loading…</div>}
+      {rows === null && !error && <SkeletonTable rows={5} />}
       {rows && rows.length === 0 && (
         <div className="card muted">No scheduled sends yet. Schedule a campaign or recurring series to see it here.</div>
       )}
@@ -109,7 +119,24 @@ export function Schedules({ org, grant }: { org: string; grant: Grant | null }) 
             <tbody>
               {rows.map((r) => (
                 <tr key={r.scheduleId}>
-                  <td className="t-strong">{r.scheduleId}</td>
+                  {/* The schedule id IS the campaign id — both scheduling paths
+                      in the API write `scheduleId: body.campaignId` — so the
+                      row can link straight to its report without another read. */}
+                  <td className="t-strong">
+                    {onViewReport ? (
+                      <button
+                        type="button"
+                        className="btn btn-ghost ghost flink"
+                        style={{ padding: 0, font: "inherit", fontWeight: "inherit" }}
+                        onClick={() => onViewReport(r.scheduleId)}
+                        title={`View the report for ${r.scheduleId}`}
+                      >
+                        {r.scheduleId}
+                      </button>
+                    ) : (
+                      r.scheduleId
+                    )}
+                  </td>
                   <td>{r.kind === "recurring" ? "series" : "one-off"}</td>
                   <td className="muted">{scheduleWhen(r)}</td>
                   <td>{badge(r.status)}</td>

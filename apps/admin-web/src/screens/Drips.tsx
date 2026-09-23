@@ -11,6 +11,7 @@ import {
   type SubscriberDetail,
   type SubscriberRow,
 } from "../api.js";
+import { SkeletonTable } from "../Skeleton.js";
 
 interface DraftStep { stepId: string; waitSeconds: string; listId: string; templateId: string; subject: string }
 
@@ -190,7 +191,7 @@ export function Drips({ org, grant }: { org: string; grant: Grant | null }) {
         Automated multi-step sends triggered on signup or manually. Drip steps render the selected
         template; use raw_html templates (server-side MJML compile isn't available).
       </p>
-      {sequences.loading && <div className="card muted">Loading…</div>}
+      {sequences.loading && <SkeletonTable rows={4} />}
       {sequences.error && <p className="err">{sequences.error}</p>}
       {sequences.data && sequences.data.length > 0 && (
         <div className="card">

@@ -28,6 +28,7 @@ import { useState } from "react";
 import { useAsync } from "../useAsync.js";
 import { absoluteApiUrl, api } from "../api.js";
 import { adminPoolConfig } from "../auth.js";
+import { SkeletonCard } from "../Skeleton.js";
 
 /**
  * Middle-truncate for display, keeping both ends.
@@ -203,7 +204,7 @@ export function Identity({ org }: { org: string }) {
         signing-key rotation; pool, domain and issuer configuration remain fixed.
       </p>
 
-      {loading && <div className="card muted">Loading…</div>}
+      {loading && <SkeletonCard lines={3} />}
       {error && <p className="err">{error}</p>}
 
       {!loading && !error && (

@@ -12,6 +12,7 @@
 import { useState } from "react";
 import { useAsync } from "../useAsync.js";
 import { api, type MergeTagEntry, type MergeTagScope, type MergeTagSource } from "../api.js";
+import { SkeletonTable } from "../Skeleton.js";
 
 const SOURCES: { value: MergeTagSource; label: string }[] = [
   { value: "profile", label: "Profile attribute" },
@@ -135,7 +136,7 @@ export function MergeTags({ org }: { org: string }) {
         </span>
       </div>
 
-      {loading && <div className="card muted">Loading…</div>}
+      {loading && <SkeletonTable rows={4} />}
       {error && <p className="err">{error}</p>}
 
       {rows.length > 0 && (

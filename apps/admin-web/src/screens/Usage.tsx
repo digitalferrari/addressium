@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import { useAsync } from "../useAsync.js";
 import { Kpi } from "../Kpi.js";
 import { api, type UsageRecord } from "../api.js";
+import { SkeletonCard } from "../Skeleton.js";
 
 const usd = (n: number) => `$${n.toFixed(2)}`;
 const gb = (bytes: number) => `${(bytes / 1_073_741_824).toFixed(2)} GB`;
@@ -16,7 +17,7 @@ export function Usage({ org }: { org: string }) {
   return (
     <div>
       <h1 className="h1">Usage &amp; cost · {org || "—"}</h1>
-      {loading && <div className="card muted">Loading…</div>}
+      {loading && <SkeletonCard lines={3} />}
       {error && <p className="err">{error}</p>}
       {!loading && !error && rows.length === 0 && (
         <div className="card muted">No usage recorded yet. Metering populates once the scheduled job has run for a period.</div>

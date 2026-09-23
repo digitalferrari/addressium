@@ -1,6 +1,7 @@
 import { useAsync } from "../useAsync.js";
 import { api } from "../api.js";
 import { SendingIdentity } from "./SendingIdentity.js";
+import { SkeletonCard } from "../Skeleton.js";
 
 /**
  * The checklist below is computed purely from data we own (`computeSetupState`),
@@ -17,7 +18,7 @@ export function Setup({ org }: { org: string }) {
   return (
     <div>
       <h1 className="h1">Setup · {org || "—"}</h1>
-      {loading && <div className="card muted">Loading…</div>}
+      {loading && <SkeletonCard lines={4} />}
       {error && <p className="err">{error}</p>}
       {data && (
         <>

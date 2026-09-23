@@ -152,6 +152,14 @@ function Console() {
 
   const [org, setOrg] = useState(orgs[0] ?? "");
   const [view, setView] = useState<View>("dashboard");
+  // Set when a link elsewhere (a Schedules row) opens a specific report, and
+  // cleared as soon as the view moves off "report" — otherwise reaching the
+  // report later from the nav would silently reload whichever campaign was
+  // linked to last, instead of the empty picker that entry point implies.
+  const [reportCampaign, setReportCampaign] = useState<string | undefined>(undefined);
+  useEffect(() => {
+    if (view !== "report" && reportCampaign !== undefined) setReportCampaign(undefined);
+  }, [view, reportCampaign]);
   const [orgEnv, setOrgEnv] = useState<"prod" | "dev" | null>(null);
   // Name and sending domain for the sidebar identity block and the breadcrumb
   // (#260). Cleared alongside `orgEnv` on every switch so the shell never shows
@@ -207,9 +215,15 @@ function Console() {
         {view === "mergetags" && <MergeTags org={org} />}
         {view === "compose" && <Compose org={org} onScheduled={() => setView("schedules")} />}
         {view === "campaigns" && <Campaigns org={org} grant={grant} onCompose={() => setView("compose")} />}
-        {view === "report" && <Report org={org} grant={grant} />}
+        {view === "report" && <Report org={org} grant={grant} initialCampaign={reportCampaign} />}
         {view === "analytics" && <Analytics org={org} grant={grant} />}
-        {view === "schedules" && <Schedules org={org} grant={grant} />}
+        {view === "schedules" && (
+          <Schedules
+            org={org}
+            grant={grant}
+            onViewReport={(campaignId) => { setReportCampaign(campaignId); setView("report"); }}
+          />
+        )}
         {view === "usage" && <Usage org={org} />}
         {view === "costs" && <CostEstimator />}
         {view === "subscribers" && <Subscribers org={org} grant={grant} />}

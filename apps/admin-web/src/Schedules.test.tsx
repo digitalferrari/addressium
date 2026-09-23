@@ -203,3 +203,52 @@ test("a malformed send time degrades to a dash, not 'Invalid Date'", async () =>
   expect(await screen.findByText("—")).toBeInTheDocument();
   expect(screen.queryByText(/Invalid Date/)).not.toBeInTheDocument();
 });
+
+/**
+ * The schedule name links to that campaign's report.
+ *
+ * `scheduleId` IS the `campaignId` — both scheduling paths in the API write
+ * `scheduleId: body.campaignId` — so the row can address the report directly.
+ * If those ever diverge, this link silently opens the wrong report, which is
+ * why the identity is asserted here rather than assumed.
+ */
+test("clicking a schedule name opens that campaign's report", async () => {
+  const onViewReport = vi.fn();
+  vi.spyOn(api, "schedules").mockResolvedValue([ONE_OFF, SERIES] as never);
+  render(<Schedules org="acme" grant={ADMIN} onViewReport={onViewReport} />);
+
+  const link = await screen.findByRole("button", { name: ONE_OFF.scheduleId });
+  link.click();
+
+  expect(onViewReport).toHaveBeenCalledWith(ONE_OFF.scheduleId);
+});
+
+test("a series links to its report too", async () => {
+  const onViewReport = vi.fn();
+  vi.spyOn(api, "schedules").mockResolvedValue([ONE_OFF, SERIES] as never);
+  render(<Schedules org="acme" grant={ADMIN} onViewReport={onViewReport} />);
+
+  (await screen.findByRole("button", { name: SERIES.scheduleId })).click();
+  expect(onViewReport).toHaveBeenCalledWith(SERIES.scheduleId);
+});
+
+test("without a handler the name stays plain text, not a dead button", async () => {
+  // Schedules is rendered without `onViewReport` in tests and anywhere with no
+  // view switch; a button that does nothing is worse than no button.
+  vi.spyOn(api, "schedules").mockResolvedValue([ONE_OFF] as never);
+  render(<Schedules org="acme" grant={ADMIN} />);
+
+  expect(await screen.findByText(ONE_OFF.scheduleId)).toBeTruthy();
+  expect(screen.queryByRole("button", { name: ONE_OFF.scheduleId })).toBeNull();
+});
+
+test("the link is offered to a read-only role as well", async () => {
+  // Viewing a report is `reports:view`, not `campaigns:schedule`. The lifecycle
+  // buttons collapse to "read-only" for an analyst; the report link must not.
+  const onViewReport = vi.fn();
+  vi.spyOn(api, "schedules").mockResolvedValue([ONE_OFF] as never);
+  render(<Schedules org="acme" grant={{ role: "analyst", orgs: ["acme"] }} onViewReport={onViewReport} />);
+
+  (await screen.findByRole("button", { name: ONE_OFF.scheduleId })).click();
+  expect(onViewReport).toHaveBeenCalledWith(ONE_OFF.scheduleId);
+});

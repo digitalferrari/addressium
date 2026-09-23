@@ -9,7 +9,7 @@ import { useEffect, useState } from "react";
 import { useAsync } from "../useAsync.js";
 import { can, type Grant } from "../rbac.js";
 import { api, type SubscriberDetail, type SubscriberTimeline, type SuppressionCheckResult, type SuppressionImportReport } from "../api.js";
-import { SkeletonTable } from "../Skeleton.js";
+import { SkeletonCard, SkeletonTable } from "../Skeleton.js";
 
 export function Subscribers({ org, grant }: { org: string; grant: Grant | null }) {
   const [q, setQ] = useState("");
@@ -316,7 +316,7 @@ function SubscriberPanel({ org, sub, onChanged }: { org: string; sub: string; on
   };
 
   if (!detail) {
-    return <div className="card muted">{msg ? <span className="err">{msg}</span> : "Loading subscriber…"}</div>;
+    return msg ? <div className="card muted"><span className="err">{msg}</span></div> : <SkeletonCard lines={4} label="Loading subscriber…" />;
   }
 
   return (

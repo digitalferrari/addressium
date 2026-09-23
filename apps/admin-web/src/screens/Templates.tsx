@@ -3,6 +3,7 @@ import { useAsync } from "../useAsync.js";
 import { isValidId } from "../ids.js";
 import { VisualEditor } from "../VisualEditor.js";
 import { api, type Template, type TemplateMode } from "../api.js";
+import { SkeletonTable } from "../Skeleton.js";
 
 export function Templates({ org }: { org: string }) {
   const { data, error, loading } = useAsync(() => api.templates(org), [org]);
@@ -61,7 +62,7 @@ export function Templates({ org }: { org: string }) {
         Compose loads a copy of a saved template. Saving changes here does not update a body
         already loaded in Compose or any scheduled campaign, including recurring sends.
       </p>
-      {(loading || list.loading) && <div className="card muted">Loading…</div>}
+      {(loading || list.loading) && <SkeletonTable rows={4} />}
       {(error || list.error) && <p className="err">{error || list.error}</p>}
       {rows.length > 0 && (
         <div className="card">

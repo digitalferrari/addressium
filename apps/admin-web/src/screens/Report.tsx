@@ -1,26 +1,46 @@
 /**
  * Campaign click-map report (#32). Exported for `Report.test.tsx` (#253).
  */
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useAsync } from "../useAsync.js";
 import { Kpi } from "../Kpi.js";
 import { can, type Grant } from "../rbac.js";
 import { api, type CampaignReport } from "../api.js";
 
-export function Report({ org, grant }: { org: string; grant: Grant | null }) {
+export function Report({
+  org,
+  grant,
+  initialCampaign,
+}: {
+  org: string;
+  grant: Grant | null;
+  /** Preselected when arriving from a link elsewhere (e.g. a Schedules row). */
+  initialCampaign?: string;
+}) {
   const campaigns = useAsync(() => api.campaigns(org), [org]);
-  const [campaign, setCampaign] = useState("");
+  const [campaign, setCampaign] = useState(initialCampaign ?? "");
   const [report, setReport] = useState<CampaignReport | null>(null);
   const [err, setErr] = useState("");
 
-  const load = async () => {
+  const load = async (id: string = campaign) => {
     setErr(""); setReport(null);
     try {
-      setReport(await api.report(org, campaign));
+      setReport(await api.report(org, id));
     } catch (e) {
       setErr(String(e));
     }
   };
+
+  // Arriving from a link means the operator already chose a campaign; making
+  // them press Load again would be asking the same question twice. Keyed on the
+  // id so navigating from one row to another re-reads rather than showing the
+  // previous campaign's report under the new name.
+  useEffect(() => {
+    if (!initialCampaign) return;
+    setCampaign(initialCampaign);
+    void load(initialCampaign);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialCampaign, org]);
 
   const maxClicks = report ? Math.max(1, ...report.clickMap.rows.map((r) => r.clicks)) : 1;
   return (
