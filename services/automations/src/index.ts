@@ -19,6 +19,8 @@ import {
   evaluateDripStep,
   nextStepIndex,
   planLaunchDescriptor,
+  templateIsEmpty,
+  type FreshContent,
   runReengagementSweep,
   recordSeriesEdition,
   scheduleActive,
@@ -168,7 +170,51 @@ export async function handler(input: RecurringLaunchPayload | SendDescriptor) {
   if (payload.feed && (!items || items.length === 0)) {
     return { ok: true, skipped: "empty-feed", campaignId: payload.descriptor.campaignId };
   }
-  const descriptor = planLaunchDescriptor(payload, items);
+  // Read the CURRENT content, keyed on the series stem rather than the edition
+  // id (#303). Until this, subject and template were whatever the scheduler
+  // payload froze when the schedule was created, so editing either changed
+  // nothing until the schedule was deleted and re-made — and
+  // `CampaignSeries.templateId`, whose own comment says editions reuse it, was
+  // never read on this path at all.
+  //
+  // One GetItem per firing, on a handler that already reads DynamoDB for the
+  // lifecycle gate above, so this is an addition to an existing read rather
+  // than a new dependency. A missing body falls through to the frozen payload,
+  // which is byte-for-byte the old behaviour — that is what makes this safe for
+  // schedules created before the body was stored.
+  let fresh: FreshContent | undefined;
+  try {
+    const body = await stores().campaignBodies.get(
+      payload.descriptor.orgId,
+      payload.descriptor.campaignId,
+    );
+    if (body) {
+      // An empty template is NOT a reason to fall back. A blank email to the
+      // whole list is unrecoverable and the edition id is claimed on send, so
+      // it could never be corrected and re-sent — the same reasoning as the
+      // empty-feed refusal above (#174). Fail the firing instead.
+      if (templateIsEmpty(body.template)) {
+        throw new Error(
+          `refusing to send empty stored body for ${payload.descriptor.campaignId}`,
+        );
+      }
+      fresh = {
+        subject: body.subject,
+        ...(body.previewText ? { previewText: body.previewText } : {}),
+        template: body.template,
+      };
+    }
+  } catch (e) {
+    // A refusal above must propagate; a store read that failed for any other
+    // reason should not take down a send that the frozen payload can still
+    // serve correctly.
+    if (e instanceof Error && e.message.startsWith("refusing to send empty stored body")) throw e;
+    console.warn("launch: could not read stored body, using the scheduled snapshot", {
+      campaignId: payload.descriptor.campaignId,
+      error: e instanceof Error ? e.message : String(e),
+    });
+  }
+  const descriptor = planLaunchDescriptor(payload, items, fresh);
   await recordSeriesEdition(stores(), {
     orgId: descriptor.orgId,
     seriesId: payload.descriptor.seriesId ?? payload.descriptor.campaignId,

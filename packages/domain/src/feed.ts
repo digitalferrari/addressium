@@ -273,10 +273,35 @@ export interface RecurringLaunchPayload {
  * no feed, the base descriptor is reused with a fresh, editionKey-stamped id so
  * each firing is a distinct, idempotent send.
  */
+/**
+ * The current content of a series, read at firing time (#303).
+ *
+ * The scheduler payload froze subject and template when the schedule was
+ * created, so editing either changed nothing until the schedule was deleted and
+ * re-made. This is what the launch handler reads instead — the same structured
+ * body the schedule route stored (#298) — so an edit lands on the next firing.
+ */
+export interface FreshContent {
+  subject?: string;
+  previewText?: string;
+  template?: EmailTemplate;
+}
+
 export function planLaunchDescriptor(
   payload: RecurringLaunchPayload,
   items?: FeedItem[],
+  fresh?: FreshContent,
 ): SendDescriptor {
+  // Current content wins over the frozen payload, field by field. Absent
+  // entirely (a schedule made before #298, or one whose body was removed) it
+  // falls through to the snapshot, so legacy schedules behave exactly as they
+  // did — which is what makes this safe to ship before every schedule has one.
+  const base: SendDescriptor = {
+    ...payload.descriptor,
+    ...(fresh?.subject ? { subject: fresh.subject } : {}),
+    ...(fresh?.previewText ? { previewText: fresh.previewText } : {}),
+    ...(fresh?.template ? { template: fresh.template } : {}),
+  };
   if (payload.feed && items) {
     const edition = buildEdition(items, {
       baseCampaignId: payload.descriptor.campaignId,
@@ -284,15 +309,18 @@ export function planLaunchDescriptor(
       fieldMap: payload.feed.fieldMap,
     });
     return {
-      ...payload.descriptor,
+      ...base,
       campaignId: edition.editionId,
+      // The feed still names the edition: a daily newsletter's subject is its
+      // lead story, not a fixed line the operator set months ago. An operator
+      // who wants a fixed subject is asking for a different feature.
       subject: edition.subject,
       template: edition.template,
       campaignAttributes: mapFeedItem(items[0] ?? {}, payload.feed.fieldMap ?? {}),
     };
   }
   return {
-    ...payload.descriptor,
+    ...base,
     campaignId: `${payload.descriptor.campaignId}-${payload.editionKey}`,
   };
 }
