@@ -43,7 +43,15 @@ function template(
     // Template assertions inspect CloudFormation resources, never staged
     // Lambda assets. Disabling staging keeps this suite independent of Docker
     // and avoids hashing/copying every handler directory during construction.
-    context: { "aws:cdk:bundling-stacks": [], "aws:cdk:disable-asset-staging": true, ...context },
+    context: {
+      "aws:cdk:bundling-stacks": [],
+      "aws:cdk:disable-asset-staging": true,
+      // Required by the stack, so every template assertion needs it. A per-test
+      // `context` argument still overrides it — the rate-derivation tests below
+      // pass their own.
+      sesMaxSendRate: "14",
+      ...context,
+    },
   });
   const stack = new ControlPlaneStack(app, "test-stack", {
     stage: "dev",
@@ -863,7 +871,13 @@ test("a prod stack refuses cdk destroy; a dev stack does not (#190)", () => {
   // tears down the API, the queues and the schedules — an outage, and not
   // something anyone should reach by running the wrong command in the wrong
   // terminal.
-  const app = new App({ context: { "aws:cdk:bundling-stacks": [], "aws:cdk:disable-asset-staging": true } });
+  const app = new App({
+    context: {
+      "aws:cdk:bundling-stacks": [],
+      "aws:cdk:disable-asset-staging": true,
+      sesMaxSendRate: "14",
+    },
+  });
   const base = {
     adminEmails: ["ops@example.com"],
     adminHostedUiDomainPrefix: "addressium-admin",
@@ -1772,4 +1786,105 @@ test("the async import job reads S3 itself, with time to finish (#242)", () => {
     bucketProps.CorsConfiguration?.CorsRules?.some((r) => r.AllowedMethods?.includes("PUT")),
     "the browser cannot upload to the presigned import URL",
   );
+});
+
+/**
+ * Send-rate configuration (#317).
+ *
+ * The bug this replaces: `sesMaxSendRate` defaulted to 14 — a fresh production
+ * account's rate — so a stack on an account allowing 210/s throttled itself to
+ * a fifteenth of capacity, silently. A 20,000-recipient publication took 24
+ * minutes instead of 95 seconds and overran the sender's timeout, delivering
+ * ~21% of each slice before dead-lettering the rest.
+ *
+ * Rate, chunk size and timeout used to be three independent knobs that only
+ * agreed by coincidence. These pin the two properties that keep them agreeing:
+ * the value is required, and the chunk is DERIVED from the other two.
+ */
+test("a missing sesMaxSendRate fails the synth rather than defaulting", () => {
+  // The whole point: no default. A wrong-but-plausible one hid for as long as
+  // nobody measured.
+  assert.throws(
+    () => template({}, { sesMaxSendRate: undefined }),
+    /sesMaxSendRate is required/,
+    "must refuse to synth, naming the command that reveals the real number",
+  );
+});
+
+test("a non-numeric or non-positive sesMaxSendRate is rejected", () => {
+  for (const bad of ["nonsense", "0", "-5"]) {
+    assert.throws(
+      () => template({}, { sesMaxSendRate: bad }),
+      /sesMaxSendRate must be a positive number|sesMaxSendRate is required/,
+      `${bad} must not synth`,
+    );
+  }
+});
+
+test("the sender sends BELOW the configured quota, never at it", () => {
+  // Concurrency is not rate, per-call latency drifts, and SES DROPS over-rate
+  // mail rather than queueing it. Pinning to the quota means jitter loses mail.
+  const senders = template({}, { sesMaxSendRate: "210" }).findResources(
+    "AWS::Lambda::Function",
+    { Properties: { Environment: { Variables: { SES_MAX_SEND_RATE: Match.anyValue() } } } },
+  );
+  const rates = Object.values(senders).map(
+    (r) => Number((r.Properties as any).Environment.Variables.SES_MAX_SEND_RATE),
+  );
+  assert.ok(rates.length > 0, "something must carry the rate");
+  for (const rate of rates) {
+    assert.ok(rate < 210, `effective rate ${rate} must be under the 210 quota`);
+    assert.ok(rate >= 210 * 0.7, `effective rate ${rate} must not be needlessly slow`);
+  }
+});
+
+test("a send slice is sized to finish inside the sender's timeout", () => {
+  // The invariant that makes the original bug unreachable: whatever the quota,
+  // chunk / per-invocation-rate must fit the timeout with room to spare.
+  for (const quota of ["1", "14", "210", "1000"]) {
+    const t = template({}, { sesMaxSendRate: quota });
+    const fns = t.findResources("AWS::Lambda::Function", {
+      Properties: { Environment: { Variables: { SEND_CHUNK_SIZE: Match.anyValue() } } },
+    });
+    const [sender] = Object.values(fns);
+    assert.ok(sender, `quota ${quota}: a sender must carry SEND_CHUNK_SIZE`);
+    const vars = (sender.Properties as any).Environment.Variables;
+    const timeout = Number((sender.Properties as any).Timeout);
+    const perInvocation = Number(vars.SES_MAX_SEND_RATE) / Number(vars.SENDER_MAX_CONCURRENCY);
+    const secondsOfWork = Number(vars.SEND_CHUNK_SIZE) / perInvocation;
+    assert.ok(
+      secondsOfWork <= timeout,
+      `quota ${quota}: a slice needs ${secondsOfWork.toFixed(0)}s but the function dies at ${timeout}s`,
+    );
+  }
+});
+
+test("the send queue stays invisible longer than the sender runs", () => {
+  // A visibility timeout below the function timeout redelivers a slice that is
+  // still being worked, so two invocations race over the same recipients.
+  const t = template({}, { sesMaxSendRate: "210" });
+  const fns = t.findResources("AWS::Lambda::Function", {
+    Properties: { Environment: { Variables: { SEND_CHUNK_SIZE: Match.anyValue() } } },
+  });
+  const senderTimeout = Number((Object.values(fns)[0]!.Properties as any).Timeout);
+  const queues = t.findResources("AWS::SQS::Queue");
+  const visibilities = Object.values(queues)
+    .map((q) => Number((q.Properties as any).VisibilityTimeout))
+    .filter((v) => Number.isFinite(v));
+  assert.ok(
+    visibilities.some((v) => v > senderTimeout),
+    `no queue outlives the ${senderTimeout}s sender`,
+  );
+});
+
+test("one slice per sender invocation", () => {
+  // The handler loops records serially, so a batch put N slices behind one
+  // timeout and the slowest took the rest down with it.
+  const mappings = template({}, { sesMaxSendRate: "210" }).findResources(
+    "AWS::Lambda::EventSourceMapping",
+    { Properties: { ScalingConfig: Match.anyValue() } },
+  );
+  const [sender] = Object.values(mappings);
+  assert.ok(sender, "the sender mapping must cap its concurrency");
+  assert.equal((sender.Properties as any).BatchSize, 1);
 });

@@ -479,7 +479,12 @@ export class ControlPlaneStack extends Stack {
       ...queueEncryption,
     });
     const sendQueue = new Queue(this, "SendQueue", {
-      visibilityTimeout: Duration.minutes(5),
+      // Must exceed the sender's own timeout, or SQS redelivers a slice that is
+      // still being worked and two invocations race on the same recipients.
+      // The per-recipient claims make that safe rather than duplicating, but it
+      // wastes the whole window. Sender timeout is 5 minutes (see SENDER_TIMEOUT)
+      // plus headroom for the SDK's own retries on the last call.
+      visibilityTimeout: Duration.minutes(6),
       deadLetterQueue: { queue: sendDlq, maxReceiveCount: 5 },
       ...queueEncryption,
     });
@@ -745,7 +750,16 @@ export class ControlPlaneStack extends Stack {
     // ---- handler functions ----
     const baseEnv = { TABLE_NAME: table.tableName };
     let versionMarker: CustomResource | undefined;
-    const fn = (id: string, entry: string, handler: string, extraEnv: Record<string, string> = {}) => {
+    const fn = (
+      id: string,
+      entry: string,
+      handler: string,
+      extraEnv: Record<string, string> = {},
+      // Per-function override. Only the sender needs one: everything else is a
+      // request/response handler that has no business running for minutes, and
+      // 30s is the right ceiling for those.
+      opts: { timeout?: Duration } = {},
+    ) => {
       const result = new NodejsFunction(this, id, {
         entry,
         handler,
@@ -760,7 +774,7 @@ export class ControlPlaneStack extends Stack {
         // which silently changes what you deployed between two runs of the same
         // commit.
         runtime: Runtime.NODEJS_22_X,
-        timeout: Duration.seconds(30),
+        timeout: opts.timeout ?? Duration.seconds(30),
         environment: { ...baseEnv, ...extraEnv },
         bundling: {
           format: "esm" as never,
@@ -882,16 +896,54 @@ export class ControlPlaneStack extends Stack {
       (this.node.tryGetContext("senderMaxConcurrency") as string | undefined) ?? 5,
     );
     /**
-     * The account's SES send rate (messages/second). Set it to YOUR quota — the
-     * default is the 14/s a fresh production account gets, which is wrong for
-     * anyone who has requested an increase, in the safe direction.
+     * The account's SES send rate (messages/second), from the operator.
+     *
+     * There is deliberately NO DEFAULT. The old default of 14 — a fresh
+     * production account's rate — looked configured, deployed clean, and
+     * silently throttled an account allowing 210/s to a fifteenth of its
+     * capacity. A 20,000-recipient publication took 24 minutes instead of 95
+     * seconds and blew the sender's Lambda timeout. A wrong-but-plausible
+     * default is worse than none: this one hid for as long as nobody measured.
+     *
+     * Read yours with:
+     *   aws sesv2 get-account --query 'SendQuota.MaxSendRate'
+     *
+     * This is THIS STACK'S SHARE of the quota, not necessarily the account
+     * maximum — the quota is per account per region, so several stacks (or a
+     * legacy sender still running alongside) must divide it between them.
      *
      * Everything that sends divides this down rather than each taking it whole,
      * so the aggregate stays inside the quota (#176).
      */
-    const SES_MAX_SEND_RATE = String(
-      (this.node.tryGetContext("sesMaxSendRate") as string | undefined) ?? 14,
-    );
+    const sesRateContext = this.node.tryGetContext("sesMaxSendRate") as string | undefined;
+    if (sesRateContext === undefined || String(sesRateContext).trim() === "") {
+      throw new Error(
+        "sesMaxSendRate is required. Set it in infra/cdk/addressium.config.json to this stack's " +
+          "share of the account SES rate. Read the account quota with: " +
+          "aws sesv2 get-account --query 'SendQuota.MaxSendRate'",
+      );
+    }
+    const sesQuotaRate = Number(sesRateContext);
+    if (!Number.isFinite(sesQuotaRate) || sesQuotaRate <= 0) {
+      throw new Error(`sesMaxSendRate must be a positive number, got ${JSON.stringify(sesRateContext)}`);
+    }
+    /**
+     * Send BELOW the quota, never at it.
+     *
+     * Concurrency is not rate: actual throughput is roughly
+     * `concurrency / per-call SES latency`, and that latency drifts with
+     * payload size, region load and TLS handshakes. Pinned to exactly the
+     * quota, ordinary jitter crosses the line — and SES DROPS over-rate mail
+     * rather than queueing it ("Amazon SES drops the message and doesn't
+     * attempt to redeliver it"). The sender's claim-release-rethrow recovers
+     * those recipients, but a retry storm inside a send window is worth
+     * avoiding by construction rather than by recovery.
+     *
+     * Not configurable: an operator who wants to send slower sets a lower
+     * `sesMaxSendRate`, which is the same lever with an honest name.
+     */
+    const SES_RATE_HEADROOM = 0.85;
+    const SES_MAX_SEND_RATE = String(Math.max(1, Math.floor(sesQuotaRate * SES_RATE_HEADROOM)));
 
     /**
      * Guaranteed capacity for the routes that must answer during a big send
@@ -1057,7 +1109,34 @@ export class ControlPlaneStack extends Stack {
     // The sender re-enqueues fan-out slices onto the same queue, so it needs the
     // queue URL (services/sender reads SEND_QUEUE_URL at module scope and calls
     // it on the first, unsliced message of every campaign) and send permission.
-    const senderFn = fn("SenderFn", svc("services/sender/src/index.ts"), "handler", {
+    /**
+     * How long one sender invocation may run, and how many recipients a slice
+     * may therefore hold.
+     *
+     * These two and SES_MAX_SEND_RATE are ONE calculation, not three knobs.
+     * They used to be independent — a 30s timeout, a hardcoded 2000-recipient
+     * chunk, and a rate that defaulted to 14 — and they silently disagreed: a
+     * slice needed 714 seconds of work and got 30, so ~21% of each slice was
+     * delivered and the rest dead-lettered. Deriving the chunk from the other
+     * two makes that disagreement impossible to reintroduce by editing one
+     * value.
+     *
+     * The 0.8 leaves room for the per-recipient work that is not sending —
+     * merge resolution, token minting, rendering, the claim write — plus the
+     * cold start. A slice that finishes early costs nothing; one that does not
+     * finish costs a redelivery and five minutes of visibility timeout.
+     */
+    const SENDER_TIMEOUT = Duration.minutes(5);
+    const perInvocationRate = Number(SES_MAX_SEND_RATE) / SENDER_MAX_CONCURRENCY;
+    const SEND_CHUNK_SIZE = String(
+      Math.max(1, Math.floor(perInvocationRate * SENDER_TIMEOUT.toSeconds() * 0.8)),
+    );
+
+    const senderFn = fn(
+      "SenderFn",
+      svc("services/sender/src/index.ts"),
+      "handler",
+      {
       SEND_QUEUE_URL: sendQueue.queueUrl,
       // How many senders may run at once. The sender divides the account SES
       // rate by this to get its own per-invocation budget, so the AGGREGATE
@@ -1070,7 +1149,11 @@ export class ControlPlaneStack extends Stack {
       // confirm secret (#178). Without them it degrades to a mailto header.
       UNSUBSCRIBE_URL_BASE: Lazy.string({ produce: () => `${api.apiEndpoint}/unsubscribe` }),
       CONFIRM_SECRET_ARN: confirmSecret.secretArn,
-    });
+      // Derived above from rate x timeout, never set by hand.
+      SEND_CHUNK_SIZE,
+      },
+      { timeout: SENDER_TIMEOUT },
+    );
     // Per-org signing keys are created by provisioning at runtime, so we can't
     // enumerate their ARNs here; scope by an addressium key-tag condition + SES.
     senderFn.addToRolePolicy(
@@ -2032,7 +2115,11 @@ export class ControlPlaneStack extends Stack {
     // to it as env rather than living in two places that can drift.
     senderFn.addEventSource(
       new SqsEventSource(sendQueue, {
-        batchSize: 10,
+        // ONE slice per invocation. The handler loops records serially, so a
+        // batch of ten put ten slices behind one timeout — the slowest took the
+        // other nine down with it and all ten redelivered. A slice is already
+        // the unit of parallelism; batching them here only removes it.
+        batchSize: 1,
         reportBatchItemFailures: true,
         maxConcurrency: SENDER_MAX_CONCURRENCY,
       }),

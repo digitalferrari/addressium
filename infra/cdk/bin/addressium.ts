@@ -52,6 +52,15 @@ interface BootstrapConfig {
   adminFromEmail?: string;
   /** A REGIONAL WebACL you own, associated with the API stage (#225). */
   apiWebAclArn?: string;
+  /**
+   * This stack's share of the account SES send rate, messages/second.
+   * REQUIRED — there is deliberately no default; see the stack for why.
+   * Read the account quota with:
+   *   aws sesv2 get-account --query 'SendQuota.MaxSendRate'
+   */
+  sesMaxSendRate?: number;
+  /** Concurrent sender invocations. Optional; defaults to 5 in the stack. */
+  senderMaxConcurrency?: number;
   /** A CLOUDFRONT-scope WebACL (us-east-1) for both SPA distributions. */
   cloudfrontWebAclArn?: string;
 }
@@ -106,6 +115,8 @@ function loadConfig(): BootstrapConfig {
     opsAlertEmail: cfg.opsAlertEmail,
     adminFromEmail: cfg.adminFromEmail,
     apiWebAclArn: cfg.apiWebAclArn,
+    sesMaxSendRate: cfg.sesMaxSendRate,
+    senderMaxConcurrency: cfg.senderMaxConcurrency,
     cloudfrontWebAclArn: cfg.cloudfrontWebAclArn,
   };
 }
@@ -130,6 +141,17 @@ const config = loadConfig();
 const app = new App({
   context: {
     [PERMISSIONS_BOUNDARY_CONTEXT_KEY]: { name: `addressium-${config.stage}-boundary` },
+    // Send-rate settings reach the stack as CONTEXT, not props, because that is
+    // what `-c sesMaxSendRate=...` on the command line sets — so an operator can
+    // override the file for one deploy without editing it. Undefined here leaves
+    // the key absent, and the stack throws with the command that reveals the real
+    // number rather than deploying a silently throttled sender.
+    ...(config.sesMaxSendRate !== undefined
+      ? { sesMaxSendRate: String(config.sesMaxSendRate) }
+      : {}),
+    ...(config.senderMaxConcurrency !== undefined
+      ? { senderMaxConcurrency: String(config.senderMaxConcurrency) }
+      : {}),
   },
 });
 
