@@ -259,6 +259,21 @@ export function buildEdition(
   };
 }
 
+/**
+ * Split a feed url that may name several sources (#309).
+ *
+ * A publication draws its main section from more than one feed — news, sport,
+ * obituaries — and wants them in a single story sequence, so the stored url is
+ * a comma-separated list. Order is the publisher's editorial decision and is
+ * preserved: the first source's lead item names the edition.
+ */
+export function splitFeedUrls(url: string): string[] {
+  return url
+    .split(",")
+    .map((u) => u.trim())
+    .filter((u) => u.length > 0);
+}
+
 /** What EventBridge Scheduler delivers to the automations launch handler. */
 export interface RecurringLaunchPayload {
   /** Base descriptor: list, fallback subject/template, and the campaign-id stem. */

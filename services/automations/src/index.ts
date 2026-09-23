@@ -19,6 +19,7 @@ import {
   evaluateDripStep,
   nextStepIndex,
   planLaunchDescriptor,
+  splitFeedUrls,
   templateIsEmpty,
   type FreshContent,
   runReengagementSweep,
@@ -151,15 +152,35 @@ export async function handler(input: RecurringLaunchPayload | SendDescriptor) {
   // Pull + parse the feed for this firing (guarded fetch, pinned IP, size cap).
   let items: Awaited<ReturnType<typeof fetchFeedItems>> | undefined;
   if (payload.feed) {
-    try {
-      items = await fetchFeedItems(payload.feed.url, payload.feed.format);
-      await recordFeedRun(payload.feed.feedId, payload.descriptor.orgId, { status: "ok", itemCount: items.length });
-    } catch (e) {
-      await recordFeedRun(payload.feed.feedId, payload.descriptor.orgId, {
-        status: "error",
-        error: e instanceof Error ? e.message : "feed pull failed",
-      });
-      throw e;
+    // A feed url may be a COMMA-SEPARATED LIST merged into one run (#309): a
+    // publication draws its main section from several sources — news, sport,
+    // obituaries — and wants them in one story sequence.
+    const urls = splitFeedUrls(payload.feed.url);
+    const merged: Awaited<ReturnType<typeof fetchFeedItems>> = [];
+    const failures: string[] = [];
+    for (const url of urls) {
+      try {
+        // Sequential rather than parallel: order is the publisher's editorial
+        // decision, and the first feed's lead item names the edition.
+        merged.push(...(await fetchFeedItems(url, payload.feed.format)));
+      } catch (e) {
+        // One dead source must not cost the whole edition. A newsletter drawing
+        // from four feeds should still go out when one returns a 500 — losing
+        // a section beats losing the send. Only an ALL-sources failure throws,
+        // via the empty-items refusal below.
+        failures.push(`${url}: ${e instanceof Error ? e.message : "fetch failed"}`);
+      }
+    }
+    items = merged;
+    await recordFeedRun(payload.feed.feedId, payload.descriptor.orgId, {
+      status: failures.length === 0 ? "ok" : "error",
+      itemCount: merged.length,
+      ...(failures.length > 0 ? { error: failures.join("; ") } : {}),
+    });
+    // Every source failed: there is nothing to build an edition from, and the
+    // caller should retry rather than treat it as an empty feed.
+    if (urls.length > 0 && failures.length === urls.length) {
+      throw new Error(`all ${urls.length} feed source(s) failed — ${failures.join("; ")}`);
     }
   }
   // A feed that yielded no usable items must NOT become an edition. parseFeed
