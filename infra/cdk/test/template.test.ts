@@ -2058,31 +2058,43 @@ test("subscriber-facing URL bases come from context, not the placeholder (#294)"
 });
 
 /**
- * The stack REFUSES to synthesize without them (#294).
+ * With no context value, they DERIVE from the public distribution (#294).
  *
- * This is the guarantee that matters, and it is stronger than any assertion
- * about a configured value. The original defect was a placeholder default, so
- * every path that forgot the setting produced a deployable template with dead
- * subscriber links and no error. Removing the default means the mistake cannot
- * reach a live stack from ANY path — the deploy preflight, a bare
- * `deploy:infra`, a direct `npx cdk deploy`, or CI.
+ * The original defect was a `your-site.example` placeholder default: every path
+ * that forgot the setting produced a deployable template with dead subscriber
+ * links and no error anywhere.
  *
- * Verified by mutation: restoring either fallback makes these pass again.
+ * Throwing instead would have been the wrong fix, and briefly was one: it made a
+ * first deploy impossible, because the error told the operator to use a stack
+ * output that does not exist until the stack has deployed. This stack builds the
+ * distribution these links point at, so it can simply derive them — unlike
+ * `sesMaxSendRate`, which is an account quota the stack cannot know.
+ *
+ * Asserting the Fn::Join (rather than a literal) is the point: it proves the
+ * value is bound to the real distribution and resolves at deploy time, so it
+ * cannot drift from the site actually serving /confirm and /preferences.
  */
-test("the stack refuses to synth without the subscriber URL bases (#294)", () => {
-  for (const missing of ["confirmUrlBase", "preferencesUrlBase"]) {
-    const context: Record<string, unknown> = {
-      confirmUrlBase: "https://tests.example/confirm",
-      preferencesUrlBase: "https://tests.example/preferences",
-    };
-    // Empty string, not delete: that is what an unset key in the config file
-    // actually produces, and `?? placeholder` would NOT have caught it.
-    context[missing] = "";
-    assert.throws(
-      () => template({}, context),
-      (err: Error) => err.message.includes(missing) && err.message.includes("required"),
-      `synth must fail when ${missing} is empty`,
-    );
+test("the subscriber URL bases derive from the public distribution (#294)", () => {
+  // Explicitly absent — the operator has set neither key.
+  const t = template({}, { confirmUrlBase: "", preferencesUrlBase: "" });
+  const fns = t.findResources("AWS::Lambda::Function");
+  const varsOf = (f: unknown) =>
+    ((f as { Properties: { Environment?: { Variables?: Record<string, unknown> } } })
+      .Properties.Environment?.Variables) ?? {};
+
+  for (const [key, suffix] of [
+    ["CONFIRM_URL_BASE", "/confirm"],
+    ["PREFERENCES_URL_BASE", "/preferences"],
+  ] as [string, string][]) {
+    const holders = Object.values(fns).filter((f) => key in varsOf(f));
+    assert.ok(holders.length > 0, `no Lambda carries ${key}`);
+    for (const f of holders) {
+      const joined = JSON.stringify(varsOf(f)[key]);
+      assert.ok(joined.includes("Fn::Join"), `${key} is not derived from the distribution`);
+      assert.ok(joined.includes("PublicSiteDist"), `${key} does not reference the public distribution`);
+      assert.ok(joined.includes(suffix), `${key} is missing the ${suffix} path`);
+      assert.ok(!joined.includes("your-site.example"), `${key} fell back to the placeholder`);
+    }
   }
 });
 

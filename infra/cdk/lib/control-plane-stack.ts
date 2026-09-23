@@ -916,35 +916,32 @@ export class ControlPlaneStack extends Stack {
      * so the aggregate stays inside the quota (#176).
      */
     /**
-     * Subscriber-facing base URLs. REQUIRED, with no fallback — deliberately.
+     * Subscriber-facing base URLs — DERIVED from the public distribution this
+     * stack creates, and overridable by context.
      *
-     * These used to default to a `your-site.example` placeholder, a domain
-     * nobody owns, and nothing anywhere reported it: signup returned 200, the
+     * They used to default to a `your-site.example` placeholder, a domain nobody
+     * owns, and nothing anywhere reported it: signup returned 200, the
      * preference-centre request returned 200, both sent mail, and every link in
      * that mail was dead. Double opt-in and the preference centre were broken in
      * a way that looks exactly like working.
      *
-     * A deploy that omits these is always a mistake, so it fails at synth,
-     * before it can reach a live stack — the same treatment `sesMaxSendRate`
-     * gets, for the same reason. Failing HERE rather than only in the deploy
-     * preflight is what covers the paths no preflight sees: a bare
-     * `deploy:infra`, a direct `npx cdk deploy`, and CI.
+     * Deriving beats requiring. The obvious fix was to throw when unset, the way
+     * `sesMaxSendRate` does — but that knob is genuinely unknowable to the stack
+     * (it is an account-level SES quota), whereas THIS stack builds the very
+     * distribution these links point at. Requiring it would have made a first
+     * deploy impossible: the error told the operator to use a stack output that
+     * does not exist until the stack has deployed.
+     *
+     * `publicOrigin` is the same Lazy token the Cognito callbacks and CORS
+     * origins use, so it resolves at synth to an Fn::Join over the distribution
+     * domain and cannot drift from the site actually serving these routes.
      */
-    const requiredUrlBase = (key: string, suffix: string): string => {
-      const value = this.node.tryGetContext(key) as string | undefined;
-      if (value === undefined || String(value).trim() === "") {
-        throw new Error(
-          `${key} is required. Set it in infra/cdk/addressium.config.json to the ` +
-            `PublicSiteUrl stack output plus ${suffix}, e.g. ` +
-            `"https://d1234abcd.cloudfront.net${suffix}". It is the link addressium ` +
-            `mails subscribers; there is deliberately no default, because a ` +
-            `placeholder here fails silently rather than loudly.`,
-        );
-      }
-      return String(value).trim();
-    };
-    const confirmUrlBase = requiredUrlBase("confirmUrlBase", "/confirm");
-    const preferencesUrlBase = requiredUrlBase("preferencesUrlBase", "/preferences");
+    const confirmUrlBase =
+      (this.node.tryGetContext("confirmUrlBase") as string | undefined)?.trim() ||
+      `${publicOrigin}/confirm`;
+    const preferencesUrlBase =
+      (this.node.tryGetContext("preferencesUrlBase") as string | undefined)?.trim() ||
+      `${publicOrigin}/preferences`;
 
     const sesRateContext = this.node.tryGetContext("sesMaxSendRate") as string | undefined;
     if (sesRateContext === undefined || String(sesRateContext).trim() === "") {

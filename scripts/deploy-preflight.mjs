@@ -20,21 +20,20 @@ const fail = (msg) => {
 };
 
 /**
- * `confirmUrlBase` decides where subscriber confirmation links point. The stack
- * falls back to `https://your-site.example/confirm` — a domain nobody owns — and
- * NOTHING fails when it does: signup returns 200, the mail sends, and every
- * confirmation link is dead. Double opt-in is broken with no error anywhere.
+ * `confirmUrlBase` / `preferencesUrlBase` decide where the links addressium
+ * mails subscribers point.
  *
- * It used to be readable only from CDK context, so a deploy that omitted
- * `-c confirmUrlBase=...` silently reset the live Lambdas to the placeholder.
- * That happened on 2026-09-23. It now lives in `addressium.config.json`, and
- * this refuses to deploy without a real value rather than trusting the operator
- * to remember a flag on every single deploy.
+ * Leaving them UNSET is fine: the stack derives both from the public
+ * distribution it creates. What is never fine is the literal
+ * `your-site.example` placeholder — a domain nobody owns — which is what they
+ * used to default to. Nothing failed when they did: signup returned 200, the
+ * preference-centre request returned 200, both sent mail, and every link in it
+ * was dead.
+ *
+ * The placeholder no longer appears in the stack, so this guards against it
+ * being pasted back into the config by hand, or copied from an old runbook.
  */
-const PUBLIC_URL_SETTINGS = [
-  { key: "confirmUrlBase", placeholder: "https://your-site.example/confirm", suffix: "/confirm" },
-  { key: "preferencesUrlBase", placeholder: "https://your-site.example/preferences", suffix: "/preferences" },
-];
+const PLACEHOLDER = "your-site.example";
 const configPath = resolve(import.meta.dirname, "../infra/cdk/addressium.config.json");
 let config;
 try {
@@ -43,15 +42,16 @@ try {
   fail(`deploy preflight: cannot read infra/cdk/addressium.config.json (${err.message})`);
 }
 
-for (const { key, placeholder, suffix } of PUBLIC_URL_SETTINGS) {
+for (const key of ["confirmUrlBase", "preferencesUrlBase"]) {
   const value = config[key]?.trim();
-  if (!value || value === placeholder) {
+  // Absent is valid — the stack derives it. Only the dead placeholder is not.
+  if (value && value.includes(PLACEHOLDER)) {
     fail(
-      `deploy preflight: ${key} is ${value ? "the placeholder" : "unset"} in infra/cdk/addressium.config.json.\n` +
-        "The link addressium mails subscribers would point at a domain nobody owns,\n" +
-        "and nothing would report an error — the request succeeds and the mail sends.\n\n" +
-        `Set it to the PublicSiteUrl stack output plus ${suffix}, e.g.\n` +
-        `  "${key}": "https://d1234abcd.cloudfront.net${suffix}"`,
+      `deploy preflight: ${key} is set to the ${PLACEHOLDER} placeholder in\n` +
+        "infra/cdk/addressium.config.json. That is a domain nobody owns, so every\n" +
+        "link addressium mails subscribers would be dead — and nothing would report\n" +
+        "it, because the request succeeds and the mail sends.\n\n" +
+        "Remove the key to derive it from the public distribution, or set a real URL.",
     );
   }
 }

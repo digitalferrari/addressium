@@ -190,20 +190,19 @@ ADDRESSIUM_PUBLIC_ORG_ID=<your-org-id> npm run deploy
 #   npm run deploy:infra    npm run deploy:spas
 ```
 
-`confirmUrlBase` and `preferencesUrlBase` are **required** — set them in
-`infra/cdk/addressium.config.json` (gitignored) to your public distribution plus
-`/confirm` and `/preferences`:
+`confirmUrlBase` and `preferencesUrlBase` — the links addressium mails
+subscribers — are **derived from the public distribution this stack creates**,
+so a first deploy needs nothing. Override them in
+`infra/cdk/addressium.config.json` (gitignored) only when you serve those routes
+somewhere else:
 
 ```json
-"confirmUrlBase": "https://<your-public-distribution>/confirm",
-"preferencesUrlBase": "https://<your-public-distribution>/preferences"
+"confirmUrlBase": "https://news.example.com/confirm",
+"preferencesUrlBase": "https://news.example.com/preferences"
 ```
 
-The stack **refuses to synthesize** without them (#294). They used to default to
-`https://your-site.example/...`, which failed silently: signup returned 200, the
-mail sent, and every link in it was dead. A deploy that forgot `-c` reverted a
-working stack to that placeholder with no error, so there is now deliberately no
-default at all.
+They used to default to `https://your-site.example/...`, which failed silently:
+signup returned 200, the mail sent, and every link in it was dead (#294).
 
 Details: [`scripts/README.md`](scripts/README.md) ·
 [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md)
