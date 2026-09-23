@@ -52,6 +52,10 @@ import { Topbar } from "./Topbar.js";
 export function App() {
   const [ready, setReady] = useState(false);
   const [authed, setAuthed] = useState(false);
+  // Where the automatic redirect to the Hosted UI has got to. "idle" only ever
+  // moves forward: resetting it on failure would re-satisfy the effect below
+  // and retry forever instead of falling back to the card.
+  const [redirect, setRedirect] = useState<"idle" | "going" | "failed">("idle");
 
   useEffect(() => {
     completeLoginIfPresent()
@@ -65,7 +69,33 @@ export function App() {
       });
   }, []);
 
-  if (!ready) return <div className="center muted">Loading…</div>;
+  // Send an unauthenticated operator straight to the Hosted UI rather than
+  // parking them on a card whose only control is "go to the Hosted UI".
+  //
+  // This runs in its own effect, AFTER `ready`, so it can never fire while
+  // `completeLoginIfPresent` is still exchanging a `?code=` — doing that would
+  // abandon a login that was about to succeed and bounce forever. Local
+  // development keeps the button: `login()` there mints a fake token without
+  // navigating, so an automatic call would sign the developer in with no way to
+  // see the console's own landing page.
+  useEffect(() => {
+    if (!ready || authed || isLocalDevelopment || redirect !== "idle") return;
+    setRedirect("going");
+    void login().catch(() => {
+      // The redirect never happened — Cognito unreachable, or the SPA was built
+      // without VITE_COGNITO_DOMAIN. Fall back to the card so the operator gets
+      // a control and an explanation instead of a permanently blank page.
+      setRedirect("failed");
+    });
+  }, [ready, authed, redirect]);
+
+  // One neutral shell covers every pre-authenticated state: the token check,
+  // the code exchange, and the redirect to Cognito. No console chrome, no
+  // screens, and nothing that can fire an API call renders until `authed` is
+  // genuinely true — which is what the operator was seeing flash past.
+  if (!ready || (!authed && !isLocalDevelopment && redirect !== "failed")) {
+    return <div className="center muted">Signing in…</div>;
+  }
   if (!authed) {
     return (
       <div className="center">

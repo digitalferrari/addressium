@@ -155,7 +155,18 @@ export async function completeLoginIfPresent(): Promise<boolean> {
 /** True when the stored token is absent or past its expiry (with a small skew). */
 export function isExpired(t: Tokens | null): boolean {
   if (!t) return true;
-  if (t.expiresAt === undefined) return false; // legacy token: let the API decide
+  if (t.expiresAt === undefined) {
+    // No `expires_in` was recorded at exchange. "Let the API decide" meant
+    // mounting the whole console on a token that might be long dead: every
+    // screen fired, every call 401'd, and the operator watched the interface
+    // flash up full of errors before api.ts bounced them to Cognito. Read the
+    // expiry out of the JWT instead, and only trust the API when the token
+    // carries no `exp` at all.
+    const exp = decodeClaims(t.idToken).exp;
+    const expSeconds = typeof exp === "number" ? exp : Number(exp);
+    if (Number.isFinite(expSeconds)) return Date.now() >= expSeconds * 1000 - 30_000;
+    return false;
+  }
   return Date.now() >= t.expiresAt - 30_000;
 }
 
