@@ -21,11 +21,20 @@ const BASE = import.meta.env.VITE_API_BASE ?? "";
  * org's own domain, and every one of those hostnames serves this SAME bundle.
  * So the bundle asks which org it is serving.
  *
- * `VITE_ORG_ID` remains as a fallback for local `npm run dev`, where there is no
- * configured hostname to resolve.
+ * `VITE_ORG_ID` is honoured ONLY when the page is served from localhost, for
+ * `npm run dev` where there is no configured hostname to resolve. It is
+ * deliberately not a general fallback: seeding state with it meant a bundle
+ * built with that variable rendered the previous org's form for one frame
+ * before the lookup resolved — on a shared bundle that is a signup form briefly
+ * pointed at the wrong publication.
  */
+const DEV_ORG =
+  typeof window !== "undefined" && /^(localhost|127\.0\.0\.1|\[::1\])$/.test(window.location.hostname)
+    ? (import.meta.env.VITE_ORG_ID as string | undefined)
+    : undefined;
+
 function useOrgId(): { orgId: string | undefined; error: string | undefined } {
-  const [orgId, setOrgId] = useState<string | undefined>(import.meta.env.VITE_ORG_ID);
+  const [orgId, setOrgId] = useState<string | undefined>(DEV_ORG);
   const [error, setError] = useState<string | undefined>();
 
   useEffect(() => {

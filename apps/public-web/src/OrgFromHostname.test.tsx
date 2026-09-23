@@ -67,3 +67,26 @@ test("a failed lookup does not render a submittable form", async () => {
   render(<App />);
   await waitFor(() => expect(screen.queryByRole("button", { name: /subscribe/i })).toBeNull());
 });
+
+test("a build-time org id never seeds the form on a real host", async () => {
+  // The flash-of-wrong-org bug. Seeding state from `VITE_ORG_ID` meant a bundle
+  // built with that variable rendered the PREVIOUS org's form for one frame
+  // before the lookup resolved — on a bundle shared by every org, that is a
+  // signup form briefly pointed at the wrong publication.
+  //
+  // Found in the live bundle: `useState("identithing-newsletter")` was still
+  // compiled in after the runtime lookup shipped.
+  vi.stubEnv("VITE_ORG_ID", "some-other-org");
+  let resolve: (r: Response) => void = () => {};
+  globalThis.fetch = vi.fn(() => new Promise<Response>((r) => { resolve = r; })) as never;
+
+  render(<App />);
+
+  // While the lookup is in flight there is NO form — not a form for the baked
+  // id. "Loading" is the honest state.
+  expect(screen.queryByRole("button", { name: /subscribe/i })).toBeNull();
+  await screen.findByText(/loading/i);
+
+  resolve(new Response(JSON.stringify({ orgId: "booklense", name: "Booklense" }), { status: 200 }));
+  await screen.findByRole("button", { name: /subscribe/i });
+});
