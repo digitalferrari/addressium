@@ -164,6 +164,12 @@ export interface OrgMeta {
   name: string;
   /** IANA zone scheduled sends resolve against; editable in Settings (#294). */
   defaultTimezone?: string;
+  /**
+   * Where THIS org's subscriber pages live, e.g. `https://news.example.com`
+   * (#294). Orgs are siloed: the portal is a subdomain of the org's own domain,
+   * not a shared addressium host. Required before the org can send.
+   */
+  siteUrl?: string;
   environment: "prod" | "dev";
   setupComplete: boolean;
   /**
@@ -1149,7 +1155,7 @@ export const api = {
    */
   updateOrganization: (
     orgId: string,
-    update: { name?: string; defaultTimezone?: string; addDomain?: string },
+    update: { name?: string; defaultTimezone?: string; addDomain?: string; siteUrl?: string },
   ) =>
     call<{
       orgId: string;
@@ -1157,6 +1163,8 @@ export const api = {
       dns: Array<{ type: string; name: string; value: string; note?: string }>;
       warning?: string;
       listsOnPreviousDomain?: string[];
+      /** DNS/cert steps for a newly-set subscriber site URL (#294). */
+      setupSteps?: string[];
     }>("POST", `/orgs/${encodeURIComponent(orgId)}/settings/organization`, {
       action: "updateOrganization",
       ...update,

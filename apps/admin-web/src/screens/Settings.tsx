@@ -265,9 +265,11 @@ function OrganizationCard({ org, grant }: { org: string; grant: Grant | null }) 
   const [name, setName] = useState("");
   const [timezone, setTimezone] = useState("");
   const [addDomain, setAddDomain] = useState("");
+  const [siteUrl, setSiteUrl] = useState("");
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
   const [dns, setDns] = useState<Array<{ type: string; name: string; value: string; note?: string }>>([]);
+  const [setupSteps, setSetupSteps] = useState<string[]>([]);
   const [warning, setWarning] = useState("");
   const canManage = can(grant, "identity:manage", org);
 
@@ -275,6 +277,7 @@ function OrganizationCard({ org, grant }: { org: string; grant: Grant | null }) 
     if (loaded.data) {
       setName(loaded.data.name ?? "");
       setTimezone(loaded.data.defaultTimezone ?? "");
+      setSiteUrl(loaded.data.siteUrl ?? "");
     }
   }, [loaded.data]);
 
@@ -282,12 +285,14 @@ function OrganizationCard({ org, grant }: { org: string; grant: Grant | null }) 
     setBusy(true);
     setMsg("");
     setDns([]);
+    setSetupSteps([]);
     setWarning("");
     try {
       const res = await api.updateOrganization(org, {
         name,
         defaultTimezone: timezone,
         ...(addDomain.trim() ? { addDomain: addDomain.trim() } : {}),
+        ...(siteUrl.trim() ? { siteUrl: siteUrl.trim() } : {}),
       });
       if (res.changed.length === 0) {
         setMsg("No changes to save.");
@@ -295,6 +300,7 @@ function OrganizationCard({ org, grant }: { org: string; grant: Grant | null }) 
         setMsg(`Saved: ${res.changed.map((c) => `${c.field} ${c.from} → ${c.to}`).join("; ")}`);
         setAddDomain("");
         setDns(res.dns ?? []);
+        setSetupSteps(res.setupSteps ?? []);
         if (res.warning) setWarning(res.warning);
       }
     } catch (e) {
@@ -331,6 +337,13 @@ function OrganizationCard({ org, grant }: { org: string; grant: Grant | null }) 
       {field("Name", name, setName)}
       {field("Default time zone", timezone, setTimezone, "An IANA name, e.g. America/New_York. Scheduled sends resolve against it.")}
       {field(
+        "Subscriber site URL",
+        siteUrl,
+        setSiteUrl,
+        "Where THIS org's confirm, unsubscribe and preference pages are served — a subdomain of your own domain. Required: sends refuse without it rather than mailing links to a host you do not control.",
+        "https://news.example.com",
+      )}
+      {field(
         "Add a sending domain",
         addDomain,
         setAddDomain,
@@ -347,6 +360,18 @@ function OrganizationCard({ org, grant }: { org: string; grant: Grant | null }) 
       {msg && <p className="muted" style={{ marginTop: 10 }}>{msg}</p>}
       {warning && (
         <p className="muted" style={{ marginTop: 10 }}><strong>Note:</strong> {warning}</p>
+      )}
+      {setupSteps.length > 0 && (
+        <div style={{ marginTop: 12 }}>
+          <h4>Finish setting up this subscriber site</h4>
+          <p className="muted" style={{ fontSize: 12 }}>
+            addressium does not write DNS or attach certificates — your zone may be
+            Cloudflare, Route 53 or anything else.
+          </p>
+          <ol className="muted" style={{ fontSize: 13 }}>
+            {setupSteps.map((step) => <li key={step}>{step}</li>)}
+          </ol>
+        </div>
       )}
       {dns.length > 0 && (
         <div style={{ marginTop: 12 }}>

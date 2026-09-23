@@ -18,6 +18,7 @@
 import type { Organization } from "@addressium/core";
 import type { DnsRecord } from "./provisioning.js";
 import { InvalidInputError } from "./ports.js";
+import { normalizeSiteUrl } from "./site-url.js";
 import type { Stores } from "./ports.js";
 
 /** Fields this workflow may change. Everything else is provisioned or compliance. */
@@ -30,6 +31,15 @@ export interface OrgUpdate {
    * Never a replacement list: see `applyOrgUpdate` for why nothing is removed.
    */
   addDomain?: string;
+  /**
+   * Where THIS org's subscriber pages are served — e.g.
+   * `https://news.example.com` (#294).
+   *
+   * Orgs are siloed: each subscriber portal lives on a subdomain of the org's
+   * OWN domain, so this is per-org rather than a deployment-wide setting. The
+   * admin console itself is deployment-wide and is not configured here.
+   */
+  siteUrl?: string;
 }
 
 export interface OrgUpdateResult {
@@ -113,6 +123,16 @@ export function planOrgUpdate(org: Organization, update: OrgUpdate): OrgUpdateRe
     if (tz !== org.defaultTimezone) {
       changed.push({ field: "defaultTimezone", from: org.defaultTimezone, to: tz });
       next.defaultTimezone = tz;
+    }
+  }
+
+  if (update.siteUrl !== undefined) {
+    // Normalized to a bare origin, so two spellings of the same site compare
+    // equal and no link is ever built from a URL carrying a path or a query.
+    const siteUrl = normalizeSiteUrl(update.siteUrl);
+    if (siteUrl !== org.siteUrl) {
+      changed.push({ field: "siteUrl", from: org.siteUrl ?? "(none)", to: siteUrl });
+      next.siteUrl = siteUrl;
     }
   }
 

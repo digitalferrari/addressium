@@ -1879,6 +1879,12 @@ export class ControlPlaneStack extends Stack {
       // Lets provisioning attach the SES event destination (#208) — without it
       // a new org's config set publishes nothing and the event plane is dead.
       SES_EVENTS_TOPIC_ARN: sesEvents.topicArn,
+      // The CloudFront host an org's custom subscriber domain must CNAME to
+      // (#294). Lazy because the distribution is created near the end of this
+      // stack; it is only ever shown to an operator as a setup instruction.
+      PUBLIC_SITE_DOMAIN: Lazy.string({
+        produce: () => publicSite?.distribution.domainName ?? "",
+      }),
     });
     table.grantReadWriteData(provisioningFn);
     // Org creation is a privileged, audited action (§4.19) — the sink is already

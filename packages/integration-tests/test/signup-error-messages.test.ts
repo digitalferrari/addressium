@@ -67,7 +67,9 @@ before(async () => {
   // `getSecret` returns a non-ARN verbatim with this set — no Secrets Manager.
   process.env.ADDRESSIUM_LOCAL = "1";
   process.env.CONFIRM_SECRET_ARN = SECRET;
-  process.env.CONFIRM_URL_BASE = "https://example.com/confirm";
+  // CONFIRM_URL_BASE is gone (#294): confirm links are built from the ORG's own
+  // `siteUrl`, because each org's subscriber portal lives on a subdomain of its
+  // own domain. The org record below carries it.
 
   const throughput = { ReadCapacityUnits: 1, WriteCapacityUnits: 1 };
   const gsi = (n: string) => ({
@@ -112,6 +114,15 @@ before(async () => {
     complianceFooter: "You are receiving this because you subscribed.",
     physicalAddress: "1 Example Way, Exampleton",
   };
+  // Orgs are siloed and each one's subscriber links resolve on ITS host, so a
+  // send with no org record — or no `siteUrl` on it — now refuses rather than
+  // falling back to a shared hostname (#294).
+  await stores.organizations.put({
+    orgId: ORG, name: "Summit", domains: ["summit.example"],
+    siteUrl: "https://news.summit.example",
+    sesConfigSet: "cs", ipMode: "shared", suppressionScope: "hybrid",
+    defaultTimezone: "UTC", setupComplete: true,
+  } as never);
   await stores.lists.put(list);
 
   api = await import("@addressium/svc-api");

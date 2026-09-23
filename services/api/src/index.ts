@@ -123,6 +123,8 @@ import {
   listApiKeys,
   revokeApiKey,
   authenticateApiKey,
+  confirmUrl as confirmUrl0,
+  preferencesUrl as preferencesUrl0,
   isSendableEmail,
   resolveReengagementPolicy,
   deleteMergeTag,
@@ -523,7 +525,7 @@ export async function signupHandler(
     if (list) {
       try {
         const org = await stores().organizations.get(res.subscription.orgId);
-        const confirmUrl = `${env("CONFIRM_URL_BASE")}?token=${encodeURIComponent(res.confirmationToken)}`;
+        const confirmUrl = `${confirmUrl0(org)}?token=${encodeURIComponent(res.confirmationToken)}`;
         const ses =
           injected?.sender ??
           new SesEmailSender(org?.sesConfigSet, undefined, org?.sesTransactionalConfigSet);
@@ -575,7 +577,7 @@ export async function signupBatchHandler(
     if (res.lists.length > 0) {
       try {
         const org = await stores().organizations.get(res.subscriber.orgId);
-        const confirmUrl = `${env("CONFIRM_URL_BASE")}?token=${encodeURIComponent(res.confirmationToken)}`;
+        const confirmUrl = `${confirmUrl0(org)}?token=${encodeURIComponent(res.confirmationToken)}`;
         const ses =
           injected?.sender ??
           new SesEmailSender(org?.sesConfigSet, undefined, org?.sesTransactionalConfigSet);
@@ -1308,6 +1310,9 @@ export async function orgMetaHandler(event: HttpEvent): Promise<HttpResult> {
       // declares response shapes locally, so a field present in only one of the
       // two compiles cleanly and is silently `undefined` at runtime.
       defaultTimezone: org.defaultTimezone,
+      // Settings → Organization edits this, and a send refuses without it, so
+      // the console has to be able to show whether it is set (#294).
+      ...(org.siteUrl ? { siteUrl: org.siteUrl } : {}),
       ...(org.domains?.[0] ? { primaryDomain: org.domains[0] } : {}),
       // The whole list, on the same reasoning that already admits
       // `primaryDomain` above: this route is scoped to one org by
@@ -3273,7 +3278,7 @@ export async function preferenceRequestHandler(event: HttpEvent): Promise<HttpRe
     if (minted) {
       const org = await s.organizations.get(orgId);
       const lists = await s.lists.list(orgId);
-      const url = `${env("PREFERENCES_URL_BASE")}?token=${encodeURIComponent(minted.token)}`;
+      const url = `${preferencesUrl0(org)}?token=${encodeURIComponent(minted.token)}`;
       const ses = new SesEmailSender(org?.sesConfigSet, undefined, org?.sesTransactionalConfigSet);
       await ses.send(buildPreferenceLinkEmail(lists[0], email, url, org?.name ?? orgId));
     }

@@ -9,7 +9,7 @@
  */
 import { schemas } from "@addressium/core";
 import { AwsProvisioningProviders, DynamoStores, S3AuditLog } from "@addressium/adapters-aws";
-import { dnsRecords, listsSendingFrom, planOrgUpdate, provisionOrganization, recordAudit, SystemClock } from "@addressium/domain";
+import { dnsRecords, listsSendingFrom, planOrgUpdate, siteUrlSetupSteps, provisionOrganization, recordAudit, SystemClock } from "@addressium/domain";
 import { authorize, grantFromClaims } from "@addressium/rbac";
 
 function env(name: string): string {
@@ -111,13 +111,14 @@ export async function handler(event: ProvisionEvent) {
     const org = await stores().organizations.get(parsedOrg.data);
     if (!org) return { statusCode: 404, headers: {}, body: JSON.stringify({ error: "unknown org" }) };
 
-    const input = raw as { name?: string; defaultTimezone?: string; addDomain?: string };
+    const input = raw as { name?: string; defaultTimezone?: string; addDomain?: string; siteUrl?: string };
     let planned;
     try {
       planned = planOrgUpdate(org, {
         ...(input.name !== undefined ? { name: input.name } : {}),
         ...(input.defaultTimezone !== undefined ? { defaultTimezone: input.defaultTimezone } : {}),
         ...(input.addDomain !== undefined ? { addDomain: input.addDomain } : {}),
+        ...(input.siteUrl !== undefined ? { siteUrl: input.siteUrl } : {}),
       });
     } catch (e) {
       return { statusCode: 400, headers: {}, body: JSON.stringify({ error: (e as Error).message }) };
@@ -156,6 +157,7 @@ export async function handler(event: ProvisionEvent) {
       if (c.field === "name") merged.name = planned.org.name;
       if (c.field === "defaultTimezone") merged.defaultTimezone = planned.org.defaultTimezone;
       if (c.field === "primaryDomain") merged.domains = planned.org.domains;
+      if (c.field === "siteUrl") merged.siteUrl = planned.org.siteUrl;
     }
     await stores().organizations.put(merged);
 
@@ -181,6 +183,15 @@ export async function handler(event: ProvisionEvent) {
       ? await listsSendingFrom(stores(), parsedOrg.data, domainChange.from)
       : [];
 
+    // A new site URL needs DNS and a certificate the operator must create
+    // themselves. addressium does NOT write DNS or attach the cert: the zone may
+    // be Cloudflare, Route 53 or anything else, and holding credentials for a
+    // zone that is not ours is the wrong trade. Shown as steps instead.
+    const siteUrlChange = planned.changed.find((c) => c.field === "siteUrl");
+    const setupSteps = siteUrlChange
+      ? siteUrlSetupSteps(siteUrlChange.to, process.env.PUBLIC_SITE_DOMAIN ?? "the public CloudFront distribution")
+      : [];
+
     return {
       statusCode: 200,
       headers: { "content-type": "application/json" },
@@ -188,6 +199,7 @@ export async function handler(event: ProvisionEvent) {
         orgId: parsedOrg.data,
         changed: planned.changed,
         dns,
+        ...(setupSteps.length > 0 ? { setupSteps } : {}),
         ...(staleLists.length > 0
           ? {
               warning:

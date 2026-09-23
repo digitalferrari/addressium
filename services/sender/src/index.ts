@@ -20,6 +20,7 @@ import {
   SystemClock,
   TokenBucket,
   fanOutCampaign,
+  requireSiteUrl,
   sendCampaign,
   type SendDescriptor,
 } from "@addressium/domain";
@@ -130,10 +131,9 @@ let _unsubInit = false;
 async function unsubscribeLink() {
   if (_unsubInit) return _unsub;
   _unsubInit = true;
-  const base = process.env.UNSUBSCRIBE_URL_BASE;
   const secretArn = process.env.CONFIRM_SECRET_ARN;
-  if (!base || !secretArn) {
-    console.warn("sender: UNSUBSCRIBE_URL_BASE/CONFIRM_SECRET_ARN unset — falling back to mailto");
+  if (!secretArn) {
+    console.warn("sender: CONFIRM_SECRET_ARN unset — falling back to mailto");
     return undefined;
   }
   const signer = new HmacConfirmationSigner(await getSecret(secretArn));
@@ -145,7 +145,19 @@ async function unsubscribeLink() {
       // enumerated the way the old bare ?sub=&list= URL could.
       const exp = Math.floor(clock.now().getTime() / 1000) + UNSUB_TOKEN_TTL_SECONDS;
       const token = signer.sign({ orgId, sub: subscriberId, listId, exp });
-      return `${base.replace(/\/+$/, "")}?token=${encodeURIComponent(token)}`;
+      // PER-ORG (#294). Orgs are siloed: each one's subscriber portal lives on a
+      // subdomain of ITS OWN domain, so an unsubscribe link must resolve there
+      // and not on a shared hostname. A subscriber of publication A receiving a
+      // link on publication B's domain is a mismatch between the From domain and
+      // the unsubscribe link, which reads as phishing to a person and to a spam
+      // filter alike.
+      //
+      // `requireSiteUrl` THROWS when the org has none. Deliberate: a silent
+      // fallback to a shared host is how `your-site.example` shipped and broke
+      // double opt-in with no error anywhere.
+      const org = await stores().organizations.get(orgId);
+      if (!org) throw new Error(`unknown org ${orgId}`);
+      return `${requireSiteUrl(org)}/unsubscribe?token=${encodeURIComponent(token)}`;
     },
   };
   return _unsub;

@@ -234,6 +234,29 @@ export interface Organization {
    * used to interpret RECURRING wall-clock send schedules (DST-aware) and to
    * bucket/display reporting. A recurring campaign may override it.
    */
+  /**
+   * Where THIS org's subscriber-facing pages are served (#294).
+   *
+   * The origin only — e.g. `https://news.example.com` — with no trailing slash
+   * and no path. Confirm, unsubscribe and preference links are all built from
+   * it, so it is the hostname that appears in every email the org sends.
+   *
+   * REQUIRED to send. It used to be one stack-wide `CONFIRM_URL_BASE` shared by
+   * every org, which meant a subscriber of publication A received links on
+   * publication B's hostname — and a mismatch between the From domain and the
+   * unsubscribe link reads as phishing to both a person and a spam filter.
+   *
+   * Deliberately NOT defaulted to the shared CloudFront URL. A silent fallback
+   * is exactly how `https://your-site.example/confirm` shipped to production and
+   * broke double opt-in without a single error (#294): signup returned 200, the
+   * mail sent, and every link was dead. A send with no `siteUrl` now refuses
+   * instead.
+   *
+   * Distinct from `domains` (SES sending identities) and from the magic-link
+   * `audience` (the publisher's own website). Those answer "who may we mail as"
+   * and "whose paywall is this"; this answers "where do our links point".
+   */
+  siteUrl?: string;
   defaultTimezone: string;
   /** Subscriber-site branding/theme (§4.10, #31). */
   branding?: Branding;
