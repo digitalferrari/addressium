@@ -8,6 +8,8 @@
  * service; everything here runs on a string so it's fully unit-testable.
  */
 import type { Block, EmailTemplate } from "./render.js";
+import { escapeHtml, opaque } from "./render.js";
+import { expandRegion, findRegion, type SectionStory } from "./sections.js";
 import type { SendDescriptor } from "./ports.js";
 
 export type FeedFormat = "rss" | "atom" | "json";
@@ -285,6 +287,168 @@ export interface FreshContent {
   subject?: string;
   previewText?: string;
   template?: EmailTemplate;
+  /**
+   * Ad html by placement, for a template that carries story regions (#300).
+   *
+   * `body` is interleaved one after each story in the main run until exhausted;
+   * `marquee` and `footer` are single substitutions at fixed positions. The two
+   * AFTERMAIN category sections get no ads.
+   */
+  ads?: { marquee?: string; body?: string[]; footer?: string };
+}
+
+/**
+ * Stories per template section.
+ *
+ * The three sections are separately sourced — the main run from the campaign's
+ * feed, the two category blocks from their own — so they are supplied
+ * independently. Passing one array fills the main run and leaves the category
+ * sections empty, which is correct for a series with a single feed.
+ */
+export interface SectionStories {
+  main?: SectionStory[];
+  categoryOne?: SectionStory[];
+  categoryTwo?: SectionStory[];
+}
+
+/** Feed items shaped for a story region. */
+function toStories(items: FeedItem[]): SectionStory[] {
+  return items
+    .filter((i) => i.title && i.link)
+    .map((i) => ({
+      headline: i.title!,
+      url: i.link!,
+      ...(i.image ? { image: i.image } : {}),
+      ...(i.content ? { bodyText: stripTags(i.content) } : {}),
+    }));
+}
+
+/** Feed `content` is publisher HTML; story regions supply their own markup. */
+function stripTags(html: string): string {
+  return html.replace(/<[^>]*>/g, "").replace(/\s+/g, " ").trim();
+}
+
+/**
+ * The wrapper the legacy pipeline put around every interleaved ad: a divider,
+ * the word "Advertisement", the creative, a divider. The disclosure has to be
+ * there whatever the creative is, so it lives here rather than in each tag.
+ */
+const AD_WRAPPER =
+  '<table align="center" border="0" cellpadding="0" cellspacing="0" width="600" ' +
+  'style="margin:0 auto;max-width:600px;"><tr><td style="border-top:1px solid #ddd;' +
+  'font-size:1px;line-height:1px;">&nbsp;</td></tr><tr><td align="center" ' +
+  'style="font-family:Arial,sans-serif;font-size:11px;color:#999;padding:6px 0;">' +
+  "Advertisement</td></tr><tr><td align=\"center\">{{ADPLACEMENT}}</td></tr>" +
+  '<tr><td style="border-top:1px solid #ddd;font-size:1px;line-height:1px;">&nbsp;</td></tr></table>';
+
+/**
+ * Document-level tokens the template may declare.
+ *
+ * Any left unfilled are cleared, so an operator who deletes the ad-tag config
+ * or leaves a section unsourced gets a blank rather than `{{CATEGORYONENICENAME}}`
+ * in the inbox. Deliberately an explicit list, NOT a `[A-Z_]+` sweep: merge
+ * tags are lowercase and are resolved per recipient much later, so a blanket
+ * pass would delete `{{unsubscribe_url}}` before it was ever substituted.
+ */
+const DOCUMENT_TOKENS = [
+  "PREHEADER",
+  "NEWSLETTERNAME",
+  "CATEGORYONENICENAME",
+  "CATEGORYTWONICENAME",
+  "MARQUEEAD",
+  "SAFERTB",
+  "CONTENT",
+] as const;
+
+/** Region names, in the order the shipped template declares them. */
+const SECTIONS = {
+  main: { lead: "MAIN STORY", item: "BODY STORY" },
+  categoryOne: { item: "NEWSLETTER_AFTERMAINONE_STORIES", maxItems: 3 },
+  categoryTwo: { item: "NEWSLETTER_AFTERMAINTWO_STORIES", maxItems: 2 },
+} as const;
+
+/**
+ * Does this template compose feed items INTO itself, rather than being replaced
+ * by them?
+ *
+ * The presence of a main story region is the opt-in. A template without one
+ * keeps the old `buildEdition` behaviour, so every series scheduled before this
+ * is unaffected — and a feed series carrying a composed body that has never
+ * been sent does not suddenly start mailing it.
+ */
+export function hasStoryRegions(t: EmailTemplate): boolean {
+  return t.html != null && findRegion(t.html, SECTIONS.main.lead) !== undefined;
+}
+
+/**
+ * Expand a designed template's story regions from the current feed (#299).
+ *
+ * The template is the document and the feed supplies its contents — the inverse
+ * of `buildEdition`, which builds a body out of feed items and discards
+ * whatever the operator composed. Everything outside a region survives byte for
+ * byte: masthead, sponsor banner, section headings, tip callout, footer.
+ */
+export function composeFromRegions(
+  html: string,
+  stories: SectionStory[] | SectionStories,
+  ads?: FreshContent["ads"],
+  /** Document-level values: newsletter name, section headings, preheader. */
+  labels?: Record<string, string>,
+): string {
+  // A bare array fills the main run only. The category sections are separately
+  // sourced — in the legacy pipeline they were WordPress category queries, not
+  // the main feed — so filling them from the same items would print the same
+  // stories three times under different headings.
+  const byRegion: SectionStories = Array.isArray(stories) ? { main: stories } : stories;
+  let out = html;
+  // Rightmost region first, so earlier spans keep their indices.
+  const plans = [
+    { region: SECTIONS.categoryTwo, stories: byRegion.categoryTwo ?? [], ads: undefined as string[] | undefined },
+    { region: SECTIONS.categoryOne, stories: byRegion.categoryOne ?? [], ads: undefined as string[] | undefined },
+    { region: SECTIONS.main, stories: byRegion.main ?? [], ads: ads?.body },
+  ];
+  for (const plan of plans) {
+    const itemName = plan.region.item;
+    const leadName = "lead" in plan.region ? plan.region.lead : undefined;
+    const item = findRegion(out, itemName);
+    if (!item) continue;
+    const lead = leadName ? findRegion(out, leadName) : undefined;
+    // The lead and item regions are adjacent siblings, so the span to replace
+    // runs from the start of whichever comes first to the end of the other.
+    const start = lead ? Math.min(lead.start, item.start) : item.start;
+    const end = lead ? Math.max(lead.end, item.end) : item.end;
+    const expanded = expandRegion(
+      { ...(lead ? { lead: lead.inner } : {}), item: item.inner },
+      plan.stories,
+      {
+        // Ad html is third-party and must not be rewritten by the anchor
+        // scanner — see #313. Generated story markup IS ours and stays tracked.
+        ...(plan.ads ? { ads: plan.ads.map(opaque), adWrapper: AD_WRAPPER } : {}),
+        ...("maxItems" in plan.region ? { maxItems: plan.region.maxItems } : {}),
+      },
+    );
+    out = out.slice(0, start) + expanded + out.slice(end);
+  }
+  // Document-level placements, after the regions so a marker inside a story
+  // region cannot swallow them.
+  out = out.split("{{MARQUEEAD}}").join(ads?.marquee ? opaque(ads.marquee) : "");
+  out = out.split("{{SAFERTB}}").join(ads?.footer ? opaque(ads.footer) : "");
+  for (const [token, value] of Object.entries(labels ?? {})) {
+    out = out.split(`{{${token}}}`).join(escapeHtml(value));
+  }
+  // An unsupplied label leaves an empty heading rather than a literal
+  // `{{CATEGORYONENICENAME}}` in the inbox — a visible placeholder is worse
+  // than a blank.
+  //
+  // Scoped to the template's OWN token vocabulary rather than anything
+  // uppercase. Merge tags are lowercase by convention (`unsubscribe_url`,
+  // `first_name`) and are resolved per recipient much later, so a blanket
+  // sweep here would delete them before they were ever substituted — the
+  // unsubscribe link included.
+  for (const token of DOCUMENT_TOKENS) {
+    out = out.split(`{{${token}}}`).join("");
+  }
+  return out;
 }
 
 export function planLaunchDescriptor(
@@ -303,6 +467,23 @@ export function planLaunchDescriptor(
     ...(fresh?.template ? { template: fresh.template } : {}),
   };
   if (payload.feed && items) {
+    // A designed template composes the feed INTO itself (#299): the operator's
+    // masthead, sponsor banner, section headings and footer all survive, and
+    // only the marked story regions are expanded. Opt-in on the template
+    // carrying a main story region, so a series scheduled before this — or one
+    // whose composed body has never been reviewed — keeps the old behaviour.
+    if (base.template.html != null && hasStoryRegions(base.template)) {
+      const stories = toStories(items);
+      return {
+        ...base,
+        campaignId: `${payload.descriptor.campaignId}-${payload.editionKey}`,
+        // The lead story still names the edition: a daily newsletter's subject
+        // IS its lead headline.
+        subject: stories[0]?.headline ?? base.subject,
+        template: { html: composeFromRegions(base.template.html, stories, fresh?.ads) },
+        campaignAttributes: mapFeedItem(items[0] ?? {}, payload.feed.fieldMap ?? {}),
+      };
+    }
     const edition = buildEdition(items, {
       baseCampaignId: payload.descriptor.campaignId,
       editionKey: payload.editionKey,

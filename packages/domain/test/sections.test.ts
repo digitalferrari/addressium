@@ -184,3 +184,135 @@ test("the real template's regions expand with real-shaped stories", () => {
   assert.ok(!/\{\{(URL|HEADLINE|IMG|BODYTEXT)\}\}/.test(out), "no per-story token may survive");
   assert.ok(out.includes("Read More"), "the template's own chrome survives");
 });
+
+/**
+ * Composing a whole edition from a designed template (#299, #300).
+ *
+ * `composeFromRegions` is what the launch path calls: it expands every story
+ * region from the current feed, interleaves ads in the main run, fills the
+ * document-level labels, and leaves everything else byte for byte.
+ */
+import { composeFromRegions, planLaunchDescriptor, hasStoryRegions } from "@addressium/domain";
+
+const feedItems = [
+  { title: "Lead story", link: "https://x.test/1", image: "https://x.test/1.jpg", content: "<p>Dek one</p>" },
+  { title: "Second story", link: "https://x.test/2", image: "https://x.test/2.jpg", content: "<p>Dek two</p>" },
+  { title: "Third story", link: "https://x.test/3", image: "https://x.test/3.jpg", content: "<p>Dek three</p>" },
+];
+
+test("a designed template composes the feed into itself and keeps its chrome", () => {
+  const out = composeFromRegions(
+    realTemplate,
+    [story("a"), story("b"), story("c")],
+    undefined,
+    { NEWSLETTERNAME: "The Daily" },
+  );
+  // The operator's furniture survives — this is the whole point.
+  for (const chrome of ["Manage Newsletters", "Got a story idea", "Meet Steamboat Pilot"]) {
+    assert.ok(out.includes(chrome), `template chrome lost: ${chrome}`);
+  }
+  assert.ok(out.includes("Headline a") && out.includes("Headline c"));
+  assert.ok(out.includes("The Daily"));
+});
+
+test("category sections are NOT filled from the main feed", () => {
+  // They are separately sourced. Filling all three from one feed printed the
+  // same stories three times under different headings.
+  const out = composeFromRegions(realTemplate, [story("a"), story("b")]);
+  assert.equal(
+    out.match(/Headline a/g)?.length,
+    1,
+    "a story must appear once, not once per section",
+  );
+});
+
+test("each section can be sourced independently", () => {
+  const out = composeFromRegions(realTemplate, {
+    main: [story("m1"), story("m2")],
+    categoryOne: [story("c1")],
+    categoryTwo: [story("c2")],
+  });
+  assert.ok(out.includes("Headline m1") && out.includes("Headline c1") && out.includes("Headline c2"));
+});
+
+test("ads interleave in the main run and nowhere else", () => {
+  // Confirmed rule: the two AFTERMAIN sections get no ads.
+  const out = composeFromRegions(
+    realTemplate,
+    { main: [story("m1"), story("m2")], categoryOne: [story("c1"), story("c2"), story("c3")] },
+    { body: ["<AD1>", "<AD2>", "<AD3>"] },
+  );
+  const mainEnd = out.indexOf("Headline c1");
+  const adsBeforeCategory = (out.slice(0, mainEnd).match(/<AD\d>/g) ?? []).length;
+  const adsAfter = (out.slice(mainEnd).match(/<AD\d>/g) ?? []).length;
+  assert.equal(adsBeforeCategory, 2, "one ad after each of the two main stories");
+  assert.equal(adsAfter, 0, "the category sections take no ads");
+});
+
+test("marquee and footer are single fixed placements", () => {
+  const out = composeFromRegions(realTemplate, [story("a")], {
+    marquee: "<MARQUEE-AD>",
+    footer: "<FOOTER-BEACON>",
+  });
+  assert.equal(out.match(/<MARQUEE-AD>/g)?.length, 1);
+  assert.equal(out.match(/<FOOTER-BEACON>/g)?.length, 1);
+  assert.ok(out.indexOf("<MARQUEE-AD>") < out.indexOf("<FOOTER-BEACON>"), "top, then bottom");
+});
+
+test("ad html is marked opaque so the token scanner passes over it", () => {
+  // #313: advertiser markup must not have the per-recipient magic-link token
+  // appended to it, and must not be counted as editorial engagement.
+  const out = composeFromRegions(realTemplate, [story("a")], { marquee: "<MARQUEE-AD>" });
+  assert.ok(out.includes("<!--addressium:opaque--><MARQUEE-AD>"), "ads must be wrapped opaque");
+});
+
+test("per-recipient merge tags are NOT swept away", () => {
+  // The trap in clearing unfilled document tokens: merge tags are resolved much
+  // later, per recipient. A blanket [A-Z_]+ sweep would delete the unsubscribe
+  // link before it was ever substituted.
+  const tpl =
+    `<body>{{NEWSLETTERNAME}}<!-- START MAIN STORY --><h1>{{HEADLINE}}</h1><!-- END MAIN STORY -->` +
+    `<!-- START BODY STORY --><p>{{HEADLINE}}</p><!-- END BODY STORY -->` +
+    `<a href="{{unsubscribe_url}}">Unsubscribe</a>{{first_name}}{{compliance_footer}}</body>`;
+  const out = composeFromRegions(tpl, [story("a")], undefined, { NEWSLETTERNAME: "The Daily" });
+  for (const tag of ["unsubscribe_url", "first_name", "compliance_footer"]) {
+    assert.ok(out.includes(`{{${tag}}}`), `${tag} must survive to be resolved per recipient`);
+  }
+});
+
+test("an unfilled document token is blanked, not left visible", () => {
+  // `{{CATEGORYONENICENAME}}` in an inbox is worse than an empty heading.
+  const out = composeFromRegions(realTemplate, [story("a")]);
+  assert.ok(!/\{\{[A-Z_]+\}\}/.test(out), "no literal placeholder may ship");
+});
+
+test("the launch path uses region composition only when the template opts in", () => {
+  // Opt-in on the template carrying a main story region, so a series scheduled
+  // before this keeps the old buildEdition behaviour and a composed body that
+  // has never been reviewed is not suddenly mailed.
+  const payload = {
+    descriptor: {
+      orgId: "acme", campaignId: "daily", listId: "ledger", subject: "Frozen",
+      template: { blocks: [{ kind: "text" as const, html: "<p>old</p>" }] },
+    },
+    feed: { url: "https://x.test/rss", format: "rss" as const },
+    editionKey: "2026-09-23",
+  };
+
+  // No regions: the old path.
+  const legacy = planLaunchDescriptor(payload, feedItems, undefined);
+  assert.ok(legacy.template.blocks, "a template with no regions still uses buildEdition");
+
+  // Regions present: composed.
+  const composed = planLaunchDescriptor(payload, feedItems, { template: { html: realTemplate } });
+  assert.ok(composed.template.html, "a designed template composes");
+  assert.ok(composed.template.html.includes("Lead story"));
+  assert.ok(composed.template.html.includes("Manage Newsletters"), "and keeps its chrome");
+  assert.equal(composed.subject, "Lead story", "the lead story still names the edition");
+});
+
+test("hasStoryRegions is the opt-in signal", () => {
+  assert.equal(hasStoryRegions({ html: realTemplate }), true);
+  assert.equal(hasStoryRegions({ html: "<p>plain</p>" }), false);
+  assert.equal(hasStoryRegions({ blocks: [{ kind: "text", html: "<p>x</p>" }] }), false);
+});
