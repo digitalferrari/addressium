@@ -18,6 +18,7 @@
  * Nothing here writes. `applyMapping` is pure so the console can preview a file
  * honestly before the operator commits to it.
  */
+import { isSendableEmail } from "./email-address.js";
 import type { SubscriptionConsent } from "@addressium/core";
 import { parseCsv } from "./importer.js";
 import { parseImportFile } from "./import-file.js";
@@ -421,6 +422,8 @@ export function applyMapping(plan: MappingPlan, row: Record<string, string>): Ma
     }
   }
 
-  if (!out.email.includes("@")) out.reasons.push("missing or invalid email address");
+  // Same check as the CSV path (#293): reject what SES rejects, rather than
+  // admitting `a@@b` and letting it reject on every edition for ever.
+  if (!isSendableEmail(out.email)) out.reasons.push("missing or invalid email address");
   return out;
 }

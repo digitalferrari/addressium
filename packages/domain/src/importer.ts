@@ -8,6 +8,7 @@
  */
 import { randomUUID } from "node:crypto";
 import type { Subscriber, Subscription, SubscriptionStatus } from "@addressium/core";
+import { isSendableEmail } from "./email-address.js";
 import { ConcurrentModificationError } from "./ports.js";
 import type { Clock, Stores } from "./ports.js";
 
@@ -74,7 +75,10 @@ export async function importCsvSubscribers(
 
   for (const row of rows) {
     const email = (row["email"] ?? "").trim().toLowerCase();
-    if (!email.includes("@")) {
+    // Reject what SES rejects, HERE (#293). Admitting `a@@b` or `a@` puts a
+    // permanently-unsendable address on the list, and it then rejects on every
+    // edition for ever — one SES call and one `reject` event each morning.
+    if (!isSendableEmail(email)) {
       report.errors.push(`invalid email in row: ${JSON.stringify(row)}`);
       continue;
     }
