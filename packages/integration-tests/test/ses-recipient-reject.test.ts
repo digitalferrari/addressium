@@ -142,3 +142,48 @@ test("an error naming BOTH the sender and the recipient aborts the slice", async
     },
   );
 });
+
+/**
+ * The realistic PRODUCTION per-recipient failure (#293).
+ *
+ * The sandbox's "not verified" rejection disappears in production, but a
+ * malformed address does not: `importSubscribers` admits any row whose email
+ * contains an `@`, so `a@@b` and `a@` reach the send path from real uploaded
+ * lists. Without this the fix would have looked complete in dev and still
+ * stranded a 20k edition on the first bad row.
+ *
+ * These messages are the LIVE responses from SES (us-east-1, 2026-09-23), not
+ * invented ones — and note the exception is `BadRequestException`, not
+ * `MessageRejected`.
+ */
+test("a malformed destination address is per-recipient", async () => {
+  for (const message of ["Domain contains illegal character", "Missing domain"]) {
+    const sender = new SesEmailSender("cs-acme", throwingClient("BadRequestException", message));
+    await assert.rejects(
+      () => sender.send({ ...base, to: "nobody@@invalid.example" }),
+      (e: Error) => {
+        assert.ok(e instanceof RecipientRejectedError, `"${message}" should be per-recipient`);
+        return true;
+      },
+    );
+  }
+});
+
+test("a request-level BadRequestException still aborts the slice", async () => {
+  // `BadRequestException` also covers faults that are not about the recipient —
+  // a missing configuration set, a malformed body. Those fail identically for
+  // the next recipient, so the slice must abort and SQS must retry.
+  for (const message of [
+    "Configuration set <cs-acme> does not exist.",
+    "The request body is malformed.",
+  ]) {
+    const sender = new SesEmailSender("cs-acme", throwingClient("BadRequestException", message));
+    await assert.rejects(
+      () => sender.send(base),
+      (e: Error) => {
+        assert.ok(!(e instanceof RecipientRejectedError), `"${message}" must abort the slice`);
+        return true;
+      },
+    );
+  }
+});

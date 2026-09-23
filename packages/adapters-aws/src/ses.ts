@@ -117,17 +117,35 @@ export class SesEmailSender implements EmailSender {
       await this.sendCommand(msg, headers);
     } catch (e) {
       const err = e as { name?: string; message?: string };
-      // Names the recipient AND NOT the sender. SES lists every failing identity
-      // in one message, so an error naming both is an account-wide fault that
-      // merely mentions the recipient in passing — treating that as
-      // per-recipient would skip every recipient and report a completed send
-      // that mailed nobody.
+      // (a) `MessageRejected` that names the recipient AND NOT the sender. SES
+      // lists every failing identity in one message, so an error naming both is
+      // an account-wide fault that merely mentions the recipient in passing —
+      // treating that as per-recipient would skip every recipient and report a
+      // completed send that mailed nobody.
       if (
         err?.name === "MessageRejected" &&
         namesRecipient(err.message, msg.to) &&
         !namesRecipient(err.message, msg.from)
       ) {
         throw new RecipientRejectedError(msg.to, err.message ?? "MessageRejected");
+      }
+      // (b) A MALFORMED destination address. This is the realistic per-recipient
+      // failure in production — the sandbox's "not verified" case disappears
+      // there, but an address like `a@@b` or `a@` does not: the importer admits
+      // anything containing an `@`, so these reach the send path from real
+      // uploaded lists.
+      //
+      // Confirmed against live SES (2026-09-23), which raises
+      // `BadRequestException`, NOT `MessageRejected`:
+      //   nobody@@invalid.example -> "Domain contains illegal character"
+      //   trailing@               -> "Missing domain"
+      //
+      // Matched on the message rather than the exception name alone, because
+      // `BadRequestException` also covers request-level faults (a missing
+      // configuration set, a malformed body) that are NOT about one recipient
+      // and must keep aborting the slice.
+      if (err?.name === "BadRequestException" && MALFORMED_ADDRESS.test(err.message ?? "")) {
+        throw new RecipientRejectedError(msg.to, err.message ?? "BadRequestException");
       }
       throw e;
     }
@@ -174,6 +192,14 @@ export class SesEmailSender implements EmailSender {
  * one. Compared case-insensitively because SES echoes the address as given,
  * and addresses are case-insensitive in the domain part.
  */
+/**
+ * SES's wording for an address it cannot parse. Narrow on purpose: a
+ * `BadRequestException` that is not about the destination address — a missing
+ * configuration set, a malformed body — must still abort the slice, because the
+ * next recipient would fail identically.
+ */
+const MALFORMED_ADDRESS = /illegal character|missing domain|invalid.*address|address.*invalid|local address contains|domain contains/i;
+
 function namesRecipient(message: string | undefined, recipient: string): boolean {
   if (!message || !recipient) return false;
   return message.toLowerCase().includes(recipient.toLowerCase());
