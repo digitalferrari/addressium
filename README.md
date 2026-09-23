@@ -182,11 +182,12 @@ refuses root):
 export AWS_PROFILE=addressium-deploy   # profile assuming addressium-<stage>-deployer
 npm install
 npm run build
-npm run deploy          # deploy:check runs first — an && chain, not a hook
+# Infrastructure and all three SPAs. The change-set gate runs first — an && chain,
+# not a hook — then CloudFormation, then the bundles.
+ADDRESSIUM_PUBLIC_ORG_ID=<your-org-id> npm run deploy
 
-# The SPAs are a SEPARATE step. `npm run deploy` is only `deploy:check && cdk
-# deploy`; it ships Lambdas and leaves the admin/subscriber/public bundles stale.
-ADDRESSIUM_PUBLIC_ORG_ID=<your-org-id> node scripts/publish-spas.mjs
+# Either half separately, when you want just one:
+#   npm run deploy:infra    npm run deploy:spas
 ```
 
 `confirmUrlBase` has **no usable default** — leave it and every confirmation
@@ -211,9 +212,9 @@ Details: [`scripts/README.md`](scripts/README.md) ·
 ```bash
 npm test                # full Node suite; LocalStack-only cases skip if unavailable
 npm run deploy:check    # dry run — refuses anything that would destroy data
-npm run deploy          # in place; CloudFormation rolls back on failure.
-                        # API/infra ONLY — does not publish the SPAs.
-ADDRESSIUM_PUBLIC_ORG_ID=<your-org-id> node scripts/publish-spas.mjs
+ADDRESSIUM_PUBLIC_ORG_ID=<your-org-id> \
+  npm run deploy        # in place; CloudFormation rolls back on failure.
+                        # Stack first, then all three SPA bundles.
 curl $API/version       # running build and the marker written by the deploy migration
 ```
 

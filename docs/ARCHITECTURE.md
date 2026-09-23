@@ -50,8 +50,8 @@ every org in a deployment is operated by the same owner.
 4. **Email-only core** — the domain model and pipeline are built and tested for
    email. Non-email channels are out of scope.
 5. **A deploy an operator can trust** — a one-time bootstrap stack and a
-   permissions boundary, then a gated `npm run deploy` plus a `publish-spas`
-   step for the SPAs (§9). An operator
+   permissions boundary, then a single gated `npm run deploy` that ships the
+   stack and the SPAs together (§9). An operator
    should get to "verified domain, first list, first send" quickly, without ever
    handing admin credentials to a pipeline.
 6. **Multi-org by design** — one deployment runs many isolated publications: a
@@ -1982,9 +1982,10 @@ link can ever grant, not from assuming it stays private:
   common hardening setting. The guard had consequently never run once. A `&&`
   chain cannot be disabled by configuration; do not move it back. The sequence lives
   in the README's Install section and in [`DEPLOYMENT.md`](./DEPLOYMENT.md) —
-  follow those, not a remembered `cdk deploy`. Note that `npm run deploy` covers
-  the CDK stack only: `scripts/publish-spas.mjs` publishes the three SPAs and is
-  a separate command outside CI ([`DEPLOYMENT.md`](./DEPLOYMENT.md) §5).
+  follow those, not a remembered `cdk deploy`. `npm run deploy` is
+  `deploy:infra && deploy:spas` (#294): the stack, then the three SPAs. It used
+  to cover the CDK stack alone, which left the bundles stale on every deploy
+  that changed a frontend ([`DEPLOYMENT.md`](./DEPLOYMENT.md) §5).
 - **`deploy:check` is a data-destruction guard, not a health check.** It creates
   a CloudFormation **change set without executing it** and exits non-zero if any
   data-holding resource would be replaced or removed. This exists because
@@ -2507,7 +2508,7 @@ list an operator reads before trusting an install:
   `/confirm` and `/unsubscribe` resolve there, and public-web lives under
   `/signup/`. Delete that `base` and both build to `/`, where whichever syncs
   last silently overwrites the other's `index.html`. `scripts/publish-spas.mjs`
-  handles this, and `npm run deploy` does **not** invoke it (§9).
+  handles this, and `npm run deploy` invokes it via `deploy:spas` (§9).
 - **Custom SPA domains are implemented but unconfigured.** Optional
   `adminCustomDomain` / `publicCustomDomain` supplies a hostname; CDK validates a
   CloudFront certificate in us-east-1, creates A/AAAA aliases, and uses the

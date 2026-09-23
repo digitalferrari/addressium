@@ -223,11 +223,13 @@ identity — never as the account root**:
 ```bash
 export AWS_PROFILE=addressium-deploy   # a profile that assumes addressium-<stage>-deployer
 
-npm run deploy         # deploy:check runs first — an && chain, not a hook
+# Infrastructure AND all three SPAs. The gate runs first — an && chain, not a
+# hook — then CloudFormation, then the bundles.
+ADDRESSIUM_PUBLIC_ORG_ID=<your-org-id> npm run deploy
 
-# §5 — a SEPARATE command. `npm run deploy` ships Lambdas and CloudFormation
-# only; it leaves the three SPA bundles in S3 exactly as they were.
-ADDRESSIUM_PUBLIC_ORG_ID=<your-org-id> node scripts/publish-spas.mjs
+# The halves are separately runnable when you want just one:
+#   npm run deploy:infra   # gate + CloudFormation
+#   npm run deploy:spas    # rebuild and publish the three SPAs
 ```
 
 > **Root deploys are refused.** `deploy-check.sh` calls `sts:get-caller-identity`
@@ -258,15 +260,22 @@ ADDRESSIUM_PUBLIC_ORG_ID=<your-org-id> node scripts/publish-spas.mjs
 > to everyone, and a real hostname there is worse than the placeholder — it
 > silently routes other operators' confirmation tokens to your distribution.
 
-> **`npm run deploy` is not the whole deploy.** It is `deploy:check && cdk
-> deploy`; `scripts/publish-spas.mjs` is referenced only from
-> `.github/workflows/ci.yml`, so outside CI nothing publishes the SPAs. Deploy
-> without it and the API moves forward while the operator console, subscriber
-> site and signup page stay on the previously uploaded build — a deploy that
-> reports complete success and changes nothing the operator can see.
+> **`npm run deploy` is now the whole deploy** (#294). It used to be
+> `deploy:check && cdk deploy`, with `scripts/publish-spas.mjs` referenced only
+> from `.github/workflows/ci.yml` — so outside CI nothing published the SPAs.
+> A deploy moved the API forward while the operator console, subscriber site and
+> signup page stayed on the previously uploaded build: complete success
+> reported, nothing visible changed. Since a frontend change is the common case,
+> that failure mode fired more often than not.
+>
+> `deploy` is now `deploy:infra && deploy:spas`. `publish-spas.mjs` rebuilds
+> each SPA from source before syncing, so a stale `dist/` cannot be published
+> either. It needs `ADDRESSIUM_PUBLIC_ORG_ID`, and fails loudly without it
+> rather than publishing a mis-configured bundle.
 
-`deploy` invokes `deploy:check` directly (`deploy:check && cdk deploy`), so
-`scripts/deploy-check.sh` always runs first. It creates a CloudFormation **change
+`deploy:infra` invokes `deploy:check` directly (`deploy:check && cdk deploy`),
+and `deploy` runs `deploy:infra` first, so `scripts/deploy-check.sh` always runs
+before anything reaches CloudFormation. It creates a CloudFormation **change
 set without executing it**, inspects it, and exits non-zero — aborting the deploy
 — if any data-holding resource would be **replaced or removed**:
 
@@ -388,7 +397,7 @@ with both analytics flags on, plus `BackupVaultName` in prod:
 | --- | --- |
 | `HttpApiUrl` | `VITE_API_BASE` for all three SPAs (§5). A URL, not an ARN. |
 | `AdminPoolId` / `AdminClientId` | `VITE_COGNITO_*` for the admin console. |
-| `AdminSiteBucket` / `PublicSiteBucket` | `scripts/publish-spas.mjs` syncs the built SPAs into these — `npm run deploy` does **not** run it (§5). `PublicSiteBucket` holds **two** apps at different prefixes; see §5 before syncing it by hand. |
+| `AdminSiteBucket` / `PublicSiteBucket` | `npm run deploy:spas` (`scripts/publish-spas.mjs`) syncs the built SPAs into these; `npm run deploy` runs it after the stack (§5). `PublicSiteBucket` holds **two** apps at different prefixes; see §5 before syncing it by hand. |
 | `AdminSiteUrl` / `PublicSiteUrl` | CloudFront **domain names** — not ARNs. |
 | `ApiStageArn` | Attach your REGIONAL WebACL here (§8). |
 | `AdminDistributionId` / `PublicDistributionId` | Attach your CLOUDFRONT-scope WebACL to these (§8). |
@@ -447,10 +456,11 @@ build time:
 > `POST /preferences/request`, `GET`/`POST /preferences`); its management page
 > is `/preferences` in the subscriber SPA.
 
-`node scripts/publish-spas.mjs` builds and publishes all three SPAs from the
-deployed stack outputs; tagged CI runs it immediately after a successful stack
-deploy. It requires `ADDRESSIUM_PUBLIC_ORG_ID` and is also usable from an
-operator workstation. Prefer it over the manual route — the block below shows
+`npm run deploy:spas` (`scripts/publish-spas.mjs`) builds and publishes all
+three SPAs from the deployed stack outputs. `npm run deploy` runs it after the
+stack, and CI runs the same script as its own step. It requires
+`ADDRESSIUM_PUBLIC_ORG_ID` and is also usable on its own from an operator
+workstation. Prefer it over the manual route — the block below shows
 the build/sync/invalidate **shape for `admin-web` only**, not an equivalent of
 the script, which also builds and publishes `subscriber-web` and `public-web`
 at their respective prefixes (see the `--exclude 'signup/*'` hazard below):
@@ -846,9 +856,8 @@ From the repo root:
 
 ```bash
 npm --workspace @addressium/infra-cdk run diff   # preview the change
-npm run deploy                                   # roll forward (§4) — API only
 ADDRESSIUM_PUBLIC_ORG_ID=<your-org-id> \
-  node scripts/publish-spas.mjs                  # the SPAs (§5) — not automatic
+  npm run deploy                                 # stack (§4) then SPAs (§5)
 curl $API/version                                # running vs deployed
 ```
 
@@ -978,9 +987,8 @@ every record with a "why" note for this reason.
 
 ```bash
 export AWS_PROFILE=addressium-deploy   # the gate refuses the account root
-npm run deploy        # deploy:check runs first — an && chain, not a hook
 ADDRESSIUM_PUBLIC_ORG_ID=<your-org-id> \
-  node scripts/publish-spas.mjs   # the SPAs — `npm run deploy` skips them (§5)
+  npm run deploy      # gate, then CloudFormation, then all three SPAs
 AWS_REGION=us-east-1 SMOKE_STACK=addressium-dev \
   SMOKE_RECIPIENT=addressium-test@identithing.com \
   SMOKE_ADMIN_TOKEN='<short-lived Cognito token>' npm run test:e2e

@@ -115,7 +115,7 @@ jobs:
         if: vars.DEPLOY_ROLE_ARN != ''
         env:
           ADDRESSIUM_PUBLIC_ORG_ID: ${{ vars.ADDRESSIUM_PUBLIC_ORG_ID }}
-        run: node scripts/publish-spas.mjs
+        run: npm run deploy:spas
 
   # A published GitHub release is the notification channel for self-hosted
   # operators: watchers receive GitHub's release notification, and the notes
