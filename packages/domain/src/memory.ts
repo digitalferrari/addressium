@@ -34,6 +34,8 @@ import type {
   AlertMessage,
   AlertPublisher,
   ArchiveStore,
+  CampaignBody,
+  CampaignBodyStore,
   CampaignScheduler,
   CampaignSeriesStore,
   FeedStore,
@@ -307,6 +309,16 @@ export class MemSuppression implements SuppressionStore {
   }
   async list(orgId: string) {
     return [...this.orgScoped.values()].filter((e) => e.orgId === orgId);
+  }
+}
+
+export class MemCampaignBodies implements CampaignBodyStore {
+  private map = new Map<string, CampaignBody>();
+  async get(orgId: string, campaignId: string) {
+    return this.map.get(subKey(orgId, campaignId));
+  }
+  async put(b: CampaignBody) {
+    this.map.set(subKey(b.orgId, b.campaignId), b);
   }
 }
 
@@ -739,6 +751,7 @@ export function memStores(): Stores {
     lists: new MemLists(),
     suppression: new MemSuppression(),
     archive: new MemArchive(),
+    campaignBodies: new MemCampaignBodies(),
     events,
     entitlements: new MemEntitlements(),
     sendClaims: new MemSendClaims(),

@@ -410,3 +410,134 @@ test("a recurring edition is durably tied to its parent series for aggregation",
   assert.equal(edition?.seriesId, "weekly-ledger");
   assert.equal(edition?.counters.sent, 1);
 });
+
+/**
+ * The structured body is kept when a campaign is scheduled (#298).
+ *
+ * Nothing reads it yet — the just-in-time series read (#303), duplicate (#307)
+ * and revise (#312) all depend on it existing first. It is written now so that
+ * by the time those land the population is already there rather than starting
+ * empty, and so this write can be proven correct on its own.
+ *
+ * Why it cannot come from the existing archive: `EmailArchive` holds the
+ * RENDERED html of a campaign that already sent — merge values resolved, series
+ * ad fills applied, block kinds flattened into anchors. It answers "what did
+ * subscribers receive". Only this answers "what did the operator compose", and
+ * only this can be loaded back into an editor.
+ */
+test("scheduling a one-off keeps its structured body", async () => {
+  const scheduler = new CaptureScheduler();
+  await api.scheduleCampaignHandler(scheduleEvent(composeBody("body-oneoff")), { scheduler });
+
+  const saved = await stores.campaignBodies.get(ORG, "body-oneoff");
+  assert.ok(saved, "a one-off must keep its body");
+  assert.equal(saved.subject, "Weekly ledger");
+  assert.equal(saved.listId, LIST);
+  assert.deepEqual(saved.template, { blocks: [{ kind: "text", html: "<p>Hello</p>" }] });
+  assert.equal(saved.rootCampaignId, "body-oneoff", "an original roots at itself");
+  assert.equal(saved.version, 1);
+  assert.ok(saved.savedAt, "must be stamped");
+});
+
+test("scheduling a recurring series keeps its body too", async () => {
+  // The series path is the one that most needs this: its body is otherwise
+  // frozen into the EventBridge payload at schedule time and unreachable.
+  const scheduler = new CaptureScheduler();
+  await api.scheduleCampaignHandler(
+    scheduleEvent(composeBody("body-series", { when: { type: "recurring", cron: "cron(0 13 * * ? *)" } })),
+    { scheduler },
+  );
+
+  const saved = await stores.campaignBodies.get(ORG, "body-series");
+  assert.ok(saved, "a series must keep its body");
+  assert.deepEqual(saved.template, { blocks: [{ kind: "text", html: "<p>Hello</p>" }] });
+});
+
+test("the SANITIZED template is stored, not the raw request body", async () => {
+  // The stored body is what a re-send or a re-open would use, so storing the
+  // unsanitized input would let a later path bypass the hardening this route
+  // just applied.
+  const scheduler = new CaptureScheduler();
+  await api.scheduleCampaignHandler(
+    scheduleEvent(
+      composeBody("body-sanitized", {
+        template: { html: '<p>ok</p><script>alert(1)</script>' },
+      }),
+    ),
+    { scheduler },
+  );
+
+  const saved = await stores.campaignBodies.get(ORG, "body-sanitized");
+  assert.ok(saved);
+  assert.ok(saved.template.html, "raw html mode round-trips as html");
+  assert.ok(!/<script/i.test(saved.template.html), "the script tag must not survive into storage");
+});
+
+test("editorSource is kept so an MJML campaign can be re-opened as MJML", async () => {
+  // MJML is compiled in the browser and only the compiled html reaches the
+  // server, so without this a re-opened campaign hands the operator html and
+  // their source is gone.
+  const scheduler = new CaptureScheduler();
+  const mjml = "<mjml><mj-body><mj-text>Hi</mj-text></mj-body></mjml>";
+  await api.scheduleCampaignHandler(
+    scheduleEvent(
+      composeBody("body-mjml", {
+        template: { mjmlHtml: "<p>Hi</p>" },
+        editorSource: { mode: "mjml", mjml },
+      }),
+    ),
+    { scheduler },
+  );
+
+  const saved = await stores.campaignBodies.get(ORG, "body-mjml");
+  assert.ok(saved);
+  assert.equal(saved.editorSource?.mode, "mjml");
+  assert.equal(saved.editorSource?.mjml, mjml, "the source must survive verbatim");
+  assert.equal(saved.template.html, "<p>Hi</p>", "but we still SEND the compiled html");
+});
+
+test("previewText is kept when supplied and absent when not", async () => {
+  const scheduler = new CaptureScheduler();
+  await api.scheduleCampaignHandler(
+    scheduleEvent(composeBody("body-preheader", { previewText: "This week: the ledger" })),
+    { scheduler },
+  );
+  const withText = await stores.campaignBodies.get(ORG, "body-preheader");
+  assert.equal(withText?.previewText, "This week: the ledger");
+
+  await api.scheduleCampaignHandler(scheduleEvent(composeBody("body-no-preheader")), { scheduler });
+  const without = await stores.campaignBodies.get(ORG, "body-no-preheader");
+  assert.equal(without?.previewText, undefined, "an absent preheader is absent, not empty string");
+});
+
+test("re-scheduling the same id keeps its lineage", async () => {
+  // Revise (#312) is what increments the version. Re-scheduling the same id is
+  // an overwrite, and must not look like a new root or a new version.
+  const scheduler = new CaptureScheduler();
+  await api.scheduleCampaignHandler(scheduleEvent(composeBody("body-lineage")), { scheduler });
+  await api.scheduleCampaignHandler(
+    scheduleEvent(composeBody("body-lineage", { subject: "Weekly ledger, corrected" })),
+    { scheduler },
+  );
+
+  const saved = await stores.campaignBodies.get(ORG, "body-lineage");
+  assert.equal(saved?.subject, "Weekly ledger, corrected", "the newer body wins");
+  assert.equal(saved?.rootCampaignId, "body-lineage");
+  assert.equal(saved?.version, 1, "an overwrite is not a revision");
+});
+
+test("the body is a sibling item, not a field on the campaign record", async () => {
+  // `appendEvent` issues an UpdateItem against the campaign record for EVERY
+  // engagement event, and DynamoDB bills those on full item size. A body stored
+  // there would multiply the write cost of every open and click.
+  const scheduler = new CaptureScheduler();
+  await api.scheduleCampaignHandler(scheduleEvent(composeBody("body-sibling")), { scheduler });
+
+  const campaign = await stores.campaigns.get(ORG, "body-sibling");
+  assert.ok(campaign, "the campaign record still exists");
+  assert.ok(
+    !("template" in campaign) && !("body" in campaign),
+    "the campaign record must not carry the body",
+  );
+  assert.ok(await stores.campaignBodies.get(ORG, "body-sibling"), "the body lives beside it");
+});

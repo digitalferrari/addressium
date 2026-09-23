@@ -806,6 +806,37 @@ export async function scheduleCampaignHandler(
       // cohort" campaign mailed the entire list.
       ...(body.segmentId ? { segmentId: body.segmentId } : {}),
     };
+    // Keep the STRUCTURED body, before it is frozen into a scheduler payload
+    // (#298). Written for both branches below, so a one-off and a recurring
+    // series are equally re-openable.
+    //
+    // This is not the `EmailArchive` the sender writes. That one holds RENDERED
+    // html of a campaign that already went out — merge values resolved, series
+    // ad fills applied, block kinds flattened away. It answers "what did
+    // subscribers receive"; only this answers "what did the operator compose".
+    //
+    // Nothing reads this yet. It is written now so that by the time the JIT read
+    // (#303), duplicate (#307) and revise (#312) paths land, the population is
+    // already there rather than starting empty.
+    const existingBody = await stores().campaignBodies.get(body.orgId, body.campaignId);
+    await stores().campaignBodies.put({
+      orgId: body.orgId,
+      campaignId: body.campaignId,
+      // The SANITIZED template, never `body.template` — the stored body must be
+      // the one the sender would consume, or re-sending it would bypass the
+      // hardening the schedule route just applied.
+      template,
+      subject: body.subject,
+      ...(body.previewText ? { previewText: body.previewText } : {}),
+      listId: body.listId,
+      ...(body.segmentId ? { segmentId: body.segmentId } : {}),
+      ...(body.editorSource ? { editorSource: body.editorSource } : {}),
+      // Re-scheduling the same id keeps its lineage; a fresh campaign roots at
+      // itself. Revise (#312) is what increments the version.
+      rootCampaignId: existingBody?.rootCampaignId ?? body.campaignId,
+      version: existingBody?.version ?? 1,
+      savedAt: clock.now().toISOString(),
+    });
     const feed = body.feedId ? await stores().feeds.get(body.orgId, body.feedId) : undefined;
     if (body.feedId && !feed) return json(400, { error: `unknown feed "${body.feedId}"` });
     if (body.feedId && body.when.type !== "recurring") {

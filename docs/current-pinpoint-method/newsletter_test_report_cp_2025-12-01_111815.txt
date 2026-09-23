@@ -1,0 +1,167 @@
+============================================================================
+NEWSLETTER SCHEDULING UNIT TEST REPORT
+============================================================================
+Market Code: cp
+Config File: ./Configs/cpConfig.ini
+Generated: 2025-12-01 11:18:15
+Simulation: 2025-12-01 00:00 to 2025-12-08 00:00
+============================================================================
+
+[2025-12-01 10:20:00] (Monday)
+  >>> ACTUAL EMAIL SEND: Obituary Notices
+      Scheduled Send Time: 2025-12-01 10:30:00
+      Type: Category | Frequency: WEEKLY
+      Segment: TRENT TEST
+  >>> ACTUAL EMAIL SEND: Obituary Notices
+      Scheduled Send Time: 2025-12-01 10:30:00
+      Type: Manual | Frequency: WEEKLY
+      Segment: Nobody
+[2025-12-01 10:21:00] (Monday)
+      (Pinpoint API update for: Obituary Notices)
+      (Pinpoint API update for: Obituary Notices)
+[2025-12-01 10:22:00] (Monday)
+      (Pinpoint API update for: Obituary Notices)
+      (Pinpoint API update for: Obituary Notices)
+[2025-12-01 10:23:00] (Monday)
+      (Pinpoint API update for: Obituary Notices)
+      (Pinpoint API update for: Obituary Notices)
+[2025-12-01 10:24:00] (Monday)
+      (Pinpoint API update for: Obituary Notices)
+      (Pinpoint API update for: Obituary Notices)
+[2025-12-01 10:25:00] (Monday)
+      (Pinpoint API update for: Obituary Notices)
+      (Pinpoint API update for: Obituary Notices)
+[2025-12-02 10:50:00] (Tuesday)
+  >>> ACTUAL EMAIL SEND: Today&apos;s News Headlines
+      Scheduled Send Time: 2025-12-02 11:00:00
+      Type: Manual | Frequency: CUSTOM
+      Segment: Daily and Breaking News
+[2025-12-02 10:51:00] (Tuesday)
+      (Pinpoint API update for: Today&apos;s News Headlines)
+[2025-12-02 10:52:00] (Tuesday)
+      (Pinpoint API update for: Today&apos;s News Headlines)
+[2025-12-02 10:53:00] (Tuesday)
+      (Pinpoint API update for: Today&apos;s News Headlines)
+[2025-12-02 10:54:00] (Tuesday)
+      (Pinpoint API update for: Today&apos;s News Headlines)
+[2025-12-02 10:55:00] (Tuesday)
+      (Pinpoint API update for: Today&apos;s News Headlines)
+[2025-12-02 13:50:00] (Tuesday)
+  >>> ACTUAL EMAIL SEND: The latest job openings from Craig and surrounding areas.
+      Scheduled Send Time: 2025-12-02 14:00:00
+      Type: Feed | Frequency: CUSTOM
+      Segment: Classified Employment
+[2025-12-02 13:51:00] (Tuesday)
+      (Pinpoint API update for: The latest job openings from Craig and surrounding areas.)
+[2025-12-02 13:52:00] (Tuesday)
+      (Pinpoint API update for: The latest job openings from Craig and surrounding areas.)
+[2025-12-02 13:53:00] (Tuesday)
+      (Pinpoint API update for: The latest job openings from Craig and surrounding areas.)
+[2025-12-02 13:54:00] (Tuesday)
+      (Pinpoint API update for: The latest job openings from Craig and surrounding areas.)
+[2025-12-02 13:55:00] (Tuesday)
+      (Pinpoint API update for: The latest job openings from Craig and surrounding areas.)
+[2025-12-03 10:50:00] (Wednesday)
+  >>> ACTUAL EMAIL SEND: Today&apos;s News Headlines
+      Scheduled Send Time: 2025-12-03 11:00:00
+      Type: Manual | Frequency: CUSTOM
+      Segment: Daily and Breaking News
+[2025-12-03 10:51:00] (Wednesday)
+      (Pinpoint API update for: Today&apos;s News Headlines)
+[2025-12-03 10:52:00] (Wednesday)
+      (Pinpoint API update for: Today&apos;s News Headlines)
+[2025-12-03 10:53:00] (Wednesday)
+      (Pinpoint API update for: Today&apos;s News Headlines)
+[2025-12-03 10:54:00] (Wednesday)
+      (Pinpoint API update for: Today&apos;s News Headlines)
+[2025-12-03 10:55:00] (Wednesday)
+      (Pinpoint API update for: Today&apos;s News Headlines)
+[2025-12-04 10:50:00] (Thursday)
+  >>> ACTUAL EMAIL SEND: Today&apos;s News Headlines
+      Scheduled Send Time: 2025-12-04 11:00:00
+      Type: Manual | Frequency: CUSTOM
+      Segment: Daily and Breaking News
+[2025-12-04 10:51:00] (Thursday)
+      (Pinpoint API update for: Today&apos;s News Headlines)
+[2025-12-04 10:52:00] (Thursday)
+      (Pinpoint API update for: Today&apos;s News Headlines)
+[2025-12-04 10:53:00] (Thursday)
+      (Pinpoint API update for: Today&apos;s News Headlines)
+[2025-12-04 10:54:00] (Thursday)
+      (Pinpoint API update for: Today&apos;s News Headlines)
+[2025-12-04 10:55:00] (Thursday)
+      (Pinpoint API update for: Today&apos;s News Headlines)
+[2025-12-05 13:50:00] (Friday)
+  >>> ACTUAL EMAIL SEND: The latest job openings from Craig and surrounding areas.
+      Scheduled Send Time: 2025-12-05 14:00:00
+      Type: Feed | Frequency: CUSTOM
+      Segment: Classified Employment
+[2025-12-05 13:51:00] (Friday)
+      (Pinpoint API update for: The latest job openings from Craig and surrounding areas.)
+[2025-12-05 13:52:00] (Friday)
+      (Pinpoint API update for: The latest job openings from Craig and surrounding areas.)
+[2025-12-05 13:53:00] (Friday)
+      (Pinpoint API update for: The latest job openings from Craig and surrounding areas.)
+[2025-12-05 13:54:00] (Friday)
+      (Pinpoint API update for: The latest job openings from Craig and surrounding areas.)
+[2025-12-05 13:55:00] (Friday)
+      (Pinpoint API update for: The latest job openings from Craig and surrounding areas.)
+
+
+============================================================================
+                              SUMMARY
+============================================================================
+
+IMPORTANT DISTINCTION:
+  - 'Actual Email Sends': Unique emails sent (1 per newsletter per scheduled time)
+  - 'Pinpoint API Updates': API calls made (up to 6 per send, one per minute in window)
+----------------------------------------------------------------------------
+
+ACTUAL EMAIL SENDS BY NEWSLETTER:
+----------------------------------------------------------------------------
+
+Obituary Notices (2 sends):
+  - 2025-12-01 10:30:00 (Monday)
+  - 2025-12-01 10:30:00 (Monday)
+
+Today&apos;s News Headlines (3 sends):
+  - 2025-12-02 11:00:00 (Tuesday)
+  - 2025-12-03 11:00:00 (Wednesday)
+  - 2025-12-04 11:00:00 (Thursday)
+
+The latest job openings from Craig and surrounding areas. (2 sends):
+  - 2025-12-02 14:00:00 (Tuesday)
+  - 2025-12-05 14:00:00 (Friday)
+
+
+ACTUAL EMAIL SENDS BY DAY:
+----------------------------------------------------------------------------
+
+2025-12-01 (Monday):
+  10:30 - Obituary Notices
+  10:30 - Obituary Notices
+
+2025-12-02 (Tuesday):
+  11:00 - Today&apos;s News Headlines
+  14:00 - The latest job openings from Craig and surrounding areas.
+
+2025-12-03 (Wednesday):
+  11:00 - Today&apos;s News Headlines
+
+2025-12-04 (Thursday):
+  11:00 - Today&apos;s News Headlines
+
+2025-12-05 (Friday):
+  14:00 - The latest job openings from Craig and surrounding areas.
+
+
+STATISTICS:
+----------------------------------------------------------------------------
+Total Newsletters: 5
+Total Actual Email Sends: 7
+Total Pinpoint API Updates: 42
+Total Skip Events: 0
+Simulation Period: 7 days (10,080 minutes)
+
+Average API Updates per Send: 6
+(Expected: ~6 API updates per send due to 6-minute send window)

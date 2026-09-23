@@ -52,6 +52,8 @@ import type {
   AlertConfigStore,
   ApiKeyStore,
   ArchiveStore,
+  CampaignBody,
+  CampaignBodyStore,
   CampaignSeriesStore,
   FeedStore,
   CampaignStore,
@@ -816,6 +818,18 @@ export class DynamoStores implements Stores {
         KeyConditionExpression: "pk = :pk AND begins_with(sk, :s)",
         ExpressionAttributeValues: { ":pk": `${org(orgId)}#SUPPRESSION`, ":s": "EMAIL#" },
       }),
+  };
+
+  /**
+   * Sibling of the campaign record, not a field on it: `appendEvent` updates
+   * `CAMPAIGNREC#<id>` per engagement event and DynamoDB bills on full item
+   * size, so a body stored there would multiply the cost of every open.
+   */
+  campaignBodies: CampaignBodyStore = {
+    get: (orgId, campaignId) =>
+      this.get<CampaignBody>(`${org(orgId)}#CAMPAIGN#${campaignId}`, "BODY"),
+    put: (b) =>
+      this.put({ pk: `${org(b.orgId)}#CAMPAIGN#${b.campaignId}`, sk: "BODY", data: b }),
   };
 
   archive: ArchiveStore = {

@@ -305,7 +305,28 @@ export const scheduleCampaignSchema = z.object({
   /** Optional configured feed used to build each recurring edition. */
   feedId: idSchema.optional(),
   subject: z.string().min(1),
+  /**
+   * Inbox preview line (#302). Rendered as a hidden div at the top of the body,
+   * so it shows in the inbox list next to the subject and nowhere in the email.
+   *
+   * Capped because clients only display the first ~100-150 characters, and a
+   * long one just pushes real content into the preheader slot.
+   */
+  previewText: z.string().max(200).optional(),
   template: emailTemplateSchema,
+  /**
+   * What the operator was editing, kept so the campaign can be re-opened (#298).
+   *
+   * NEVER sent. MJML is compiled in the browser and only the compiled html
+   * reaches `template`, so without this a re-opened MJML campaign would come
+   * back as html and the operator's source would be silently lost.
+   */
+  editorSource: z
+    .object({
+      mode: z.enum(["blocks", "html", "mjml"]),
+      mjml: z.string().max(400_000).optional(),
+    })
+    .optional(),
   when: z.union([
     z.object({ type: z.literal("now") }),
     z.object({ type: z.literal("at"), at: z.string().min(1) }),

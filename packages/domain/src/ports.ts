@@ -345,6 +345,56 @@ export interface SuppressionStore {
   list(orgId: string): Promise<SuppressionEntry[]>;
 }
 
+/**
+ * The structured body a campaign was scheduled with, kept so it can be re-read
+ * at send time, duplicated, or re-opened for editing (#298).
+ *
+ * NOT the same thing as `EmailArchive`. That holds the RENDERED html of a
+ * campaign that already went out — flattened, merge values resolved, series ad
+ * fills baked in, block kinds erased. It answers "what did subscribers
+ * receive"; it cannot answer "what did the operator compose", and it cannot be
+ * loaded back into an editor.
+ *
+ * Lives here rather than in `@addressium/core` because it carries an
+ * `EmailTemplate`, for the same reason `SendDescriptor` does.
+ */
+export interface CampaignBody {
+  orgId: string;
+  campaignId: string;
+  /** Sanitized at the API boundary — exactly what the sender consumes. */
+  template: EmailTemplate;
+  subject: string;
+  previewText?: string;
+  listId?: string;
+  segmentId?: string;
+  /**
+   * What the operator was editing, which is NOT always what we send.
+   *
+   * MJML is compiled in the browser, so only the compiled html reaches the
+   * server. Without the source, re-opening an MJML campaign would hand the
+   * operator html and silently discard their work.
+   */
+  editorSource?: { mode: "blocks" | "html" | "mjml"; mjml?: string };
+  /** The campaign this was duplicated or revised from; itself if neither. */
+  rootCampaignId: string;
+  /** 1 for an original; incremented for each revision of the same root. */
+  version: number;
+  savedAt: string;
+}
+
+/**
+ * Bodies of scheduled campaigns (#298).
+ *
+ * Deliberately a SIBLING item rather than a field on the campaign record:
+ * `appendEvent` issues an UpdateItem against `CAMPAIGNREC#<id>` for every
+ * engagement event, and DynamoDB bills those on the full item size. A 150KB
+ * body would multiply the write cost of every open and click on the campaign.
+ */
+export interface CampaignBodyStore {
+  get(orgId: string, campaignId: string): Promise<CampaignBody | undefined>;
+  put(b: CampaignBody): Promise<void>;
+}
+
 export interface ArchiveStore {
   get(orgId: string, campaignId: string): Promise<EmailArchive | undefined>;
   put(a: EmailArchive): Promise<void>;
@@ -804,6 +854,7 @@ export interface Stores {
   lists: ListStore;
   suppression: SuppressionStore;
   archive: ArchiveStore;
+  campaignBodies: CampaignBodyStore;
   events: EventStore;
   entitlements: EntitlementStore;
   sendClaims: SendClaimStore;
