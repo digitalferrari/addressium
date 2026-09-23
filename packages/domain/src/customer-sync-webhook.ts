@@ -88,14 +88,51 @@ export function signCustomerSyncWebhook(
     .digest("hex")}`;
 }
 
-/** Useful to integration authors building an endpoint receiver. */
+/**
+ * How stale a signed request may be before a receiver should refuse it (#295).
+ *
+ * Five minutes: long enough to survive clock skew between two machines and a
+ * slow network, short enough that a captured request is not replayable for an
+ * afternoon. The signature covers the timestamp, so an attacker cannot move it
+ * without the key — but without a window check a valid old request stays valid
+ * forever, which is the whole replay problem.
+ */
+export const CUSTOMER_SYNC_MAX_SKEW_MS = 5 * 60 * 1000;
+
+/**
+ * Verify a delivery. Reference implementation for integration authors, and the
+ * thing they will copy — so it enforces the full contract rather than the
+ * signature alone.
+ *
+ * `docs/ARCHITECTURE.md` tells receivers to "reject timestamps outside their
+ * replay window and durably deduplicate eventId". The first half is now done
+ * here, because a reference verifier that omits a rule the documentation states
+ * teaches every integrator to omit it too.
+ *
+ * The second half — deduplicating `eventId` — cannot live here: it needs
+ * durable storage on the RECEIVER's side, and SQS retries deliberately preserve
+ * the id so that dedupe is possible. `eventId` is returned rather than
+ * swallowed for exactly that reason.
+ */
 export function verifyCustomerSyncWebhook(
   signature: string,
   secret: string,
   timestamp: string,
   eventId: string,
   body: string,
+  opts: { now?: Date; maxSkewMs?: number } = {},
 ): boolean {
+  // Checked BEFORE the HMAC: a stale request is refused whether or not its
+  // signature is valid, and there is no reason to spend the comparison.
+  const sent = Date.parse(timestamp);
+  if (Number.isNaN(sent)) return false;
+  const now = (opts.now ?? new Date()).getTime();
+  const skew = opts.maxSkewMs ?? CUSTOMER_SYNC_MAX_SKEW_MS;
+  // Absolute, so a request from a clock running fast is refused too. A future
+  // timestamp is as suspicious as an old one and is the easier mistake to make
+  // when an attacker controls neither clock.
+  if (Math.abs(now - sent) > skew) return false;
+
   const expected = Buffer.from(signCustomerSyncWebhook(secret, timestamp, eventId, body), "utf8");
   const actual = Buffer.from(signature, "utf8");
   return actual.length === expected.length && timingSafeEqual(actual, expected);

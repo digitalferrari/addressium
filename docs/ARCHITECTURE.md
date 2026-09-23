@@ -901,7 +901,12 @@ subscriptions, the entitlement, and the `sub` claim in every magic-link token
   `x-addressium-event-id`, `x-addressium-timestamp`, and
   `x-addressium-signature: v1=<hex>`. Receivers must reject timestamps outside
   their replay window and durably deduplicate `eventId`; SQS retries preserve
-  that ID. Rotating the configured secret emits a second
+  that ID. `verifyCustomerSyncWebhook` is the reference implementation and
+  enforces the window itself — five minutes either side by default, overridable
+  — because a reference verifier that omits a rule this document states teaches
+  every integrator to omit it too. Deduplication cannot live there: it needs
+  durable storage on the receiver's side, which is why the event id is a header
+  rather than something the helper consumes. Rotating the configured secret emits a second
   `x-addressium-previous-signature` for a 24-hour grace period, so a receiver
   can accept either key while it rolls forward. This implementation is locally
   tested but awaits a dev deployment/end-to-end webhook receiver test.
