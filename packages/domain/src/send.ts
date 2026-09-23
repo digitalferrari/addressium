@@ -29,7 +29,7 @@ import type {
 } from "./ports.js";
 import { mergeTagFallbacks } from "./merge-tags.js";
 import { applySeriesAdFills, buildLinkMap, plainTextFrom, renderForRecipient, type EmailTemplate } from "./render.js";
-import { completeScheduleRange, deferSend, scheduleActive } from "./schedule-state.js";
+import { completeScheduleRange, scheduleActive } from "./schedule-state.js";
 
 /** Alias kept for readability; a campaign send takes a SendDescriptor. */
 export type SendCampaignInput = SendDescriptor;
@@ -596,17 +596,19 @@ export async function sendCampaign(
   // archive is for.
   const schedule = await stores.schedules.get(input.orgId, input.campaignId);
   if (!scheduleActive(schedule)) {
-    if (schedule?.status === "paused") {
-      await deferSend(stores, clock, {
-        orgId: input.orgId,
-        campaignId: input.campaignId,
-        listId: input.listId,
-        subject: input.subject,
-        template: input.template,
-        campaignAttributes: input.campaignAttributes,
-        ...(input.seriesId ? { seriesId: input.seriesId } : {}),
-      });
-    }
+    // Pause SKIPS the firing; it does not park it (#304).
+    //
+    // A paused one-off used to be stored on its lifecycle record and
+    // re-enqueued on resume, so resuming days later mailed a send nobody
+    // expected, with content that had gone stale. Recurring already skipped —
+    // the launch handler returns `{skipped}` and the next firing is a fresh
+    // edition — and one-offs now match: a missed send stays missed, and an
+    // operator who still wants it reschedules or duplicates it, which is an
+    // explicit act rather than a surprise.
+    //
+    // The old parking existed because pause used to DESTROY the send outright
+    // (#179). Skipping is the third option: the lifecycle record and the
+    // campaign both survive, so nothing is lost except the firing.
     return { sent: 0, suppressed: 0, skipped: true };
   }
 

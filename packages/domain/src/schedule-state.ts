@@ -112,7 +112,7 @@ export async function transitionSchedule(
   stores: Stores,
   clock: Clock,
   input: { orgId: string; scheduleId: string; action: "start" | "pause" | "archive" },
-): Promise<SendScheduleState & { resumed?: SendDescriptor }> {
+): Promise<SendScheduleState> {
   const existing = await stores.schedules.get(input.orgId, input.scheduleId);
   if (!existing) throw new InvalidInputError(`unknown schedule ${input.scheduleId}`);
   if (existing.status === "completed" && input.action !== "archive") {
@@ -125,50 +125,26 @@ export async function transitionSchedule(
   const status: ScheduleStatus =
     input.action === "start" ? "active" : input.action === "pause" ? "paused" : "archived";
 
-  // A one-off that fired while paused was parked rather than dropped (#179).
-  // Resuming hands it back so the caller can re-enqueue it; archiving discards
-  // it, because a terminal state that leaves a send waiting to fire is not
-  // terminal.
-  const parked = existing.deferred as SendDescriptor | undefined;
-  const resumed = input.action === "start" ? parked : undefined;
-
   const state: SendScheduleState = {
     ...existing,
     revision: (existing.revision ?? 0) + 1,
     status,
     updatedAt: clock.now().toISOString(),
   };
-  // `pause` keeps whatever is parked; start and archive both clear it.
-  if (input.action !== "pause") delete state.deferred;
+  // Nothing is parked any more (#304), so nothing is handed back on resume.
+  //
+  // A paused one-off used to be stored here and re-enqueued on start, which
+  // meant resuming days later mailed a send nobody expected with content that
+  // had gone stale. Pause now skips the firing outright.
+  //
+  // A record written before this change may still carry `deferred`. Cleared on
+  // every transition rather than left to rot: keeping it would mean an operator
+  // who pauses and resumes an old schedule still gets the surprise send this
+  // removes, and the field has no other reader.
+  delete state.deferred;
 
   await stores.schedules.put(state, { ifRevision: existing.revision });
-  return resumed ? { ...state, resumed } : state;
-}
-
-/**
- * Park a one-off whose delivery arrived while the schedule was paused (#179).
- *
- * Called by the sender instead of silently dropping the message. Idempotent: a
- * redelivery overwrites the same parked descriptor rather than stacking.
- */
-export async function deferSend(
-  stores: Stores,
-  clock: Clock,
-  descriptor: SendDescriptor,
-): Promise<void> {
-  const existing = await stores.schedules.get(descriptor.orgId, descriptor.campaignId);
-  // Nothing to park against — a legacy send with no lifecycle record is treated
-  // as active by `scheduleActive`, so it never reaches here.
-  if (!existing || existing.status !== "paused") return;
-  await stores.schedules.put({
-    ...existing,
-    revision: (existing.revision ?? 0) + 1,
-    // The slice is deliberately dropped: on resume the campaign fans out afresh
-    // against the recipient set as it stands THEN, which is both correct and
-    // simpler than parking N slices and hoping they still tile the list.
-    deferred: { ...descriptor, slice: undefined },
-    updatedAt: clock.now().toISOString(),
-  }, { ifRevision: existing.revision });
+  return state;
 }
 
 /** Record a successful window. Only full coverage completes a one-off (#263).

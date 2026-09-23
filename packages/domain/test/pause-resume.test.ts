@@ -1,14 +1,25 @@
 /**
- * Pausing a one-off must defer it, not destroy it (#179).
+ * Pausing a one-off SKIPS the firing — it neither parks it nor destroys it
+ * (#304, superseding #179).
  *
- * The sequence that lost sends silently: the one-off EventBridge schedule fires
- * → `ActionAfterCompletion: DELETE` removes it → the message lands on SQS → the
- * sender sees `paused` and returns `{skipped: true}` → SQS deletes the message.
- * Nothing remains. Resume-then-Start produced no send at all, and the campaign
- * simply never went out.
+ * Three behaviours in sequence, and the history matters because each fixed the
+ * one before:
  *
- * The comment in `sendCampaign` claimed the gate was checked early "so resuming
- * can still send later". It wasn't true.
+ * Originally a pause DESTROYED the send: the one-off schedule fired,
+ * `ActionAfterCompletion: DELETE` removed it, the message landed on SQS, the
+ * sender saw `paused` and returned `{skipped: true}`, and SQS deleted the
+ * message. Nothing remained. Resume-then-Start produced no send at all.
+ *
+ * #179 fixed that by PARKING the descriptor on the lifecycle record and
+ * re-enqueuing it on resume. That solved the data loss and introduced a
+ * surprise: resuming days or weeks later mailed a send nobody was expecting,
+ * with content that had gone stale.
+ *
+ * #304 is the third option. The firing is skipped, the lifecycle record and the
+ * campaign both survive, and nothing is queued behind the pause. A missed send
+ * stays missed; an operator who still wants it reschedules or duplicates it,
+ * which is an explicit act rather than something that happens to them. This
+ * also makes one-offs behave like recurring series, which have always skipped.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -76,104 +87,100 @@ const descriptor = {
   template,
 };
 
-test("a paused one-off parks its send instead of dropping it", async () => {
+test("a paused one-off skips the firing without sending", async () => {
   const stores = await seeded();
-  await transitionSchedule(stores, clock, { orgId: ORG, scheduleId: CAMPAIGN, action: "pause" });
-
   const sender = new CaptureSender();
-  const out = await sendCampaign(stores, sender, undefined, clock, descriptor, {});
-  assert.equal(out.skipped, true);
-  assert.deepEqual(sender.sent, [], "paused means nothing goes out now");
+  await transitionSchedule(stores, clock, { orgId: ORG, scheduleId: CAMPAIGN, action: "pause" });
 
-  const parked = (await stores.schedules.get(ORG, CAMPAIGN))?.deferred as SendDescriptor | undefined;
-  assert.ok(parked, "the send must survive the message being deleted");
-  assert.equal(parked.subject, "Spring");
-  assert.equal(parked.campaignId, CAMPAIGN);
+  const result = await sendCampaign(stores, sender, undefined, clock, descriptor, {});
+
+  assert.equal(result.skipped, true);
+  assert.equal(sender.sent.length, 0, "a paused schedule sends nothing");
 });
 
-test("resuming hands the parked send back so it can be re-enqueued", async () => {
+test("nothing is parked, so resuming does not fire a stale send", async () => {
+  // The #179 behaviour this replaces: resume re-enqueued the parked descriptor,
+  // so an operator resuming a week later mailed content nobody had looked at.
   const stores = await seeded();
-  await transitionSchedule(stores, clock, { orgId: ORG, scheduleId: CAMPAIGN, action: "pause" });
-  await sendCampaign(stores, new CaptureSender(), undefined, clock, descriptor, {});
-
-  const resumedState = await transitionSchedule(stores, clock, {
-    orgId: ORG,
-    scheduleId: CAMPAIGN,
-    action: "start",
-  });
-  const resumed = (resumedState as { resumed?: SendDescriptor }).resumed;
-  assert.ok(resumed, "resume must return the send so the API can re-enqueue it");
-  assert.equal(resumed.campaignId, CAMPAIGN);
-
-  // ...and the parked copy is cleared, so a second resume does not re-send.
-  assert.equal((await stores.schedules.get(ORG, CAMPAIGN))?.deferred, undefined);
-  const second = await transitionSchedule(stores, clock, {
-    orgId: ORG,
-    scheduleId: CAMPAIGN,
-    action: "start",
-  });
-  assert.equal((second as { resumed?: SendDescriptor }).resumed, undefined, "resume is not a re-send button");
-});
-
-test("the re-enqueued send actually delivers", async () => {
-  // End to end: pause, fire, resume, deliver. This is the acceptance criterion —
-  // "pause → resume on a one-off results in the campaign actually sending".
-  const stores = await seeded();
-  await transitionSchedule(stores, clock, { orgId: ORG, scheduleId: CAMPAIGN, action: "pause" });
-  await sendCampaign(stores, new CaptureSender(), undefined, clock, descriptor, {});
-
-  const state = await transitionSchedule(stores, clock, {
-    orgId: ORG,
-    scheduleId: CAMPAIGN,
-    action: "start",
-  });
-  const resumed = (state as { resumed?: SendDescriptor }).resumed!;
-
   const sender = new CaptureSender();
-  const out = await sendCampaign(stores, sender, undefined, clock, resumed, {});
-  assert.equal(out.sent, 1);
-  assert.equal(sender.sent[0]?.to, "reader@x.com");
+  await transitionSchedule(stores, clock, { orgId: ORG, scheduleId: CAMPAIGN, action: "pause" });
+  await sendCampaign(stores, sender, undefined, clock, descriptor, {});
+
+  const resumed = await transitionSchedule(stores, clock, {
+    orgId: ORG,
+    scheduleId: CAMPAIGN,
+    action: "start",
+  });
+
+  assert.equal(resumed.status, "active");
+  assert.equal(
+    (resumed as { resumed?: unknown }).resumed,
+    undefined,
+    "resume must not hand back a send to re-enqueue",
+  );
+  assert.equal(sender.sent.length, 0, "and nothing is delivered by resuming");
 });
 
-test("archive is terminal — it discards the parked send", async () => {
-  // The other acceptance criterion. A terminal state that leaves a send waiting
-  // to fire is not terminal.
+test("the lifecycle record survives a pause — only the firing is lost", async () => {
+  // Skipping is not the original bug returning. The schedule and the campaign
+  // both remain, so the operator can reschedule; it is the QUEUED send that is
+  // gone, not the record of it.
   const stores = await seeded();
   await transitionSchedule(stores, clock, { orgId: ORG, scheduleId: CAMPAIGN, action: "pause" });
   await sendCampaign(stores, new CaptureSender(), undefined, clock, descriptor, {});
-  assert.ok((await stores.schedules.get(ORG, CAMPAIGN))?.deferred, "parked while paused");
 
+  const state = await stores.schedules.get(ORG, CAMPAIGN);
+  assert.ok(state, "the lifecycle record is still there");
+  assert.equal(state.status, "paused");
+  assert.equal(state.deferred, undefined, "and carries nothing waiting to fire");
+});
+
+test("a resumed schedule sends normally on its next firing", async () => {
+  const stores = await seeded();
+  const sender = new CaptureSender();
+  await transitionSchedule(stores, clock, { orgId: ORG, scheduleId: CAMPAIGN, action: "pause" });
+  await transitionSchedule(stores, clock, { orgId: ORG, scheduleId: CAMPAIGN, action: "start" });
+
+  const result = await sendCampaign(stores, sender, undefined, clock, descriptor, {});
+
+  assert.ok(!result.skipped, "an active schedule is not skipped");
+  assert.equal(sender.sent.length, 1, "an active schedule sends");
+});
+
+test("an archived send is dropped, and stays dropped", async () => {
+  const stores = await seeded();
+  const sender = new CaptureSender();
   await transitionSchedule(stores, clock, { orgId: ORG, scheduleId: CAMPAIGN, action: "archive" });
-  assert.equal((await stores.schedules.get(ORG, CAMPAIGN))?.deferred, undefined);
 
-  const sender = new CaptureSender();
-  const out = await sendCampaign(stores, sender, undefined, clock, descriptor, {});
-  assert.equal(out.skipped, true);
-  assert.deepEqual(sender.sent, [], "archived stays stopped");
+  await sendCampaign(stores, sender, undefined, clock, descriptor, {});
+  assert.equal(sender.sent.length, 0);
+
+  const state = await stores.schedules.get(ORG, CAMPAIGN);
+  assert.equal(state?.status, "archived");
+  assert.equal(state?.deferred, undefined);
 });
 
-test("an archived send is dropped, never parked", async () => {
-  // Parking an archived send would resurrect it the moment someone hit Start.
+test("a legacy parked descriptor is cleared rather than left to fire", async () => {
+  // A record written before #304 may still carry `deferred`. Leaving it would
+  // mean an operator pausing and resuming an old schedule still gets the
+  // surprise send this change removes.
   const stores = await seeded();
-  await transitionSchedule(stores, clock, { orgId: ORG, scheduleId: CAMPAIGN, action: "archive" });
-  await sendCampaign(stores, new CaptureSender(), undefined, clock, descriptor, {});
-  assert.equal((await stores.schedules.get(ORG, CAMPAIGN))?.deferred, undefined);
-});
+  const existing = await stores.schedules.get(ORG, CAMPAIGN);
+  await stores.schedules.put({ ...existing!, deferred: { stale: true } as never });
 
-test("parking is idempotent under SQS redelivery", async () => {
-  const stores = await seeded();
-  await transitionSchedule(stores, clock, { orgId: ORG, scheduleId: CAMPAIGN, action: "pause" });
-  for (let i = 0; i < 3; i++) {
-    await sendCampaign(stores, new CaptureSender(), undefined, clock, descriptor, {});
-  }
-  const parked = (await stores.schedules.get(ORG, CAMPAIGN))?.deferred as SendDescriptor;
-  assert.equal(parked.campaignId, CAMPAIGN, "one parked send, not three");
+  const after = await transitionSchedule(stores, clock, {
+    orgId: ORG,
+    scheduleId: CAMPAIGN,
+    action: "start",
+  });
+
+  assert.equal(after.deferred, undefined, "the stale parked send must not survive");
 });
 
 test("an active one-off is unaffected", async () => {
   const stores = await seeded();
   const sender = new CaptureSender();
-  const out = await sendCampaign(stores, sender, undefined, clock, descriptor, {});
-  assert.equal(out.sent, 1);
-  assert.equal((await stores.schedules.get(ORG, CAMPAIGN))?.deferred, undefined);
+  const result = await sendCampaign(stores, sender, undefined, clock, descriptor, {});
+  assert.ok(!result.skipped, "an active schedule is not skipped");
+  assert.equal(sender.sent.length, 1);
 });

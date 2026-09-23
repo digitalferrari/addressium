@@ -570,21 +570,27 @@ transitions it; the console's **Schedules** screen exposes the three actions.
   so `close a newsletter` is no longer the only lever — you can stop a daily send
   outright and resume it later.
 - **One-off** sends are gated in the campaign sender **before** the idempotency
-  claim, so pausing doesn't burn the claim — and the send is **parked on its
-  lifecycle record**, then re-enqueued on resume (#179).
+  claim, so pausing doesn't burn the claim — and the firing is **skipped**
+  (#304).
 
-  The parking is what makes "a resumed send still goes out" true, and it was not
-  true before. A one-off's EventBridge schedule fires once and deletes itself, so
-  by the time the sender sees `paused` the schedule is already gone; returning
-  `skipped` let SQS delete the message too, and the send simply ceased to exist.
-  Resume-then-Start produced nothing, silently. The parked descriptor carries the
-  template, so the resumed send does not have to be reconstructed from a draft
-  that may have changed since; its fan-out **slice is dropped**, so it re-fans
-  against the recipient set as it stands on resume rather than one snapshotted
-  before the pause.
+  Three behaviours in sequence, each fixing the one before:
 
-  **Archive discards the parked send.** A terminal state that leaves something
-  waiting to fire is not terminal.
+  1. Originally a pause **destroyed** the send. A one-off's EventBridge schedule
+     fires once and deletes itself, so by the time the sender saw `paused` the
+     schedule was already gone; returning `skipped` let SQS delete the message
+     too. Resume-then-Start produced nothing, silently.
+  2. #179 fixed that by **parking** the descriptor on the lifecycle record and
+     re-enqueuing it on resume. That solved the data loss and introduced a
+     surprise: resuming days or weeks later mailed a send nobody was expecting,
+     with content that had gone stale.
+  3. #304 **skips** the firing instead. The lifecycle record and the campaign
+     both survive — only the queued send is lost — so an operator who still
+     wants it reschedules or duplicates it. That is an explicit act rather than
+     something that happens to them, and it makes one-offs behave like recurring
+     series, which have always skipped a firing while paused.
+
+  A record written before #304 may still carry a parked `deferred` descriptor.
+  It is cleared on the next transition rather than left to fire.
 - We **never delete** the EventBridge schedule or the record — pause is
   reversible and archive is a terminal "put it away" that retains history. (This
   is why scheduling needs only `scheduler:CreateSchedule`, not `DeleteSchedule`.)
