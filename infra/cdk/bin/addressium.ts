@@ -50,6 +50,34 @@ interface BootstrapConfig {
    * never sent, which is a bad property for the emails that gate console access.
    */
   adminFromEmail?: string;
+  /**
+   * Where subscriber confirmation links point, e.g.
+   * "https://d3n0nygr388rl7.cloudfront.net/confirm".
+   *
+   * REQUIRED IN PRACTICE. The stack falls back to `https://your-site.example/
+   * confirm`, which is a placeholder nobody owns: signup still succeeds and the
+   * mail still sends, so double opt-in breaks with no error anywhere — every
+   * confirmation link simply goes nowhere.
+   *
+   * It lives HERE, in the gitignored config, because the alternative was
+   * passing `-c confirmUrlBase=...` on every single deploy. That is a step you
+   * only have to forget once, and forgetting it silently reverts the live
+   * Lambdas to the placeholder. Do NOT move it to the git-TRACKED `cdk.json`:
+   * a real hostname there ships to everyone who clones this MIT repo and routes
+   * OTHER operators' confirmation tokens to a distribution we control, which is
+   * worse than the placeholder — the placeholder at least fails dead.
+   */
+  confirmUrlBase?: string;
+  /**
+   * Where preference-centre links point, e.g.
+   * "https://d3n0nygr388rl7.cloudfront.net/preferences".
+   *
+   * Exactly the same failure as `confirmUrlBase`, on the surface subscribers
+   * use to MANAGE or LEAVE: the fallback is `https://your-site.example/
+   * preferences`, the "email me a link" request returns 200, the mail sends,
+   * and the link is dead. Set it alongside confirmUrlBase.
+   */
+  preferencesUrlBase?: string;
   /** A REGIONAL WebACL you own, associated with the API stage (#225). */
   apiWebAclArn?: string;
   /**
@@ -114,6 +142,8 @@ function loadConfig(): BootstrapConfig {
     opsAlertTopicArn: cfg.opsAlertTopicArn,
     opsAlertEmail: cfg.opsAlertEmail,
     adminFromEmail: cfg.adminFromEmail,
+    confirmUrlBase: cfg.confirmUrlBase,
+    preferencesUrlBase: cfg.preferencesUrlBase,
     apiWebAclArn: cfg.apiWebAclArn,
     sesMaxSendRate: cfg.sesMaxSendRate,
     senderMaxConcurrency: cfg.senderMaxConcurrency,
@@ -151,6 +181,18 @@ const app = new App({
       : {}),
     ...(config.senderMaxConcurrency !== undefined
       ? { senderMaxConcurrency: String(config.senderMaxConcurrency) }
+      : {}),
+    // Same reasoning, and the same read path: the stack reads
+    // `confirmUrlBase` from context, so setting it here makes the config file
+    // the source of truth while `-c confirmUrlBase=...` still overrides it for
+    // a one-off deploy. Before this, context was the ONLY source, so a deploy
+    // that omitted the flag reset live subscriber confirmation to a dead
+    // placeholder domain — which is exactly what happened on 2026-09-23.
+    ...(config.confirmUrlBase !== undefined
+      ? { confirmUrlBase: config.confirmUrlBase }
+      : {}),
+    ...(config.preferencesUrlBase !== undefined
+      ? { preferencesUrlBase: config.preferencesUrlBase }
       : {}),
   },
 });

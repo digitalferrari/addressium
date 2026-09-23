@@ -14,6 +14,7 @@
  * template synthesizes without esbuild; asset contents are irrelevant here.
  */
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
@@ -1987,5 +1988,110 @@ test("the CAPTCHA stays scoped to /signup and excludes /signup/batch (#292, #188
     uri.ByteMatchStatement.PositionalConstraint,
     "EXACTLY",
     "STARTS_WITH would re-capture /signup/batch",
+  );
+});
+
+/**
+ * The two alarms #294 asks for, and the silent-placeholder regression (#294).
+ *
+ * The alarms already existed; nothing asserted them, so a refactor that dropped
+ * either would have been invisible. They are the only signal for two failure
+ * classes no other alarm covers: an API returning 5xx to real callers, and a
+ * drip state machine whose executions fail (the Lambda-level alarms watch the
+ * step functions, not the orchestration around them).
+ */
+test("API 5xx and Step Functions failures are alarmed, and route somewhere (#294)", () => {
+  const alarms = template().findResources("AWS::CloudWatch::Alarm");
+  const wanted: [string, string][] = [
+    ["ApiGatewayServerErrorAlarm", "API Gateway 5xx"],
+    ["DripStateMachineFailedAlarm", "Drip state machine failure"],
+  ];
+  for (const [needle, what] of wanted) {
+    const id = Object.keys(alarms).find((k) => k.startsWith(needle));
+    assert.ok(id, `${what} has no alarm`);
+    // An alarm with no action is indistinguishable from no alarm: it goes red
+    // on a dashboard nobody is looking at and pages no one.
+    const actions = (alarms[id]!.Properties as { AlarmActions?: unknown[] }).AlarmActions;
+    assert.ok(actions && actions.length > 0, `${what} alarm has no AlarmAction`);
+  }
+});
+
+/**
+ * `confirmUrlBase` and `preferencesUrlBase` were readable ONLY from CDK context,
+ * so a deploy that omitted `-c confirmUrlBase=...` silently reset the live
+ * Lambdas to `https://your-site.example/...`. Nothing failed: signup and the
+ * "email me a link" request both return 200 and the mail sends, with every link
+ * in it pointing at a domain nobody owns.
+ *
+ * That is exactly what happened on 2026-09-23, on a stack that had been serving
+ * the correct URL for eight days. These pin the context read, so the config
+ * plumbing in `bin/addressium.ts` cannot be removed without a failure here.
+ */
+test("subscriber-facing URL bases come from context, not the placeholder (#294)", () => {
+  const t = template({}, {
+    confirmUrlBase: "https://example.test/confirm",
+    preferencesUrlBase: "https://example.test/preferences",
+  });
+  const fns = t.findResources("AWS::Lambda::Function");
+  const varsOf = (f: unknown) =>
+    ((f as { Properties: { Environment?: { Variables?: Record<string, unknown> } } })
+      .Properties.Environment?.Variables) ?? {};
+
+  const wanted: [string, string][] = [
+    ["CONFIRM_URL_BASE", "https://example.test/confirm"],
+    ["PREFERENCES_URL_BASE", "https://example.test/preferences"],
+  ];
+  for (const [key, expected] of wanted) {
+    const holders = Object.values(fns).filter((f) => key in varsOf(f));
+    assert.ok(holders.length > 0, `no Lambda carries ${key}`);
+    for (const f of holders) {
+      assert.equal(varsOf(f)[key], expected, `${key} did not come from context`);
+    }
+  }
+});
+
+/**
+ * The seam the bug actually lived in.
+ *
+ * The two tests above construct `ControlPlaneStack` directly with context, so
+ * they pass whether or not `bin/addressium.ts` maps the config file INTO that
+ * context — which is precisely the step that was missing. Verified by mutation:
+ * deleting the passthrough left all of them green.
+ *
+ * So this asserts the mapping itself, by reading the entry point's source. It
+ * is a coarse check, but it fails when the passthrough is deleted, which is the
+ * property that matters and the one no template assertion can have.
+ */
+test("bin/addressium.ts maps the URL bases from config into context (#294)", () => {
+  const entry = readFileSync(
+    resolve(dirname(fileURLToPath(import.meta.url)), "../../bin/addressium.ts"),
+    "utf8",
+  );
+  for (const key of ["confirmUrlBase", "preferencesUrlBase"]) {
+    // Read off the config...
+    assert.ok(
+      new RegExp(`${key}:\\s*cfg\\.${key}`).test(entry),
+      `loadConfig does not read ${key} from addressium.config.json`,
+    );
+    // ...and placed into App context, which is the only thing the stack reads.
+    assert.ok(
+      new RegExp(`\\{\\s*${key}:\\s*config\\.${key}\\s*\\}`).test(entry),
+      `${key} is never passed into App context, so the config value is ignored`,
+    );
+  }
+});
+
+test("the placeholder URL appears nowhere once both are configured (#294)", () => {
+  // A whole-template sweep rather than a per-variable check: it also catches a
+  // THIRD subscriber-facing URL added later with the same defaulting mistake,
+  // which is how preferencesUrlBase was found in the first place.
+  const t = template({}, {
+    confirmUrlBase: "https://example.test/confirm",
+    preferencesUrlBase: "https://example.test/preferences",
+  });
+  const json = JSON.stringify(t.toJSON());
+  assert.ok(
+    !json.includes("your-site.example"),
+    "a subscriber-facing URL still falls back to the your-site.example placeholder",
   );
 });
