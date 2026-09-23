@@ -389,6 +389,18 @@ async function writeSubscriptions(
     status: SubscriptionStatus,
     basis?: ConsentBasis,
   ): Promise<void> => {
+    // NEVER resurrect an unsubscribe (#293) — same defect and same fix as the
+    // CSV path in `importer.ts`. Writing unconditionally meant a re-uploaded
+    // list flipped an `unsubscribed` row back to mailable, and the person
+    // started receiving mail again after opting out.
+    //
+    // A `decline` is still allowed through: recording another "no" against an
+    // already-unsubscribed row changes nothing about their mailability and
+    // keeps the consent record honest.
+    if (status !== "unsubscribed") {
+      const existing = await stores.subscriptions.get(opts.orgId, subscriberId, listId);
+      if (existing?.status === "unsubscribed") return;
+    }
     const subscription: Subscription = {
       orgId: opts.orgId,
       subscriberId,

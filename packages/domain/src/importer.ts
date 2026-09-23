@@ -113,6 +113,25 @@ export async function importCsvSubscribers(
       await stores.subscribers.put(subscriber);
       report.created++;
     }
+    // NEVER resurrect an unsubscribe (#293).
+    //
+    // This wrote unconditionally, so re-uploading a list flipped an
+    // `unsubscribed` row back to `pending`/`confirmed` and the person started
+    // receiving mail again after opting out. Reproduced: unsubscribed →
+    // re-import → `confirmed`.
+    //
+    // That is the defect this product exists to prevent, and it is most likely
+    // to fire exactly when a list is re-uploaded during a migration. `signup.ts`
+    // already refuses the same transition; the import paths simply did not.
+    const existingSubscription = await stores.subscriptions.get(
+      opts.orgId,
+      subscriber.sub,
+      opts.listId,
+    );
+    if (existingSubscription?.status === "unsubscribed") {
+      report.skipped++;
+      continue;
+    }
     const subscription: Subscription = {
       orgId: opts.orgId,
       subscriberId: subscriber.sub,
