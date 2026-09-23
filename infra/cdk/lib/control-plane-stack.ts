@@ -1248,6 +1248,42 @@ export class ControlPlaneStack extends Stack {
       description: "addressium: weekly re-engagement sweep for orgs that opted in (#233)",
     });
 
+    // ---- SES suppression reconciliation (#318) ----
+    //
+    // SES keeps its own suppression list and adds every hard bounce to it. Ours
+    // and theirs drift apart, and sending to an address SES has suppressed does
+    // NOT fail — SES accepts the message, discards it, and still counts it
+    // against the daily quota and the per-second rate. A stale list quietly
+    // spends send budget on mail that reaches nobody.
+    //
+    // One way only: our unsubscribes and inactivity sweeps are marketing-scope
+    // and must never be pushed to SES, which would block transactional mail too.
+    const suppressionSyncFn = fn(
+      "SuppressionSyncFn",
+      svc("services/automations/src/index.ts"),
+      "suppressionSyncHandler",
+      apiEnv,
+      // Iterates every org and pages the whole SES list for each; well inside
+      // five minutes at any plausible org count, and it does not block a send.
+      { timeout: Duration.minutes(5) },
+    );
+    table.grantReadWriteData(suppressionSyncFn);
+    suppressionSyncFn.addToRolePolicy(
+      new PolicyStatement({
+        // Read-only. The sync never writes to SES's list — see the one-way note
+        // above — so `PutSuppressedDestination` is deliberately absent.
+        actions: ["ses:ListSuppressedDestinations", "ses:GetSuppressedDestination"],
+        resources: ["*"],
+      }),
+    );
+    new Rule(this, "SuppressionSyncSchedule", {
+      // 02:00 UTC daily — before the 03:00 analytics export and hours clear of
+      // any morning send window, so a long page-through cannot contend with one.
+      schedule: Schedule.cron({ minute: "0", hour: "2" }),
+      targets: [new LambdaFunction(suppressionSyncFn)],
+      description: "addressium: daily SES suppression-list reconciliation (#318)",
+    });
+
     // ---- ConfirmSecret rotation (#234) ----
     //
     // This secret signs the double opt-in link and the RFC 8058 one-click

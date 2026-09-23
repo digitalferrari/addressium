@@ -1888,3 +1888,45 @@ test("one slice per sender invocation", () => {
   assert.ok(sender, "the sender mapping must cap its concurrency");
   assert.equal((sender.Properties as any).BatchSize, 1);
 });
+
+/**
+ * Daily SES suppression reconciliation (#318).
+ *
+ * The cost of a stale list is not a failed send — it is a SILENT one. SES
+ * accepts a message to a suppressed address, discards it, and still counts it
+ * against the daily quota and the per-second rate, while the campaign reports
+ * 100% sent.
+ */
+test("the suppression sync runs daily, clear of any send window", () => {
+  const rules = template().findResources("AWS::Events::Rule", {
+    Properties: { Description: Match.stringLikeRegexp("suppression") },
+  });
+  const [rule] = Object.values(rules);
+  assert.ok(rule, "a scheduled rule must exist");
+  const expr = (rule.Properties as any).ScheduleExpression as string;
+  assert.match(expr, /cron\(/, "a cron schedule, not a rate");
+  // Daily at 02:00 UTC: before the 03:00 analytics export, and hours clear of a
+  // morning send so a long page-through cannot contend with one.
+  assert.match(expr, /cron\(0 2 /, `expected 02:00 UTC, got ${expr}`);
+});
+
+test("the suppression sync can READ the SES list and never write it", () => {
+  // One way only. Our unsubscribes and inactivity sweeps are marketing-scope
+  // decisions; pushing them to SES would wrongly block transactional mail.
+  //
+  // Scoped to the SYNC's own role. AdminApiFn legitimately holds
+  // `PutSuppressedDestination` — that is the operator manually suppressing one
+  // address from the console — so a repo-wide assertion would be wrong.
+  const policies = template().findResources("AWS::IAM::Policy");
+  const syncPolicies = Object.entries(policies).filter(([id]) => id.includes("SuppressionSync"));
+  assert.equal(syncPolicies.length, 1, "the sync function must have exactly one role policy");
+
+  const [id, policy] = syncPolicies[0]!;
+  const statements = (policy.Properties as any).PolicyDocument.Statement as Array<{ Action: unknown }>;
+  const actions = statements.flatMap((st) => (Array.isArray(st.Action) ? st.Action : [st.Action]));
+  assert.ok(actions.includes("ses:ListSuppressedDestinations"), `${id}: must be able to read the list`);
+  assert.ok(
+    !actions.includes("ses:PutSuppressedDestination"),
+    `${id}: the sync must not be able to write to SES's suppression list`,
+  );
+});

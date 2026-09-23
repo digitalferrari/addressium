@@ -18,6 +18,7 @@ import {
   escapeHtml,
   evaluateDripStep,
   nextStepIndex,
+  importSuppressionList,
   planLaunchDescriptor,
   splitFeedUrls,
   templateIsEmpty,
@@ -31,6 +32,7 @@ import {
   type SendDescriptor,
 } from "@addressium/domain";
 import { fetchFeedItems } from "@addressium/svc-feeds";
+import { SesSuppressionListReader } from "@addressium/adapters-aws";
 
 /**
  * Automations pace themselves to SES too (#176).
@@ -484,3 +486,61 @@ export async function reengagementDispatchHandler(event?: { maxSubscribers?: num
   return { ok: true, swept, skipped };
 }
 export { rotateConfirmSecretHandler, newKeyMaterial, type RotationEvent } from "./rotate-confirm-secret.js";
+
+/**
+ * Daily reconciliation of the SES account-level suppression list (#318).
+ *
+ * SES maintains its own suppression list and adds every hard bounce to it
+ * automatically. That list and ours can drift apart in both directions, and
+ * only one of them matters at send time.
+ *
+ * Drift towards us is the expensive one: SES knows about a bounce we missed —
+ * an event dropped during an outage, or one that predates addressium entirely.
+ * Sending to that address does NOT fail. SES accepts the message, silently
+ * discards it, and **counts it against the daily quota and the per-second
+ * rate**. So a stale list quietly spends send budget on mail that reaches
+ * nobody, while the campaign reports 100% sent.
+ *
+ * Drift the other way is correct and stays: unsubscribes and inactivity sweeps
+ * are ours alone. They are marketing-scope decisions, and pushing them to SES
+ * would wrongly block transactional mail too. This job is deliberately ONE-WAY.
+ *
+ * There is no "is this address suppressed" bulk API, so reconciliation means
+ * exporting the list and importing it — which is what
+ * `importSuppressionList` already does, built for the Pinpoint migration. This
+ * only puts it on a schedule.
+ */
+export async function suppressionSyncHandler(): Promise<{
+  orgs: number;
+  written: number;
+  failed: number;
+}> {
+  const orgs = await stores().organizations.list();
+  let written = 0;
+  let failed = 0;
+  for (const org of orgs) {
+    try {
+      const report = await importSuppressionList(
+        stores(),
+        clock,
+        new SesSuppressionListReader(),
+        { orgId: org.orgId },
+      );
+      written += report.written;
+    } catch (e) {
+      // One org's failure must not stop the rest. A throttled ListSuppressed
+      // call or a transient SES error should cost that org a day of freshness,
+      // not every other org on the deployment.
+      failed++;
+      console.error("suppression sync: org failed", {
+        orgId: org.orgId,
+        error: e instanceof Error ? e.message : String(e),
+      });
+    }
+  }
+  // Logged rather than silent: a sync that writes nothing every day either
+  // means the lists agree or means the reader is broken, and those look
+  // identical from the outside.
+  console.log("suppression sync complete", { orgs: orgs.length, written, failed });
+  return { orgs: orgs.length, written, failed };
+}
