@@ -120,6 +120,39 @@ export interface DecisionContext {
  * Decide the next win-back action for one subscriber. Pure — no IO — so the
  * whole state machine is unit-testable against a clock.
  */
+/**
+ * Does the decision for this subscriber actually DEPEND on whether they still
+ * hold an active subscription? (#293 item 2)
+ *
+ * `decideReengagement` consults `hasActiveSubscription` on exactly one branch:
+ * the not-yet-enrolled path, and only after `suppressed`, the engagement anchor
+ * and the coldness threshold have all been passed. For everyone else the value
+ * is never read — so the sweep was paying for a `listBySubscriber` query per
+ * subscriber to compute an input that was usually discarded.
+ *
+ * The sweep calls this first and only looks the subscription up when it is
+ * true, which makes the read proportional to ENROLLMENTS rather than to the
+ * org. One read next to a send that already costs far more.
+ *
+ * Kept beside `decideReengagement` deliberately: the two must agree, and a test
+ * asserts that when this returns false the decision is identical for both
+ * values of `hasActiveSubscription`.
+ */
+export function needsSubscriptionLookup(
+  s: Subscriber,
+  policy: ResolvedReengagementPolicy,
+  now: Date,
+): boolean {
+  if (!policy.enabled) return false;
+  if (s.status === "suppressed") return false;
+  // Already enrolled: every remaining branch (graduate / wait / sunset / next
+  // step) ignores the flag entirely.
+  if (s.reengagement) return false;
+  const anchor = coldnessAnchor(s);
+  if (!anchor) return false;
+  return daysSince(anchor, now) >= policy.coldAfterDays;
+}
+
 export function decideReengagement(ctx: DecisionContext): ReengagementDecision {
   const { subscriber: s, hasActiveSubscription, policy, now } = ctx;
   if (!policy.enabled) return { action: "skip", reason: "disabled" };
@@ -203,7 +236,9 @@ export async function runReengagementSweep(
   // ONE PAGE, resumed from a checkpoint (#233, #182).
   //
   // This used to be `subscribers.list(orgId)` — the entire org in memory, plus
-  // an N+1 subscription read per subscriber, with no way to record progress. A
+  // an unconditional subscription read per subscriber, with no way to record
+  // progress. (The full scan went first; the per-subscriber read survived until
+  // #293 item 2 made it conditional — see `needsSubscriptionLookup`.) A
   // retry restarted from zero, so on an org large enough to matter the sweep
   // never completed: it burned the same first N subscribers on every attempt and
   // the tail was never swept at all.
@@ -216,8 +251,14 @@ export async function runReengagementSweep(
   /** One subscriber's worth of the sweep. Extracted so paging stays readable. */
   const sweepOne = async (s: Subscriber): Promise<void> => {
     result.scanned++;
-    const subs = await stores.subscriptions.listBySubscriber(input.orgId, s.sub);
-    const hasActiveSubscription = subs.some((x) => x.status !== "unsubscribed");
+    // Only read subscriptions when the decision can actually turn on them
+    // (#293 item 2). This was an unconditional query per subscriber — a full
+    // `gsi2` query on Dynamo — computing a value the other branches discard.
+    const hasActiveSubscription = needsSubscriptionLookup(s, policy, now)
+      ? (await stores.subscriptions.listBySubscriber(input.orgId, s.sub)).some(
+          (x) => x.status !== "unsubscribed",
+        )
+      : false;
     const decision = decideReengagement({ subscriber: s, hasActiveSubscription, policy, now });
 
     switch (decision.action) {
