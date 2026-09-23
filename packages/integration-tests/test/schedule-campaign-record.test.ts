@@ -713,3 +713,112 @@ test("reading a body requires campaigns:manage, not merely reports:view", async 
   const res = await api.campaignContentHandler(getEvent("content-rbac", "analyst"));
   assert.equal(res.statusCode, 403);
 });
+
+/**
+ * Sending a recurring series off-cycle (#305).
+ *
+ * The operator need: a morning newsletter went out before someone updated the
+ * feed, so it must run again later the same day with everything current.
+ *
+ * Deliberately not a cadence edit — rescheduling the cron to 10am and back
+ * needs `scheduler:UpdateSchedule` and relies on the operator remembering to
+ * set it back. This needs no IAM change and cannot be forgotten.
+ */
+/** Stands in for SQS, which has no local emulator — same shape as CaptureScheduler. */
+class CaptureQueue {
+  public enqueued: SendDescriptor[] = [];
+  async enqueue(d: SendDescriptor) {
+    this.enqueued.push(d);
+  }
+}
+
+const sendNowEvent = (seriesId: string, role = "developer_admin", orgs = ORG) => ({
+  body: JSON.stringify({ orgId: ORG, seriesId }),
+  requestContext: {
+    http: { method: "POST", sourceIp: "203.0.113.7" },
+    authorizer: { jwt: { claims: { "custom:role": role, "custom:orgs": orgs, sub: "admin-1" } } },
+  },
+});
+
+test("send-now queues an off-cycle edition of the series", async () => {
+  const scheduler = new CaptureScheduler();
+  await api.scheduleCampaignHandler(
+    scheduleEvent(composeBody("sn-basic", { when: { type: "recurring", cron: "cron(0 6 * * ? *)" } })),
+    { scheduler },
+  );
+
+  const queue = new CaptureQueue();
+  const res = await api.sendNowHandler(sendNowEvent("sn-basic"), { queue });
+  assert.equal(res.statusCode, 202);
+  const body = JSON.parse(res.body) as { seriesId: string; campaignId: string };
+  assert.equal(body.seriesId, "sn-basic");
+  assert.ok(
+    body.campaignId.startsWith("sn-basic-"),
+    "the edition belongs to the series, so it reports under it rather than as an orphan one-off",
+  );
+
+  assert.equal(queue.enqueued.length, 1, "and it is actually queued");
+  const sent = queue.enqueued[0]!;
+  assert.equal(sent.seriesId, "sn-basic", "stamped so the sender applies the series ad fills");
+  assert.equal(sent.subject, "Weekly ledger", "content comes from the STORED body, not the payload");
+});
+
+test("send-now is refused on a paused series", async () => {
+  // Otherwise it is a way around the lifecycle gate an operator just used.
+  const scheduler = new CaptureScheduler();
+  await api.scheduleCampaignHandler(
+    scheduleEvent(composeBody("sn-paused", { when: { type: "recurring", cron: "cron(0 6 * * ? *)" } })),
+    { scheduler },
+  );
+  await api.scheduleLifecycleHandler({
+    body: JSON.stringify({ orgId: ORG, scheduleId: "sn-paused", action: "pause" }),
+    requestContext: {
+      http: { method: "POST", sourceIp: "203.0.113.7" },
+      authorizer: { jwt: { claims: { "custom:role": "developer_admin", "custom:orgs": ORG, sub: "a" } } },
+    },
+  });
+
+  const res = await api.sendNowHandler(sendNowEvent("sn-paused"));
+  assert.equal(res.statusCode, 409);
+});
+
+test("send-now is refused on a one-off", async () => {
+  // A one-off is scheduled once; "again" has no meaning for it.
+  const scheduler = new CaptureScheduler();
+  await api.scheduleCampaignHandler(scheduleEvent(composeBody("sn-oneoff")), { scheduler });
+
+  const res = await api.sendNowHandler(sendNowEvent("sn-oneoff"));
+  assert.equal(res.statusCode, 400);
+});
+
+test("send-now on an unknown series is a 404", async () => {
+  const res = await api.sendNowHandler(sendNowEvent("sn-nope"));
+  assert.equal(res.statusCode, 404);
+});
+
+test("send-now requires campaigns:schedule", async () => {
+  const scheduler = new CaptureScheduler();
+  await api.scheduleCampaignHandler(
+    scheduleEvent(composeBody("sn-rbac", { when: { type: "recurring", cron: "cron(0 6 * * ? *)" } })),
+    { scheduler },
+  );
+
+  const res = await api.sendNowHandler(sendNowEvent("sn-rbac", "analyst"));
+  assert.equal(res.statusCode, 403);
+});
+
+test("two send-nows produce two distinct editions", async () => {
+  // The edition key is the request instant, so a second press is a second
+  // edition rather than a collision on one id.
+  const scheduler = new CaptureScheduler();
+  await api.scheduleCampaignHandler(
+    scheduleEvent(composeBody("sn-twice", { when: { type: "recurring", cron: "cron(0 6 * * ? *)" } })),
+    { scheduler },
+  );
+
+  const queue = new CaptureQueue();
+  const a = JSON.parse((await api.sendNowHandler(sendNowEvent("sn-twice"), { queue })).body) as { campaignId: string };
+  await new Promise((r) => setTimeout(r, 2));
+  const b = JSON.parse((await api.sendNowHandler(sendNowEvent("sn-twice"), { queue })).body) as { campaignId: string };
+  assert.notEqual(a.campaignId, b.campaignId);
+});

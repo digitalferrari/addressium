@@ -68,6 +68,7 @@ import {
   type PinpointSegmentResponse,
   isHoneypotTripped,
   markScheduleActive,
+  scheduleActive,
   ZERO_COUNTERS,
   recordScheduledCampaign,
   type CampaignScheduler,
@@ -987,6 +988,78 @@ export async function scheduleCampaignHandler(
  * handler (recurring) and sender (one-off) gate on it, so a paused series stops
  * its next edition and can be resumed later.
  */
+/**
+ * POST /campaigns/send-now — fire a recurring series off-cycle (#305).
+ *
+ * The operator need: a morning newsletter went out before someone updated the
+ * feed, so it has to run again later the same day with everything current.
+ *
+ * Deliberately NOT a cadence edit. Rescheduling the cron to 10am and back
+ * requires `scheduler:UpdateSchedule` — widening a deliberately minimal
+ * CreateSchedule-only grant — and relies on the operator remembering to set it
+ * back. This needs no IAM change and cannot be forgotten.
+ *
+ * The edition is built exactly as a scheduled firing would be, by enqueuing
+ * against the same launch path: current feed, current stored body, current ad
+ * fills. It carries an editionKey of the moment it was requested, so it is a
+ * distinct idempotent edition of the SAME series — which is what keeps it
+ * inside the series' own reporting rather than appearing as an orphan one-off.
+ */
+export async function sendNowHandler(
+  event: HttpEvent,
+  // Same seam as `scheduleCampaignHandler`'s scheduler: SQS has no local
+  // emulator, so the queue is injectable for tests and real everywhere else.
+  injected?: { queue?: { enqueue(d: SendDescriptor): Promise<void> } },
+): Promise<HttpResult> {
+  try {
+    const { orgId, seriesId } = JSON.parse(event.body ?? "{}") as {
+      orgId?: string;
+      seriesId?: string;
+    };
+    if (!orgId || !seriesId) return json(400, { error: "orgId and seriesId required" });
+    requireGrant(event, "campaigns:schedule", orgId);
+
+    const state = await stores().schedules.get(orgId, seriesId);
+    if (!state) return json(404, { error: `unknown schedule "${seriesId}"` });
+    if (state.kind !== "recurring") {
+      return json(400, { error: "send-now applies to a recurring series; a one-off is scheduled once" });
+    }
+    // A paused or archived series must not be sendable off-cycle: that would be
+    // a way around the lifecycle gate an operator just used.
+    if (!scheduleActive(state)) {
+      return json(409, { error: `series is ${state.status}; resume it before sending` });
+    }
+
+    const body = await stores().campaignBodies.get(orgId, seriesId);
+    if (!body) {
+      return json(409, {
+        error: "this series has no stored content, so an off-cycle edition cannot be built",
+        reason: "predates-body-storage",
+      });
+    }
+
+    // The edition key is the request instant, so two send-nows in the same
+    // minute produce two editions rather than colliding on one id.
+    const editionKey = clock.now().toISOString().replace(/[:.]/g, "-");
+    const campaign = await stores().campaigns.get(orgId, seriesId);
+    const queue = injected?.queue ?? new SqsSendQueue(env("SEND_QUEUE_URL"));
+    await queue.enqueue({
+      orgId,
+      campaignId: `${seriesId}-${editionKey}`,
+      listId: body.listId ?? campaign?.audience?.listId ?? "",
+      subject: body.subject,
+      template: body.template,
+      ...(body.previewText ? { previewText: body.previewText } : {}),
+      ...(body.segmentId ? { segmentId: body.segmentId } : {}),
+      seriesId,
+    });
+    await audit(event, orgId, "campaign.send_now", seriesId);
+    return json(202, { status: "queued", seriesId, campaignId: `${seriesId}-${editionKey}` });
+  } catch (e) {
+    return fail(e);
+  }
+}
+
 export async function scheduleLifecycleHandler(event: HttpEvent): Promise<HttpResult> {
   try {
     const { orgId, scheduleId, action } = JSON.parse(event.body ?? "{}") as {
@@ -999,16 +1072,10 @@ export async function scheduleLifecycleHandler(event: HttpEvent): Promise<HttpRe
       return json(400, { error: "action must be start, pause or archive" });
     }
     requireGrant(event, "campaigns:schedule", orgId);
-    const state = await transitionSchedule(stores(), clock, { orgId, scheduleId, action });
-
-    // Resuming a one-off that fired while paused re-enqueues it (#179). Without
-    // this the parking is pointless: the EventBridge schedule deleted itself
-    // when it fired, so nothing else will ever deliver this send.
-    const { resumed, ...record } = state as typeof state & { resumed?: SendDescriptor };
-    if (resumed) {
-      await new SqsSendQueue(env("SEND_QUEUE_URL")).enqueue(resumed);
-    }
-    return json(200, { ...record, ...(resumed ? { resent: true } : {}) });
+    // Nothing is re-enqueued on resume any more (#304): a paused firing is
+    // skipped rather than parked, so resuming simply makes the next firing
+    // eligible.
+    return json(200, await transitionSchedule(stores(), clock, { orgId, scheduleId, action }));
   } catch (e) {
     return fail(e);
   }
@@ -3226,6 +3293,7 @@ const ADMIN_ROUTES: Record<string, RouteHandler> = {
   // "no route" — the deployed stack was fine, the manifest was not.
   "POST /campaigns/schedule": scheduleCampaignHandler,
   "POST /campaigns/lifecycle": scheduleLifecycleHandler,
+  "POST /campaigns/send-now": sendNowHandler,
   "GET /orgs/{org}/templates": templatesHandler,
   "GET /orgs/{org}/templates/{id}": templatesHandler,
   "POST /templates": templatesHandler,

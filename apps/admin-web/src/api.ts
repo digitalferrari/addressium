@@ -1110,6 +1110,12 @@ export const api = {
   scheduleCampaign: (body: ScheduleCampaignBody) => call<ScheduleResult>("POST", `/campaigns/schedule`, body),
   scheduleLifecycle: (orgId: string, scheduleId: string, action: "start" | "pause" | "archive") =>
     call<SendScheduleState>("POST", `/campaigns/lifecycle`, { orgId, scheduleId, action }),
+  /** Fire a recurring series off-cycle with current content (#305). */
+  sendSeriesNow: (orgId: string, seriesId: string) =>
+    call<{ status: string; seriesId: string; campaignId: string }>("POST", `/campaigns/send-now`, {
+      orgId,
+      seriesId,
+    }),
   usage: (org: string) => call<UsageRecord[] | null>("GET", `/orgs/${org}/usage`),
   setup: (org: string) => call<SetupState>("GET", `/orgs/${org}/setup`),
   saveList: (input: CreateListInput) => call<AdminList>("POST", `/lists`, input),

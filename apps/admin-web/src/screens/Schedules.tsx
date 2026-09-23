@@ -50,6 +50,7 @@ export function Schedules({
 }) {
   const [rows, setRows] = useState<SendScheduleState[] | null>(null);
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState("");
   const [refreshing, setRefreshing] = useState(false);
   const canManage = can(grant, "campaigns:schedule", org);
@@ -101,6 +102,28 @@ export function Schedules({
     }
   };
 
+  /**
+   * Fire a series off-cycle (#305).
+   *
+   * Confirmed first: this mails the whole list within minutes, and the button
+   * sits beside Start/Pause/Archive which are all reversible. This one is not.
+   */
+  const sendNow = async (scheduleId: string) => {
+    if (!window.confirm(`Send "${scheduleId}" now? This builds a fresh edition and mails the list.`)) return;
+    setBusy(`${scheduleId}:send-now`);
+    setError("");
+    try {
+      const res = await api.sendSeriesNow(org, scheduleId);
+      setError("");
+      setNotice(`Queued "${res.campaignId}" — it will send within a few minutes.`);
+      load();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy("");
+    }
+  };
+
   const act = async (scheduleId: string, action: "start" | "pause" | "archive") => {
     setBusy(`${scheduleId}:${action}`);
     setError("");
@@ -145,6 +168,7 @@ export function Schedules({
         stops its next edition and can be resumed; archive puts it away for good while keeping history.
       </p>
       {error && <p className="err">{error}</p>}
+      {notice && <p className="muted">{notice}</p>}
       {rows === null && !error && <SkeletonTable rows={5} />}
       {rows && rows.length === 0 && (
         <div className="card muted">No scheduled sends yet. Schedule a campaign or recurring series to see it here.</div>
@@ -200,6 +224,20 @@ export function Schedules({
                         <button className="btn ghost" disabled={r.status === "active" || scheduleHasSent(r) || !!busy} onClick={() => act(r.scheduleId, "start")}>Start</button>
                         <button className="btn ghost" disabled={r.status !== "active" || scheduleHasSent(r) || !!busy} onClick={() => act(r.scheduleId, "pause")}>Pause</button>
                         <button className="btn ghost" disabled={r.status === "archived" || !!busy} onClick={() => act(r.scheduleId, "archive")}>Archive</button>
+                        {/* Series only: a one-off is scheduled once, so "again"
+                            has no meaning for it. Disabled unless active, to
+                            match the server, which refuses a paused series
+                            rather than letting send-now bypass the gate. */}
+                        {r.kind === "recurring" && (
+                          <button
+                            className="btn ghost"
+                            disabled={r.status !== "active" || !!busy}
+                            onClick={() => void sendNow(r.scheduleId)}
+                            title="Build a fresh edition now and send it"
+                          >
+                            Send now
+                          </button>
+                        )}
                       </span>
                     ) : (
                       <span className="muted">read-only</span>

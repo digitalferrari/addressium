@@ -1926,6 +1926,7 @@ export class ControlPlaneStack extends Stack {
     // Send-schedule lifecycle: list + start/pause/archive (never delete, §4.6).
     adminRoute("SchedulesGetFn", "schedulesListHandler", HttpMethod.GET, "/orgs/{org}/schedules");
     adminRoute("ScheduleLifecycleFn", "scheduleLifecycleHandler", HttpMethod.POST, "/campaigns/lifecycle");
+    adminRoute("SendNowFn", "sendNowHandler", HttpMethod.POST, "/campaigns/send-now");
     // Reusable templates (§4.15): list, read one, save.
     adminRoute("TemplatesGetFn", "templatesHandler", HttpMethod.GET, "/orgs/{org}/templates");
     adminRoute("TemplateGetFn", "templatesHandler", HttpMethod.GET, "/orgs/{org}/templates/{id}");
