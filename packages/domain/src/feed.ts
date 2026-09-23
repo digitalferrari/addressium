@@ -18,6 +18,8 @@ export interface FeedItem {
   content?: string;
   published?: string;
   id?: string;
+  /** Item image from <enclosure>, media:content or media:thumbnail (#299). */
+  image?: string;
   [field: string]: string | undefined;
 }
 
@@ -98,6 +100,44 @@ function blocksBetween(xml: string, name: string): string[] {
   return scanBlocks(xml, name);
 }
 
+/**
+ * The item image, from whichever of the three conventions the publisher uses.
+ *
+ * A linear scan for the attribute rather than a global regex, for the same
+ * ReDoS reason as everything else in this file. Order is deliberate:
+ * `<enclosure>` is the RSS 2.0 standard, `media:content` the Media RSS one, and
+ * `media:thumbnail` a smaller fallback — a publisher emitting several means the
+ * first is the full-size one.
+ *
+ * Without this a feed edition has no image at all, and the story regions in a
+ * designed template have an `{{IMG}}` slot with nothing to put in it.
+ */
+function itemImage(item: string): string | undefined {
+  for (const tagName of ["enclosure", "media:content", "media:thumbnail"]) {
+    const lower = item.toLowerCase();
+    let from = 0;
+    for (;;) {
+      const at = lower.indexOf(`<${tagName}`, from);
+      if (at === -1) break;
+      const end = item.indexOf(">", at);
+      if (end === -1) break;
+      const el = item.slice(at, end);
+      // enclosure uses `url`, media:* uses `url` too, but be tolerant of both.
+      const m = /\b(?:url|src)\s*=\s*("([^"]*)"|'([^']*)')/i.exec(el);
+      const url = m?.[2] ?? m?.[3];
+      if (url) {
+        // An enclosure may be audio or a PDF; only take it when it looks like
+        // an image, or when the publisher gave no type at all.
+        const type = /\btype\s*=\s*("([^"]*)"|'([^']*)')/i.exec(el);
+        const t = (type?.[2] ?? type?.[3] ?? "").toLowerCase();
+        if (t === "" || t.startsWith("image/")) return decodeEntities(url);
+      }
+      from = end + 1;
+    }
+  }
+  return undefined;
+}
+
 function parseRss(xml: string): FeedItem[] {
   return blocksBetween(xml, "item").map((item) => ({
     title: tag(item, "title"),
@@ -105,6 +145,7 @@ function parseRss(xml: string): FeedItem[] {
     content: tag(item, "description") ?? tag(item, "content:encoded"),
     published: tag(item, "pubDate"),
     id: tag(item, "guid") ?? tag(item, "link"),
+    ...(itemImage(item) ? { image: itemImage(item) } : {}),
   }));
 }
 
