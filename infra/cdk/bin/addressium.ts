@@ -95,6 +95,12 @@ interface BootstrapConfig {
 
 interface CustomDomainConfig {
   domainName: string;
+  /**
+   * An ACM certificate in us-east-1 you already requested and validated for
+   * `domainName` (#294). Omit it and CDK requests one, which makes the first
+   * deploy block until you publish ACM's validation CNAME.
+   */
+  certificateArn?: string;
 }
 
 function validateCustomDomain(value: CustomDomainConfig | undefined, name: string): CustomDomainConfig | undefined {
@@ -104,6 +110,14 @@ function validateCustomDomain(value: CustomDomainConfig | undefined, name: strin
   }
   if (!/^[a-z0-9.-]+$/i.test(value.domainName) || value.domainName.includes("..")) {
     throw new Error(`${name}.domainName must be a DNS hostname, without https:// or a path.`);
+  }
+  if (value.certificateArn && !/^arn:aws[a-z-]*:acm:us-east-1:\d{12}:certificate\//.test(value.certificateArn)) {
+    // Named precisely: CloudFront accepts certificates ONLY from us-east-1, and
+    // an ARN from another region fails at deploy time with a message that does
+    // not say why.
+    throw new Error(
+      `${name}.certificateArn must be an ACM certificate ARN in us-east-1 (CloudFront accepts no other region).`,
+    );
   }
   return value;
 }

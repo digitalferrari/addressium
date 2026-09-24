@@ -2194,3 +2194,45 @@ test("the sender still logs the literal the metric filter matches (#293)", () =>
     "send.ts no longer logs the literal RecipientRejectFilter matches",
   );
 });
+
+/**
+ * A pre-validated certificate is adopted, not re-requested (#294).
+ *
+ * `StaticSite` always created its own ACM certificate, so the first deploy of a
+ * custom domain BLOCKED until the operator published ACM's validation CNAME —
+ * a deploy hanging on a manual DNS step, with nothing saying what it waited
+ * for. An operator who pre-requests a certificate out of habit got a SECOND one
+ * issued for the same name.
+ */
+test("an existing certificate ARN is adopted rather than a new one requested", () => {
+  const ARN = "arn:aws:acm:us-east-1:111122223333:certificate/abc-123";
+  const t = template({ adminCustomDomain: { domainName: "admin.example.com", certificateArn: ARN } });
+
+  // Nothing new requested...
+  assert.equal(
+    Object.keys(t.findResources("AWS::CertificateManager::Certificate")).length,
+    0,
+    "a certificate was requested despite one being supplied",
+  );
+  // ...and the distribution uses the one supplied.
+  const dists = Object.values(t.findResources("AWS::CloudFront::Distribution"));
+  const withAlias = dists.find((d) =>
+    JSON.stringify((d.Properties as Record<string, unknown>).DistributionConfig).includes("admin.example.com"),
+  );
+  assert.ok(withAlias, "no distribution carries the custom domain");
+  assert.ok(
+    JSON.stringify(withAlias.Properties).includes(ARN),
+    "the supplied certificate ARN is not attached",
+  );
+});
+
+test("without an ARN a certificate is still requested, so nothing regresses", () => {
+  // The negative case: a deployment that has not pre-requested must keep
+  // working exactly as before.
+  const t = template({ adminCustomDomain: { domainName: "admin.example.com" } });
+  assert.equal(
+    Object.keys(t.findResources("AWS::CertificateManager::Certificate")).length,
+    1,
+    "the construct must still request a certificate when none is supplied",
+  );
+});

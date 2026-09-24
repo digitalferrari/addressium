@@ -40,6 +40,20 @@ export interface StaticSiteProps {
    * Cloudflare); ACM's validation CNAME is deliberately not created here.
    */
   domainName?: string;
+  /**
+   * An ACM certificate this deployment ALREADY has for `domainName`, in
+   * us-east-1 (#294).
+   *
+   * Without it this construct requests its own, and the deploy then BLOCKS
+   * until the operator publishes ACM's validation CNAME — a first deploy that
+   * hangs on a manual DNS step, with no indication of what it is waiting for.
+   * Requesting and validating the certificate beforehand turns that into a
+   * deploy that finds an issued certificate and attaches it immediately.
+   *
+   * It also stops a second certificate being issued for a name that already has
+   * one, which is what happens when an operator pre-requests out of habit.
+   */
+  certificateArn?: string;
 }
 
 /**
@@ -168,12 +182,16 @@ function handler(event) {
     // `fromDns` makes ACM expose its validation CNAME rather than giving CDK
     // Route 53 permissions or silently taking over DNS. CloudFront certificates
     // must be requested in us-east-1; deploy custom domains from that region.
-    this.certificate = props.domainName
-      ? new Certificate(this, "Certificate", {
-          domainName: props.domainName,
-          validation: CertificateValidation.fromDns(),
-        })
-      : undefined;
+    this.certificate = !props.domainName
+      ? undefined
+      : props.certificateArn
+        // Adopted, not created: an ARN here means the operator already
+        // requested and validated it, so there is nothing to wait for.
+        ? Certificate.fromCertificateArn(this, "Certificate", props.certificateArn)
+        : new Certificate(this, "Certificate", {
+            domainName: props.domainName,
+            validation: CertificateValidation.fromDns(),
+          });
 
     this.distribution = new Distribution(this, "Dist", {
       defaultRootObject: "index.html",

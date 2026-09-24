@@ -127,9 +127,9 @@ export interface ControlPlaneStackProps extends StackProps {
   /** Public URL of the subscriber/public site. Defaults to its distribution. */
   publicAppUrl?: string;
   /** Staged custom hostname for the admin SPA; DNS is managed outside AWS. */
-  adminCustomDomain?: { domainName: string };
+  adminCustomDomain?: { domainName: string; certificateArn?: string };
   /** Staged custom hostname for the public/subscriber SPA; DNS is managed outside AWS. */
-  publicCustomDomain?: { domainName: string };
+  publicCustomDomain?: { domainName: string; certificateArn?: string };
   /**
    * Public origin of the HTTP API, used as the `connect-src` entry in the SPAs'
    * CSP (#197). It cannot default to `api.apiEndpoint`: the API's CORS allowlist
@@ -2696,7 +2696,12 @@ export class ControlPlaneStack extends Stack {
       ...webAcl,
       connectOrigins: [apiOrigin, adminHostedUi.baseUrl()],
       ...(props.adminCustomDomain
-        ? { domainName: props.adminCustomDomain.domainName }
+        ? {
+            domainName: props.adminCustomDomain.domainName,
+            ...(props.adminCustomDomain.certificateArn
+              ? { certificateArn: props.adminCustomDomain.certificateArn }
+              : {}),
+          }
         : {}),
     }); // apps/admin-web
     publicSite = new StaticSite(this, "PublicSite", {
@@ -2706,7 +2711,12 @@ export class ControlPlaneStack extends Stack {
       // the admin pool, so the Hosted UI is deliberately not reachable from here.
       connectOrigins: [apiOrigin],
       ...(props.publicCustomDomain
-        ? { domainName: props.publicCustomDomain.domainName }
+        ? {
+            domainName: props.publicCustomDomain.domainName,
+            ...(props.publicCustomDomain.certificateArn
+              ? { certificateArn: props.publicCustomDomain.certificateArn }
+              : {}),
+          }
         : {}),
     }); // apps/subscriber-web + public-web
 
