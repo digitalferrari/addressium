@@ -230,6 +230,19 @@ export interface SubscriberStore {
    */
   stream(orgId: string): AsyncIterable<Subscriber>;
   /**
+   * How many subscribers this org has, WITHOUT reading them (#294).
+   *
+   * The trends endpoint used to consume `stream()` purely to increment a
+   * counter — every subscriber marshalled out of DynamoDB, across the network,
+   * deserialized, and discarded. At 20k subscribers that is the dominant cost
+   * of an admin page that shows a single number.
+   *
+   * DynamoDB can count server-side (`Select: COUNT`): it still reads the items
+   * internally and bills the same capacity, but nothing crosses the network and
+   * nothing is deserialized, which is where the wall-clock went.
+   */
+  count(orgId: string): Promise<number>;
+  /**
    * One page of subscribers, optionally narrowed to an email PREFIX (#182).
    *
    * The admin search loaded EVERY subscriber for the org and filtered by

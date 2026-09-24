@@ -401,6 +401,32 @@ export class DynamoStores implements Stores {
         ExpressionAttributeValues: { ":pk": org(orgId), ":s": "SUBSCRIBER#" },
       }),
     /**
+     * `Select: COUNT` — DynamoDB counts on its side and returns a number.
+     *
+     * Still paginated: `Count` is per PAGE, and a partition larger than 1 MB
+     * returns a `LastEvaluatedKey`. Taking the first page's `Count` as the total
+     * would silently under-report every org past that size, which is exactly the
+     * org whose number matters.
+     */
+    count: async (orgId) => {
+      let total = 0;
+      let ExclusiveStartKey: Record<string, unknown> | undefined;
+      do {
+        const res = await this.doc.send(
+          new QueryCommand({
+            TableName: this.tableName,
+            KeyConditionExpression: "pk = :pk AND begins_with(sk, :s)",
+            ExpressionAttributeValues: { ":pk": org(orgId), ":s": "SUBSCRIBER#" },
+            Select: "COUNT",
+            ExclusiveStartKey,
+          }),
+        );
+        total += res.Count ?? 0;
+        ExclusiveStartKey = res.LastEvaluatedKey as Record<string, unknown> | undefined;
+      } while (ExclusiveStartKey);
+      return total;
+    },
+    /**
      * One page of subscribers, optionally by email PREFIX (#182).
      *
      * The prefix path queries `gsi1` — whose sort key is the lowercased email —

@@ -124,12 +124,21 @@ export async function trendsHandler(event: ReportEvent) {
   const previousFromDate = new Date(`${previousThrough}T00:00:00.000Z`);
   previousFromDate.setUTCDate(previousFromDate.getUTCDate() - days + 1);
   const previousFrom = previousFromDate.toISOString().slice(0, 10);
-  const events: EngagementEvent[] = [];
-  for (const campaign of await stores().campaigns.list(orgId)) {
-    events.push(...await stores().events.all(orgId, campaign.campaignId));
-  }
-  let subscriberCount = 0;
-  for await (const _subscriber of stores().subscribers.stream(orgId)) subscriberCount++;
+  // Both reads in PARALLEL, and each campaign's events in parallel with the
+  // others (#294). This was a sequential `for` loop doing one round trip per
+  // campaign, then a full subscriber scan — on an admin screen that is the
+  // first thing loaded after login, so every hop was felt.
+  const campaigns = await stores().campaigns.list(orgId);
+  const [eventPages, subscriberCount] = await Promise.all([
+    // `Promise.all` over campaigns, not a loop: these reads are independent, so
+    // the cost becomes the SLOWEST read rather than the sum of all of them.
+    Promise.all(campaigns.map((c) => stores().events.all(orgId, c.campaignId))),
+    // Counted server-side. This used to consume `stream()` purely to increment
+    // a number: every subscriber marshalled out of DynamoDB, across the network
+    // and deserialized, only to be discarded.
+    stores().subscribers.count(orgId),
+  ]);
+  const events: EngagementEvent[] = eventPages.flat();
   const summary: TrendSummary = {
     subscriberCount,
     current: summarizeWindow(events, from, through),

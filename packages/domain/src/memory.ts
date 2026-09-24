@@ -149,6 +149,11 @@ export class MemSubscribers implements SubscriberStore {
   async list(orgId: string) {
     return [...this.byId.values()].filter((s) => s.orgId === orgId);
   }
+  /** Same contract as the Dynamo store: a count without materializing rows. */
+  async count(orgId: string) {
+    return [...this.byId.values()].filter((s) => s.orgId === orgId).length;
+  }
+
   async *stream(orgId: string) {
     // A fake cannot demonstrate bounded memory, but it must expose the same
     // shape so export code paths are exercised by the unit suite.
