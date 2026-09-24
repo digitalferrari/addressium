@@ -151,6 +151,13 @@ Resources:
               - kinesis:*
               - athena:*
               - glue:*
+              # AWS Backup (#321). Backup and recovery is a hard requirement and
+              # the plan was already in the stack — but the boundary did not
+              # allow it, so `cdk deploy` failed with AccessDenied on
+              # CreateBackupVault and rolled the whole stack back. The
+              # application had never taken a single backup, and nothing said so
+              # until the plan was switched on for the first time.
+              - backup:*
               - aoss:*
               - wafv2:*
               - cloudfront:*
