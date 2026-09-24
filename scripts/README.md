@@ -227,3 +227,25 @@ a $10 budget alarm before creating anything else.
 Leave `enableOpenSearchMirror` and `enableAnalytics` off unless you're
 specifically testing them — both carry standing cost well above the rest of the
 stack combined.
+
+## `restore-drill.sh` — prove the backup actually restores
+
+```bash
+AWS_REGION=us-east-1 ./scripts/restore-drill.sh
+```
+
+A backup nobody has restored is a hypothesis, not a backup. This takes the most
+recent recovery point, restores it to a **new** table, and compares real records
+against the live one.
+
+Read-only against production data: it never writes to, deletes or replaces the
+live table. DynamoDB cannot restore over an existing table anyway, so the target
+is always new, with a timestamped name.
+
+Cleanup is deliberately **not** automatic — it prints the `delete-table` command
+instead. An unattended delete of something matching "restore" is exactly the
+command that eventually hits the wrong table.
+
+Run it the morning after backups are first enabled, and after any change to the
+backup plan. The daily job fires at 05:00 UTC; before the first one completes
+the script says so and exits rather than failing obscurely.
