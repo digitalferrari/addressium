@@ -123,3 +123,33 @@ test("matching is case-insensitive and ignores the scheme", async () => {
   // proxied value need not be.
   assert.equal((await get("NEWSLETTER.Booklense.com")).statusCode, 200);
 });
+
+/**
+ * Public reads carry cache headers (#294).
+ *
+ * These endpoints are identical for every visitor, change rarely, and sit on
+ * the critical path of a page load — the newsletter cards on the subscriber
+ * site are literally this call. Without an edge cache every visitor pays a
+ * round trip to us-east-1 regardless of where they are.
+ */
+test("the host lookup is cacheable at the edge but not stale in a browser", async () => {
+  const res = await get("newsletter.booklense.com");
+  const cc = (res.headers as Record<string, string>)["cache-control"] ?? "";
+  assert.match(cc, /public/);
+  // The shared (edge) TTL is longer than the browser's ON PURPOSE: an edge can
+  // be purged with an invalidation, a visitor's browser cache cannot.
+  const browser = Number(/max-age=(\d+)/.exec(cc)?.[1]);
+  const shared = Number(/s-maxage=(\d+)/.exec(cc)?.[1]);
+  assert.ok(shared > browser, `s-maxage (${shared}) must exceed max-age (${browser})`);
+  // And a lapsed TTL must not make someone wait for the origin.
+  assert.match(cc, /stale-while-revalidate=\d+/);
+});
+
+test("a 404 is NOT cached", async () => {
+  // A cached 404 would keep a newly configured host unresolvable at the edge
+  // for the full TTL — the org would appear broken long after it was fixed.
+  const res = await get("newsletter.stranger.example");
+  assert.equal(res.statusCode, 404);
+  const cc = (res.headers as Record<string, string>)["cache-control"] ?? "";
+  assert.ok(!cc.includes("s-maxage"), `a 404 must not be edge-cached, got: ${cc}`);
+});

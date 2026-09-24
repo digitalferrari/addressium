@@ -2236,3 +2236,35 @@ test("without an ARN a certificate is still requested, so nothing regresses", ()
     "the construct must still request a certificate when none is supplied",
   );
 });
+
+/**
+ * Lambda memory, which is really CPU (#294).
+ *
+ * Lambda allocates CPU in proportion to memory. At the CDK default of 128 MB a
+ * function gets a fraction of a vCPU, and everything CPU-bound crawls — bundle
+ * parsing, the TLS handshake to DynamoDB, JSON serialisation. Measured on
+ * `PublicDirectoryFn` by changing only this number, same code and same query:
+ *
+ *   128 MB  ->  977-1300 ms
+ *   1024 MB ->  97-207 ms
+ *
+ * So a two-list directory cost over a second of server time purely for want of
+ * CPU. This asserts the default never silently reverts to 128.
+ */
+test("no handler runs on the 128MB default (#294)", () => {
+  const fns = template().findResources("AWS::Lambda::Function");
+  const starved = Object.entries(fns)
+    // CDK-GENERATED helpers, not request handlers: the S3 auto-delete provider,
+    // the custom-resource framework and the log-retention setter. They run at
+    // deploy time, nobody waits on them, and CDK owns their configuration.
+    .filter(([id]) =>
+      !/^(CustomS3AutoDeleteObjects|MigrationProviderframework|LogRetention)/.test(id),
+    )
+    .filter(([, f]) => ((f.Properties as { MemorySize?: number }).MemorySize ?? 128) < 512)
+    .map(([id]) => id);
+  assert.deepEqual(
+    starved,
+    [],
+    `these functions are CPU-starved at under 512MB: ${starved.join(", ")}`,
+  );
+});

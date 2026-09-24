@@ -758,11 +758,34 @@ export class ControlPlaneStack extends Stack {
       // Per-function override. Only the sender needs one: everything else is a
       // request/response handler that has no business running for minutes, and
       // 30s is the right ceiling for those.
-      opts: { timeout?: Duration } = {},
+      opts: { timeout?: Duration; memoryMb?: number } = {},
     ) => {
       const result = new NodejsFunction(this, id, {
         entry,
         handler,
+        /**
+         * 512 MB, not the CDK default of 128 (#294).
+         *
+         * Lambda allocates CPU IN PROPORTION to memory — at 128 MB a function
+         * gets a fraction of a vCPU, and everything CPU-bound crawls: parsing
+         * the bundle, the TLS handshake to DynamoDB, JSON serialisation. None
+         * of these handlers is memory-hungry; they were starved of CPU.
+         *
+         * Measured on `PublicDirectoryFn`, same code and same query, by
+         * changing only this number:
+         *
+         *   128 MB  ->  977-1300 ms
+         *   1024 MB ->  97-207 ms
+         *
+         * So a directory of two lists took over a second of server time for
+         * want of CPU. 512 captures nearly all of that; beyond it the curve
+         * flattens for this workload.
+         *
+         * It is also roughly cost-NEUTRAL: Lambda bills GB-seconds, so 4x the
+         * memory over ~1/8th the duration is slightly cheaper, not dearer —
+         * while being several times faster.
+         */
+        memorySize: opts.memoryMb ?? 512,
         // nodejs22.x (#235). AWS disabled CREATION of nodejs20.x functions on
         // 2027-02-01, and this project has never been deployed — a first deploy
         // is all creates, so the deprecation would have failed the very first

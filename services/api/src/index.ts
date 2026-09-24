@@ -3008,6 +3008,32 @@ export async function subscriberUnsubscribeHandler(event: HttpEvent): Promise<Ht
 }
 
 /** POST /orgs/branding — set subscriber-site branding/theme (#31). GET is public. */
+/**
+ * A cacheable public read (#294).
+ *
+ * These four endpoints — the directory, a single list, branding and the
+ * host->org lookup — are identical for every visitor, change rarely, and are
+ * fetched on the critical path of a page load. Serving them from the CloudFront
+ * edge is what makes the page feel instant rather than merely fast: without it
+ * every visitor pays a round trip to us-east-1 no matter where they are.
+ *
+ * `s-maxage` (shared caches) is longer than `max-age` (the browser) on purpose.
+ * The edge can be purged with an invalidation; a browser cache cannot, so a
+ * mistake there is stuck on a visitor's machine for its full lifetime.
+ *
+ * `stale-while-revalidate` means the first request after expiry still gets an
+ * instant answer from cache while the edge refreshes behind it — so a visitor
+ * never waits for the origin just because a TTL happened to lapse.
+ */
+const publicCache = (statusCode: number, obj: unknown): HttpResult => ({
+  statusCode,
+  headers: {
+    "content-type": "application/json",
+    "cache-control": "public, max-age=60, s-maxage=300, stale-while-revalidate=600",
+  },
+  body: JSON.stringify(obj),
+});
+
 export async function brandingHandler(event: HttpEvent): Promise<HttpResult> {
   try {
     const method = event.requestContext?.http?.method ?? (event.body ? "POST" : "GET");
@@ -3015,7 +3041,7 @@ export async function brandingHandler(event: HttpEvent): Promise<HttpResult> {
       // Public: the subscriber site reads branding to theme itself.
       const orgId = event.pathParameters?.org ?? "";
       const org = await stores().organizations.get(orgId);
-      return json(200, org?.branding ?? null);
+      return publicCache(200, org?.branding ?? null);
     }
     const { orgId, branding } = JSON.parse(event.body ?? "{}") as {
       orgId?: string;
@@ -3178,7 +3204,9 @@ export async function publicListHandler(event: HttpEvent): Promise<HttpResult> {
     const listId = event.pathParameters?.list ?? "";
     if (!orgId || !listId) return json(400, { error: "org and list required" });
     const view = await publicListView(stores(), orgId, listId);
-    return view ? json(200, view) : json(404, { error: "not found" });
+    // Only the 200 is cached: a cached 404 would keep a newly created list
+    // invisible at the edge for the full TTL.
+    return view ? publicCache(200, view) : json(404, { error: "not found" });
   } catch (e) {
     return fail(e);
   }
@@ -3195,7 +3223,7 @@ export async function publicDirectoryHandler(event: HttpEvent): Promise<HttpResu
   try {
     const orgId = event.pathParameters?.org ?? "";
     if (!orgId) return json(400, { error: "org required" });
-    return json(200, await publicListDirectory(stores(), orgId));
+    return publicCache(200, await publicListDirectory(stores(), orgId));
   } catch (e) {
     return fail(e);
   }
@@ -3643,7 +3671,7 @@ export async function publicSiteHandler(event: HttpEvent): Promise<HttpResult> {
     // someone to a publication they never visited.
     if (!match) return json(404, { error: "no organization is configured for this host" });
 
-    return json(200, {
+    return publicCache(200, {
       orgId: match.orgId,
       name: match.name,
       ...(match.branding ? { branding: match.branding } : {}),
