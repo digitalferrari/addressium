@@ -48,6 +48,7 @@ import { Settings } from "./screens/Settings.js";
 import { Identity } from "./screens/Identity.js";
 import { Sidebar, type View } from "./Sidebar.js";
 import { Topbar } from "./Topbar.js";
+import { TopProgress } from "./TopProgress.js";
 
 export function App() {
   const [ready, setReady] = useState(false);
@@ -194,6 +195,7 @@ function Console() {
 
   return (
     <div className="app">
+      <TopProgress />
       <Sidebar
         org={org}
         orgs={orgs}

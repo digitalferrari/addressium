@@ -9,6 +9,8 @@
   --bg: #f4f6fa;
   --surface: #ffffff;
   --surface-2: #eef1f7;
+  /* Sweep DARKER than --surface-2 here: a white highlight on #eef1f7 cannot be seen. */
+  --skeleton-sweep: rgba(15, 23, 42, 0.10);
   --surface-3: #e7ebf3;
   --border: #d7dde8;
   --border-strong: #c2cbdb;
@@ -177,6 +179,7 @@ th { color: var(--ink-2); font-weight: 600; }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     --bg: #0c1220; --surface: #121a2a; --surface-2: #182234; --surface-3: #1f2c42;
+    --skeleton-sweep: rgba(255, 255, 255, 0.10);
     --border: #28344c; --border-strong: #37475f; --ink: #e8edf6; --ink-2: #a6b3c9;
     --ink-3: #7382a0; --ink-4: #5a6884; --accent: #6b8bf5; --accent-ink: #a9bdfb;
     --accent-soft: #1a2745; --good: #3ec98a; --good-soft: #123024; --warn: #e0a94a;
@@ -197,6 +200,17 @@ th { color: var(--ink-2); font-weight: 600; }
 @keyframes fadeUp { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
 @keyframes blurIn { from { opacity: 0; filter: blur(6px); transform: translateY(6px); } to { opacity: 1; filter: none; transform: none; } }
 @keyframes shimmer { to { transform: translateX(100%); } }
+/* A second, slower cue. The sweep alone is one moving band; on a tall card most
+   of the block is static most of the time, which still reads as frozen. */
+@keyframes skeleton-pulse {
+  0%, 100% { background-color: var(--surface-2); }
+  /* `--surface-2` deliberately carries NO percentage here. Written as
+     `color-mix(in srgb, var(--surface-2) 100%, …)` the second colour gets 0%
+     weight and the result is just --surface-2 — a "pulse" that computes to no
+     change at all, which is the same class of invisible-but-passing bug as the
+     6% white sweep this replaced. */
+  50% { background-color: color-mix(in srgb, var(--surface-2), var(--ink) 7%); }
+}
 
 /* Route/view transition: the keyed .view wrapper remounts per screen and replays. */
 .view { animation: fadeUp var(--dur-2) var(--ease) both; }
@@ -217,9 +231,18 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
 .searchbox:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(107, 139, 245, 0.15); }
 .searchbox input:focus { border-color: transparent; box-shadow: none; }
 
-/* Shimmer skeletons for loading states. */
-.skeleton { position: relative; overflow: hidden; background: var(--surface-2); border: 1px solid var(--line); border-radius: 8px; }
-.skeleton::after { content: ""; position: absolute; inset: 0; transform: translateX(-100%); background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.06), transparent); animation: shimmer 1.4s infinite; }
+/* Shimmer skeletons for loading states.
+   The sweep colour is a TOKEN, not a fixed rgba. It was
+   `rgba(255,255,255,0.06)` — a 6% white highlight over `--surface-2`, which is
+   #eef1f7 in light mode. White-on-near-white at 6% is invisible, so the
+   animation ran the whole time and the placeholder still read as a dead grey
+   box: "nothing is loading". Dark mode, where --surface-2 is #182234, was the
+   only theme it ever showed up in.
+   Light mode therefore sweeps DARKER than the surface; dark mode sweeps
+   lighter. Both also pulse the base so the block is visibly alive even where
+   the sweep has not reached. */
+.skeleton { position: relative; overflow: hidden; background: var(--surface-2); border: 1px solid var(--line); border-radius: 8px; animation: skeleton-pulse 1.8s ease-in-out infinite; }
+.skeleton::after { content: ""; position: absolute; inset: 0; transform: translateX(-100%); background: linear-gradient(90deg, transparent, var(--skeleton-sweep), transparent); animation: shimmer 1.4s infinite; }
 .sk-line { height: 12px; margin: 10px 0; }
 .sk-kpi { height: 52px; }
 
@@ -229,4 +252,25 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
     animation-iteration-count: 1 !important;
     transition-duration: 0.001ms !important;
   }
+}
+
+/* Indeterminate top-edge progress bar (#294).
+   Fixed to the viewport, above everything, and pointer-events:none so it can
+   never intercept a click on whatever is beneath it. */
+.topprogress {
+  position: fixed; top: 0; left: 0; right: 0; height: 3px;
+  background: color-mix(in srgb, var(--accent), transparent 80%);
+  z-index: 9999; pointer-events: none; overflow: hidden;
+}
+.topprogress-bar {
+  height: 100%; width: 40%;
+  background: var(--accent);
+  animation: topprogress-slide 1.1s ease-in-out infinite;
+}
+@keyframes topprogress-slide {
+  /* -100% -> 250% rather than 0 -> 100%: the bar is 40% wide, so it has to
+     start fully off the left edge and finish fully off the right, or it appears
+     to bounce off both sides instead of sweeping across. */
+  from { transform: translateX(-100%); }
+  to { transform: translateX(250%); }
 }

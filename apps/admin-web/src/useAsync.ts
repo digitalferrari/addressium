@@ -22,6 +22,7 @@
  * bumping their own `rev`/`revision`/`reloadKey` deps, because `refetch`'s
  * single-flight guard would silently drop a reload that follows a write.
  */
+import { beginRequest, endRequest } from "./pending.js";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 export interface Async<T> {
@@ -64,10 +65,21 @@ export function useAsync<T>(fn: () => Promise<T>, deps: unknown[]): Async<T> {
     // screen's Refresh button is usable immediately.
     inFlight.current = false;
     setState({ loading: true, refreshing: false });
+    // Counted globally so the top-edge bar can show the app is waiting even
+    // when this particular screen's result is superseded (#294).
+    beginRequest();
+    let settled = false;
+    const done = () => { if (!settled) { settled = true; endRequest(); } };
     fnRef
       .current()
-      .then((data) => generation.current === mine && setState({ data, loading: false, refreshing: false }))
-      .catch((e) => generation.current === mine && setState({ error: String(e), loading: false, refreshing: false }));
+      .then((data) => {
+        done();
+        if (generation.current === mine) setState({ data, loading: false, refreshing: false });
+      })
+      .catch((e) => {
+        done();
+        if (generation.current === mine) setState({ error: String(e), loading: false, refreshing: false });
+      });
     return () => {
       generation.current += 1;
     };
