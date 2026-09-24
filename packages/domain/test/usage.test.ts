@@ -18,7 +18,7 @@ import {
   SystemClock,
 } from "@addressium/domain";
 
-const rates: CostRates = { perEmail: 0.0001, perGbStorageMonth: 0.023, perDedicatedIpMonth: 24.95, perTbScanned: 5.0 };
+const rates: CostRates = { perEmail: 0.0001, perGbStorageMonth: 0.023, perDedicatedIpMonth: 24.95, perTbScanned: 5.0, perGbBackupMonth: 0.10 };
 
 test("estimateCost applies each rate and totals them", () => {
   const cost = estimateCost(
@@ -166,4 +166,33 @@ test("the scheduled meter does NOT erase the operator's AWS-side figures", async
 test("usagePeriodOf reads the UTC month off an instant", () => {
   assert.equal(usagePeriodOf("2026-07-04T12:00:00.000Z"), "2026-07");
   assert.equal(usagePeriodOf("2026-12-31T23:59:59.999Z"), "2026-12");
+});
+
+/**
+ * AWS Backup on the usage page (#321).
+ *
+ * Backup is billed per RECOVERY POINT, not per resource — a plan keeping 35
+ * daily points holds 35 of them — so it is a real standing line, not a rounding
+ * error, and a usage page that omits it understates what the operator pays.
+ */
+test("backup storage is billed and included in the total", () => {
+  const withBackup = estimateCost(
+    { orgId: "acme", period: "2026-09", emailsSent: 0, storageBytes: 0, dedicatedIps: 0,
+      backupBytes: 10 * 1024 ** 3 },
+    rates,
+  );
+  assert.equal(withBackup.backup, 1.0, "10 GB × $0.10/GB-month");
+  assert.equal(withBackup.total, 1.0, "backup must reach the total, not just its own column");
+});
+
+test("backups being OFF is distinct from costing nothing", () => {
+  // Omitted rather than 0: a $0.00 column implies the charge was measured and
+  // came to nothing, which is a different claim from "this deployment does not
+  // take backups". Every stage without prodParity is in the second case.
+  const noBackup = estimateCost(
+    { orgId: "acme", period: "2026-09", emailsSent: 0, storageBytes: 0, dedicatedIps: 0 },
+    rates,
+  );
+  assert.ok(!("backup" in noBackup), "the key must be absent, not zero");
+  assert.equal(noBackup.total, 0);
 });

@@ -35,10 +35,10 @@ export function Usage({ org }: { org: string }) {
       )}
       {rows.length > 0 && (
         <div className="card">
-          <div className="muted" style={{ marginBottom: 8 }}>Cost by period (email · storage · dedicated IP · Athena scan)</div>
+          <div className="muted" style={{ marginBottom: 8 }}>Cost by period (email · storage · dedicated IP · Athena scan · backup)</div>
           <table>
             <thead>
-              <tr><th>Period</th><th>Email</th><th>Storage</th><th>Ded. IP</th><th>Athena</th><th>Total</th></tr>
+              <tr><th>Period</th><th>Email</th><th>Storage</th><th>Ded. IP</th><th>Athena</th><th>Backup</th><th>Total</th></tr>
             </thead>
             <tbody>
               {rows.map((r) => (
@@ -48,6 +48,12 @@ export function Usage({ org }: { org: string }) {
                   <td>{usd(r.cost.storage)}</td>
                   <td>{usd(r.cost.dedicatedIp)}</td>
                   <td title={gb(r.athenaBytesScanned)}>{usd(r.cost.athena)}</td>
+                  {/* An em dash, not $0.00, when backups are off. A zero implies
+                      the charge was measured and came to nothing; this
+                      deployment simply does not take them (#321). */}
+                  <td title={r.cost.backup === undefined ? "AWS Backup is not enabled for this deployment" : undefined}>
+                    {r.cost.backup === undefined ? "—" : usd(r.cost.backup)}
+                  </td>
                   <td className="t-strong">{usd(r.cost.total)}</td>
                 </tr>
               ))}

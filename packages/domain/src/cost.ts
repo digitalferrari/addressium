@@ -16,6 +16,22 @@
  * us-east-1 on-demand list prices, captured 2026-07. Other regions differ;
  * the estimate is explicitly labelled as us-east-1 in the UI.
  */
+/**
+ * Rough DynamoDB table size for an org (#321).
+ *
+ * Subscriber rows plus the engagement events they generate. Events dominate at
+ * any real send cadence — a subscriber row is written once, while every send
+ * produces a `sent` and a `delivered` plus opens and clicks.
+ *
+ * Measured against the live dev table: an event row is ~310 bytes and a
+ * subscriber row ~400, both well under DynamoDB's 1 KB billing unit.
+ */
+function estimatedTableGb(input: SendCostInput): number {
+  const eventsPerSend = input.subscribers * (2 + input.openRate + input.clickRate + input.bounceRate);
+  const bytes = input.subscribers * 400 + eventsPerSend * input.sendsPerYear * 410;
+  return bytes / 1024 ** 3;
+}
+
 export const PRICES = {
   /** SES: $0.10 per 1,000 outbound messages. Attachments are extra; we send none. */
   sesPerEmail: 0.10 / 1_000,
@@ -25,6 +41,20 @@ export const PRICES = {
   ddbReadUnit: 0.25 / 1_000_000,
   /** DynamoDB storage, per GB-month. */
   ddbStorageGbMonth: 0.25,
+  /**
+   * AWS Backup warm storage for DynamoDB, per GB-month.
+   *
+   * Billed on the SIZE OF EACH RECOVERY POINT, not on the table once: a daily
+   * plan keeping 35 days holds 35 copies. That is what makes backup a multiple
+   * of table size rather than an increment, and it is the line operators are
+   * most often surprised by.
+   *
+   * Restores are billed separately and are not modelled: they are a one-off
+   * incident cost, not a running one.
+   */
+  backupDdbGbMonth: 0.10,
+  /** AWS Backup warm storage for S3, per GB-month. */
+  backupS3GbMonth: 0.05,
   /** Lambda duration, per GB-second. */
   lambdaGbSecond: 0.0000166667,
   /** Lambda invocation. */
@@ -109,6 +139,14 @@ export interface SendCostInput {
   dashboards: number;
   /** Secrets Manager secrets. */
   secrets: number;
+  /**
+   * Is AWS Backup on? (#321)
+   *
+   * Default true, because it is on for prod and for any stage running with
+   * `prodParity` — and a cost model that omits a standing charge the deployment
+   * actually incurs is worse than one that overstates it.
+   */
+  backupEnabled?: boolean;
 }
 
 export const DEFAULT_COST_INPUT: SendCostInput = {
@@ -213,6 +251,27 @@ export function estimateSendCost(input: SendCostInput): SendCostEstimate {
   const perSendTotalUsd = round(perSend.reduce((s, l) => s + l.usd, 0));
 
   const fixedMonthly: CostLine[] = [
+    ...(input.backupEnabled === false
+      ? []
+      : [
+          {
+            /*
+             * Backup is billed per RECOVERY POINT, not per table. The plan keeps
+             * 35 daily points plus 12 monthly ones, so warm storage holds ~35
+             * copies of the table in steady state — which is why this is a
+             * MULTIPLE of table size rather than an increment, and the line
+             * operators are most often surprised by.
+             *
+             * Incremental after the first: DynamoDB backups store changed data
+             * only, so 35 points cost far less than 35 full tables. Modelled at
+             * ~4x the table (one full plus 34 deltas of a list that grows
+             * slowly) rather than 35x, which would be alarmist.
+             */
+            label: "AWS Backup (35 daily + 12 monthly)",
+            usd: round(estimatedTableGb(input) * 4 * PRICES.backupDdbGbMonth),
+            detail: `~${(estimatedTableGb(input) * 4).toFixed(2)} GB warm storage × $0.10/GB-month`,
+          },
+        ]),
     {
       label: "CloudWatch alarms",
       usd: round(input.alarms * PRICES.alarmMonth),

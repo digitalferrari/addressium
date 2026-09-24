@@ -16,6 +16,15 @@ export const DEFAULT_COST_RATES: CostRates = {
   perGbStorageMonth: 0.023,
   perDedicatedIpMonth: 24.95,
   perTbScanned: 5.0, // Athena: $5 / TB scanned
+  /**
+   * AWS Backup warm storage, $/GB-month (#321).
+   *
+   * Billed per RECOVERY POINT, not per resource: a plan keeping 35 daily points
+   * holds 35 of them. DynamoDB backups are incremental, so those points are
+   * mostly deltas rather than 35 full copies — but it is still a multiple of
+   * the data size, which is the part operators are surprised by.
+   */
+  perGbBackupMonth: 0.10,
 };
 
 const BYTES_PER_GB = 1_073_741_824;
@@ -29,6 +38,11 @@ export interface UsageInputs {
   dedicatedIps: number;
   /** Athena bytes scanned this period; optional (0 when the analytics tier is off). */
   athenaBytesScanned?: number;
+  /**
+   * Warm storage held by AWS Backup for this org this period (#321). Optional:
+   * absent when backups are off, which is every stage without `prodParity`.
+   */
+  backupBytes?: number;
 }
 
 export function estimateCost(inputs: UsageInputs, rates: CostRates): UsageRecord["cost"] {
@@ -36,7 +50,18 @@ export function estimateCost(inputs: UsageInputs, rates: CostRates): UsageRecord
   const storage = (inputs.storageBytes / BYTES_PER_GB) * rates.perGbStorageMonth;
   const dedicatedIp = inputs.dedicatedIps * rates.perDedicatedIpMonth;
   const athena = ((inputs.athenaBytesScanned ?? 0) / BYTES_PER_TB) * rates.perTbScanned;
-  return { email, storage, dedicatedIp, athena, total: email + storage + dedicatedIp + athena };
+  const backup = ((inputs.backupBytes ?? 0) / BYTES_PER_GB) * rates.perGbBackupMonth;
+  return {
+    email,
+    storage,
+    dedicatedIp,
+    athena,
+    // Omitted rather than zero when backups are off: a $0.00 column implies the
+    // charge was measured and came to nothing, which is a different claim from
+    // "this deployment does not take backups".
+    ...(inputs.backupBytes === undefined ? {} : { backup }),
+    total: email + storage + dedicatedIp + athena + backup,
+  };
 }
 
 /** Sum "emailsSent" from a set of campaigns' hot counters (our own metric). */

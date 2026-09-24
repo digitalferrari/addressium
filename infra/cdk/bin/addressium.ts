@@ -91,6 +91,31 @@ interface BootstrapConfig {
   senderMaxConcurrency?: number;
   /** A CLOUDFRONT-scope WebACL (us-east-1) for both SPA distributions. */
   cloudfrontWebAclArn?: string;
+  /**
+   * Stream engagement events to S3 parquet for historical reporting (#321).
+   *
+   * Creates a Kinesis stream on the table, a Firehose to the analytics bucket,
+   * Glue tables and an Athena workgroup. It carries a standing cost, so it is
+   * opt-in — but it is a PREREQUISITE for ageing events out of DynamoDB: with
+   * no lake, the table holds the only copy and a TTL would destroy history.
+   *
+   * Read from CONTEXT by the stack (`-c enableAnalytics=true` still works); this
+   * makes it durable, so a deploy that forgets the flag cannot tear the lake
+   * down — which would take the Kinesis stream and Glue tables with it.
+   */
+  enableAnalytics?: boolean;
+  /**
+   * Make this stage behave like prod (#321): AWS Backup, 3-month log retention,
+   * termination protection, RETAIN on the SPA buckets.
+   *
+   * For a stage used as a PRE-PRODUCTION rehearsal. Every prod-only protection
+   * is a behaviour prod exhibits and dev never exercises, so the first real test
+   * of a backup or a deletion guard would otherwise be in production.
+   *
+   * Termination protection means `cdk destroy` is REFUSED until cleared with
+   * `aws cloudformation update-termination-protection`.
+   */
+  prodParity?: boolean;
 }
 
 interface CustomDomainConfig {
@@ -162,6 +187,8 @@ function loadConfig(): BootstrapConfig {
     sesMaxSendRate: cfg.sesMaxSendRate,
     senderMaxConcurrency: cfg.senderMaxConcurrency,
     cloudfrontWebAclArn: cfg.cloudfrontWebAclArn,
+    enableAnalytics: cfg.enableAnalytics,
+    prodParity: cfg.prodParity,
   };
 }
 
@@ -207,6 +234,12 @@ const app = new App({
       : {}),
     ...(config.preferencesUrlBase !== undefined
       ? { preferencesUrlBase: config.preferencesUrlBase }
+      : {}),
+    ...(config.enableAnalytics !== undefined
+      ? { enableAnalytics: String(config.enableAnalytics) }
+      : {}),
+    ...(config.prodParity !== undefined
+      ? { prodParity: String(config.prodParity) }
       : {}),
   },
 });

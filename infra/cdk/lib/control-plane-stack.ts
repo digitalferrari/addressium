@@ -181,7 +181,16 @@ export class ControlPlaneStack extends Stack {
       // still not something anyone should be able to do by running the wrong
       // command in the wrong terminal. An explicit
       // `aws cloudformation update-termination-protection` turns it off.
-      terminationProtection: props.terminationProtection ?? parseStage(props.stage) === "prod",
+      // `prodParity` also turns this on, so a stage used as a pre-production
+      // rehearsal cannot be torn down by the wrong command either — the point of
+      // parity is that dev behaves the way prod will (#321). Read from context
+      // here because the stack's own `prodParity` is computed below, after
+      // `super()`.
+      terminationProtection:
+        props.terminationProtection ??
+        (parseStage(props.stage) === "prod" ||
+          scope.node.tryGetContext("prodParity") === true ||
+          scope.node.tryGetContext("prodParity") === "true"),
     });
 
     // ---- data plane ----
@@ -702,9 +711,29 @@ export class ControlPlaneStack extends Stack {
      * be exactly the kind of surprise this project avoids elsewhere. Both
      * directions are overridable: `-c enableBackup=true|false`.
      */
+    /**
+     * Make a non-prod stage behave like prod (#321).
+     *
+     * Several protections are gated on `stage === "prod"` because each carries a
+     * standing cost, and a scratch environment silently billing for redundancy
+     * it does not need is a surprise this project avoids elsewhere.
+     *
+     * But a dev stage used as a PRE-PRODUCTION rehearsal has the opposite
+     * problem: every difference is a behaviour prod exhibits and dev never
+     * exercises, so the first time a backup, a retention window or a deletion
+     * guard is tested for real is in production. `prodParity` opts a stage into
+     * the full set, so "it worked on dev" means something.
+     *
+     * Deliberately one switch rather than six independent flags: the value is in
+     * matching prod exactly, and a half-matched stage is the same class of
+     * problem with more ways to get it wrong.
+     */
+    const parityCtx = this.node.tryGetContext("prodParity") as boolean | string | undefined;
+    const prodParity = stage === "prod" || parityCtx === true || parityCtx === "true";
+
     const backupCtx = this.node.tryGetContext("enableBackup") as boolean | string | undefined;
     const enableBackup =
-      backupCtx === undefined ? stage === "prod" : backupCtx === true || backupCtx === "true";
+      backupCtx === undefined ? prodParity : backupCtx === true || backupCtx === "true";
     if (enableBackup) {
       const vault = new BackupVault(this, "BackupVault", {
         // The vault outlives the stack on purpose. A vault destroyed with the
@@ -726,7 +755,25 @@ export class ControlPlaneStack extends Stack {
           deleteAfter: Duration.days(365),
         }),
       );
-      plan.addSelection("TableSelection", { resources: [BackupResource.fromDynamoDbTable(table)] });
+      // The table AND the durable buckets (#321).
+      //
+      // Versioning protects the buckets from an overwrite or a delete-marker,
+      // but not from the bucket itself being removed, and not from an account
+      // -level incident. AWS Backup writes to a vault with its own lifecycle,
+      // which is the property that makes it a backup rather than a second copy
+      // in the same blast radius.
+      //
+      // `exportBucket` is deliberately EXCLUDED: it is disposable staging with a
+      // 7-day expiry rule, so backing it up would pay to preserve files that are
+      // designed to be thrown away and can be regenerated on demand.
+      plan.addSelection("DataSelection", {
+        resources: [
+          BackupResource.fromDynamoDbTable(table),
+          BackupResource.fromArn(auditBucket.bucketArn),
+          BackupResource.fromArn(archiveBucket.bucketArn),
+          BackupResource.fromArn(analyticsBucket.bucketArn),
+        ],
+      });
       new CfnOutput(this, "BackupVaultName", { value: vault.backupVaultName });
     }
 
@@ -859,7 +906,7 @@ export class ControlPlaneStack extends Stack {
         // Lambda's default log retention is NEVER EXPIRE. With ~40 functions
         // that is unbounded CloudWatch cost forever (#187).
         logGroup: new LogGroup(this, `${id}Logs`, {
-          retention: stage === "prod" ? RetentionDays.THREE_MONTHS : RetentionDays.ONE_WEEK,
+          retention: prodParity ? RetentionDays.THREE_MONTHS : RetentionDays.ONE_WEEK,
           removalPolicy: RemovalPolicy.DESTROY,
         }),
       });
@@ -1031,7 +1078,7 @@ export class ControlPlaneStack extends Stack {
     table.grantReadWriteData(migrationFn);
     const migrationProvider = new Provider(this, "MigrationProvider", {
       onEventHandler: migrationFn,
-      logRetention: stage === "prod" ? RetentionDays.THREE_MONTHS : RetentionDays.ONE_WEEK,
+      logRetention: prodParity ? RetentionDays.THREE_MONTHS : RetentionDays.ONE_WEEK,
     });
     versionMarker = new CustomResource(this, "VersionMarker", {
       serviceToken: migrationProvider.serviceToken,
@@ -2641,7 +2688,7 @@ export class ControlPlaneStack extends Stack {
         // largest standing cost in this stack when the mirror is on (#202). Prod
         // keeps them; a scratch environment paying twice for redundancy it does
         // not need is the kind of surprise this project avoids elsewhere.
-        standbyReplicas: stage === "prod" ? "ENABLED" : "DISABLED",
+        standbyReplicas: prodParity ? "ENABLED" : "DISABLED",
       });
       collection.addDependency(encPolicy);
       collection.addDependency(netPolicy);
@@ -2697,7 +2744,9 @@ export class ControlPlaneStack extends Stack {
     }
 
     // ---- frontends (static SPAs on S3 + CloudFront, §4.1–4.2) ----
-    const prod = stage === "prod";
+    // Drives SPA bucket retention: RETAIN under parity, so a dev teardown
+    // cannot quietly delete the bundles either.
+    const prod = prodParity;
     // Assign the hoisted bindings the Cognito callback URLs and CORS resolve from.
     //
     // `connect-src` has to name every origin the SPA legitimately talks to (#197):

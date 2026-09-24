@@ -141,7 +141,12 @@ export interface UsageRecord {
   storageBytes: number;
   dedicatedIps: number;
   athenaBytesScanned: number;
-  cost: { email: number; storage: number; dedicatedIp: number; athena: number; total: number };
+  /**
+   * `backup` is absent when AWS Backup is off for the deployment (#321) — the
+   * page renders an em dash rather than $0.00, because "not measured" and
+   * "measured at zero" are different claims.
+   */
+  cost: { email: number; storage: number; dedicatedIp: number; athena: number; backup?: number; total: number };
   computedAt: string;
 }
 

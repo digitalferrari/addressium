@@ -2268,3 +2268,38 @@ test("no handler runs on the 128MB default (#294)", () => {
     `these functions are CPU-starved at under 512MB: ${starved.join(", ")}`,
   );
 });
+
+/**
+ * `prodParity` makes a non-prod stage behave like prod (#321).
+ *
+ * Several protections were gated on `stage === "prod"` because each carries a
+ * standing cost. That is right for a scratch stage and wrong for one used as a
+ * pre-production rehearsal: every difference is a behaviour prod exhibits and
+ * dev never exercises, so the first real test of a backup or a deletion guard
+ * would be in production.
+ */
+test("prodParity turns on the protections prod gets (#321)", () => {
+  const t = template({}, { prodParity: "true" });
+
+  assert.equal(
+    Object.keys(t.findResources("AWS::Backup::BackupVault")).length, 1,
+    "no backup vault — the plan has nowhere to write",
+  );
+  assert.equal(Object.keys(t.findResources("AWS::Backup::BackupPlan")).length, 1);
+
+  // The table AND the durable buckets. Versioning protects a bucket from an
+  // overwrite, not from the bucket being deleted.
+  const sel = Object.values(t.findResources("AWS::Backup::BackupSelection"))[0];
+  assert.ok(sel, "nothing is selected for backup");
+  const resources = (sel.Properties as { BackupSelection: { Resources?: unknown[] } })
+    .BackupSelection.Resources ?? [];
+  assert.equal(resources.length, 4, `expected the table + 3 durable buckets, got ${resources.length}`);
+});
+
+test("without prodParity a scratch stage still pays for nothing (#321)", () => {
+  // The negative case: parity is opt-in precisely because backups bill by size,
+  // and a scratch stage silently accruing cost is the surprise this avoids.
+  const t = template();
+  assert.equal(Object.keys(t.findResources("AWS::Backup::BackupVault")).length, 0);
+  assert.equal(Object.keys(t.findResources("AWS::Backup::BackupPlan")).length, 0);
+});

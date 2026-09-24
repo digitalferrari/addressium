@@ -891,6 +891,8 @@ export interface CostRates {
   perGbStorageMonth: number; // S3 archive
   perDedicatedIpMonth: number; // SES dedicated IP lease
   perTbScanned: number; // Athena data scanned (reporting read-model, §4.23)
+  /** AWS Backup warm storage, $/GB-month (#321). */
+  perGbBackupMonth: number;
 }
 
 /** Aggregated usage + estimated cost for one org over one billing period. */
@@ -902,7 +904,19 @@ export interface UsageRecord {
   dedicatedIps: number;
   /** Athena bytes scanned this period (reporting read-model, §4.23). */
   athenaBytesScanned: number;
-  cost: { email: number; storage: number; dedicatedIp: number; athena: number; total: number };
+  /**
+   * `backup` is AWS Backup warm storage for this period (#321). Optional
+   * because records written before the line existed have no value for it, and
+   * inventing a number for a past period would misstate what was billed.
+   */
+  cost: {
+    email: number;
+    storage: number;
+    dedicatedIp: number;
+    athena: number;
+    backup?: number;
+    total: number;
+  };
   computedAt: string;
 }
 
