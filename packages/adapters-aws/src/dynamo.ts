@@ -956,9 +956,31 @@ export class DynamoStores implements Stores {
    */
   private async appendEvent(e: EngagementEvent): Promise<void> {
     const field = DynamoStores.COUNTER_FIELD[e.type];
+    const uniq = e.eventId ?? randomUUID();
     const eventItem = {
       pk: `${org(e.orgId)}#CAMPAIGN#${e.campaignId}`,
-      sk: `EVENT#${e.at}#${e.eventId ?? randomUUID()}`,
+      sk: `EVENT#${e.at}#${uniq}`,
+      /**
+       * gsi4 — the org's events in TIME order, sharded by month (#320).
+       *
+       * Events are partitioned per CAMPAIGN on the base table, so a `Query`
+       * reads one campaign and drawing a 30-day chart cost one round trip per
+       * campaign — ~2,500 after a year of seven daily publications. This index
+       * makes the same window one or two queries.
+       *
+       * Sharded by org-MONTH because a single partition caps at 3,000 RCU/sec
+       * and an org sending 20k x 7 daily fills one quickly. A 30-day window
+       * spans at most two shards.
+       *
+       * The month comes from `e.at`, which is the event's own timestamp — NOT
+       * the clock. A late-arriving SES notification for last month's send must
+       * land in last month's shard, or the window that should contain it never
+       * sees it.
+       */
+      gsi4pk: `${org(e.orgId)}#EVENTS#${e.at.slice(0, 7)}`,
+      // Time first so the sort key orders chronologically; the unique suffix
+      // only breaks ties between events sharing a timestamp.
+      gsi4sk: `${e.at}#${uniq}`,
       data: e,
     };
     const bumpCounter = {
@@ -1125,6 +1147,48 @@ export class DynamoStores implements Stores {
           ":s": "EVENT#",
         },
       }),
+    /**
+     * One query per MONTH the window spans, not one per campaign (#320).
+     *
+     * A 30-day window touches one or two monthly shards, so this is 1-2 reads
+     * where the per-campaign path was ~2,500 after a year of seven daily
+     * publications.
+     *
+     * The months are derived from the window, NOT from a list of campaigns:
+     * that is what makes the cost independent of campaign history.
+     *
+     * `BETWEEN` on the sort key bounds each shard to the window itself.
+     * `through` is an inclusive DAY, so the upper bound is `<day>T24` — any
+     * string sorting after every `<day>T23:59:59.999Z` — rather than the day
+     * alone, which would exclude every event on the final day.
+     */
+    betweenDates: async (orgId, from, through) => {
+      const months: string[] = [];
+      for (
+        let d = new Date(`${from}T00:00:00.000Z`);
+        d <= new Date(`${through}T00:00:00.000Z`);
+        d.setUTCMonth(d.getUTCMonth() + 1)
+      ) {
+        months.push(d.toISOString().slice(0, 7));
+      }
+      // Parallel: the shards are independent, so the cost is the slowest read
+      // rather than their sum.
+      const pages = await Promise.all(
+        months.map((m) =>
+          this.queryAll<EngagementEvent>({
+            TableName: this.tableName,
+            IndexName: "gsi4",
+            KeyConditionExpression: "gsi4pk = :pk AND gsi4sk BETWEEN :lo AND :hi",
+            ExpressionAttributeValues: {
+              ":pk": `${org(orgId)}#EVENTS#${m}`,
+              ":lo": from,
+              ":hi": `${through}T24`,
+            },
+          }),
+        ),
+      );
+      return pages.flat();
+    },
     /**
      * Delete every engagement event naming this subscriber (#164).
      *

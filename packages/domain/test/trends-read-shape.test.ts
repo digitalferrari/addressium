@@ -88,9 +88,15 @@ test("the trends handler issues its per-campaign reads in parallel", async () =>
   const src = readFileSync(resolve(root, "services/reporting/src/index.ts"), "utf8");
   const handler = src.slice(src.indexOf("export async function trendsHandler"), src.indexOf("export interface SeriesReportEvent"));
 
+  // The windowed index read is the primary path now (#320); the per-campaign
+  // fan-out survives only as the fallback, and must stay parallel there too.
+  assert.ok(
+    /betweenDates\?\.\(/.test(handler),
+    "the handler no longer reads a WINDOW — it is back to fanning out over every campaign ever",
+  );
   assert.ok(
     /Promise\.all\(campaigns\.map\(/.test(handler),
-    "per-campaign event reads are not parallelised — the cost is the SUM of every read, not the slowest",
+    "the fallback per-campaign reads are not parallelised",
   );
   assert.ok(
     !/for \(const campaign of[\s\S]{0,200}await stores\(\)\.events\.all/.test(handler),
@@ -111,4 +117,55 @@ test("counting subscribers does not materialize them", async () => {
   assert.equal(n, 50);
   assert.equal(stores.counted, 1, "count() must be the thing called");
   assert.equal(stores.streamed, 0, "stream() reads every row — it must not be used to count");
+});
+
+/**
+ * The window is read from the index, not reconstructed from every campaign (#320).
+ *
+ * Events are partitioned PER CAMPAIGN on the base table, so a `Query` reads one
+ * campaign and a 30-day chart cost one round trip each — 32 on dev, ~2,500 after
+ * a year of seven daily publications. `betweenDates` reads a time-ordered index
+ * instead, so the cost tracks events in the window rather than campaign history.
+ */
+test("betweenDates returns only events inside the window", async () => {
+  const stores = memStores();
+  const at = (d: string) => `${d}T12:00:00.000Z`;
+  for (const [campaignId, day] of [
+    ["c-old", "2026-01-15"],   // before
+    ["c-in", "2026-03-10"],    // inside
+    ["c-in2", "2026-03-31"],   // inside, LAST day — the off-by-one this guards
+    ["c-new", "2026-05-01"],   // after
+  ] as [string, string][]) {
+    await stores.events.append({
+      orgId: ORG, subscriberId: "s1", campaignId, type: "sent", at: at(day),
+    });
+  }
+
+  const got = await stores.events.betweenDates!(ORG, "2026-03-01", "2026-03-31");
+  assert.deepEqual(got.map((e) => e.campaignId).sort(), ["c-in", "c-in2"]);
+});
+
+test("an event on the final day of the window is included", async () => {
+  // `through` is an inclusive DAY. Comparing it against a timestamp rather than
+  // a day would drop everything after 00:00 on that day — the whole last day of
+  // every chart, which is the day people look at.
+  const stores = memStores();
+  await stores.events.append({
+    orgId: ORG, subscriberId: "s1", campaignId: "c1", type: "sent",
+    at: "2026-03-31T23:59:59.999Z",
+  });
+  const got = await stores.events.betweenDates!(ORG, "2026-03-01", "2026-03-31");
+  assert.equal(got.length, 1, "the last day of the window was excluded");
+});
+
+test("events from another org never appear", async () => {
+  const stores = memStores();
+  for (const orgId of [ORG, "other-org"]) {
+    await stores.events.append({
+      orgId, subscriberId: "s1", campaignId: "c1", type: "sent", at: "2026-03-10T12:00:00.000Z",
+    });
+  }
+  const got = await stores.events.betweenDates!(ORG, "2026-03-01", "2026-03-31");
+  assert.equal(got.length, 1);
+  assert.equal(got[0]!.orgId, ORG);
 });

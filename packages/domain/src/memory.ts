@@ -407,6 +407,14 @@ export class MemEvents implements EventStore {
   async all(orgId: string, campaignId: string) {
     return this.list.filter((e) => e.orgId === orgId && e.campaignId === campaignId);
   }
+  /** Same contract as the Dynamo store: an org-wide window, all campaigns (#320). */
+  async betweenDates(orgId: string, from: string, through: string) {
+    // `through` is an inclusive DAY, so compare against the day itself rather
+    // than a timestamp — an event at 23:59 on the final day is in the window.
+    return this.list.filter(
+      (e) => e.orgId === orgId && e.at.slice(0, 10) >= from && e.at.slice(0, 10) <= through,
+    );
+  }
 
   async deleteForSubscriber(orgId: string, subscriberId: string) {
     const before = this.list.length;

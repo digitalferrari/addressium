@@ -128,17 +128,37 @@ export async function trendsHandler(event: ReportEvent) {
   // others (#294). This was a sequential `for` loop doing one round trip per
   // campaign, then a full subscriber scan — on an admin screen that is the
   // first thing loaded after login, so every hop was felt.
-  const campaigns = await stores().campaigns.list(orgId);
-  const [eventPages, subscriberCount] = await Promise.all([
-    // `Promise.all` over campaigns, not a loop: these reads are independent, so
-    // the cost becomes the SLOWEST read rather than the sum of all of them.
-    Promise.all(campaigns.map((c) => stores().events.all(orgId, c.campaignId))),
+  /**
+   * Read the WINDOW, not every campaign ever (#320).
+   *
+   * `betweenDates` queries a time-ordered index sharded by org-month, so a
+   * 30-day chart is one or two reads. The previous path fanned out one read per
+   * campaign — 32 on dev, ~2,500 after a year of seven daily publications —
+   * because events are partitioned per campaign on the base table.
+   *
+   * `previousFrom` is the lower bound, not `from`: the summary compares the
+   * window against the one before it, so both must be fetched.
+   *
+   * The per-campaign fan-out remains as a FALLBACK for a store without the
+   * index, and for events written before it existed — those carry no `gsi4pk`
+   * and are invisible to the query. A reporting screen that silently
+   * under-reports is worse than one that is slow, so the fallback is a real
+   * path rather than a courtesy.
+   */
+  const [events, subscriberCount] = await Promise.all([
+    (async (): Promise<EngagementEvent[]> => {
+      const windowed = await stores().events.betweenDates?.(orgId, previousFrom, through);
+      if (windowed) return windowed;
+      const campaigns = await stores().campaigns.list(orgId);
+      return (
+        await Promise.all(campaigns.map((c) => stores().events.all(orgId, c.campaignId)))
+      ).flat();
+    })(),
     // Counted server-side. This used to consume `stream()` purely to increment
     // a number: every subscriber marshalled out of DynamoDB, across the network
     // and deserialized, only to be discarded.
     stores().subscribers.count(orgId),
   ]);
-  const events: EngagementEvent[] = eventPages.flat();
   const summary: TrendSummary = {
     subscriberCount,
     current: summarizeWindow(events, from, through),

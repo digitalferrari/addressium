@@ -17,7 +17,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { Stack, type StackProps, RemovalPolicy, Duration, CfnOutput, Lazy, ArnFormat, CustomResource } from "aws-cdk-lib";
 import type { Construct } from "constructs";
-import { AttributeType, BillingMode, StreamViewType, Table, TableEncryption } from "aws-cdk-lib/aws-dynamodb";
+import { AttributeType, BillingMode, ProjectionType, StreamViewType, Table, TableEncryption } from "aws-cdk-lib/aws-dynamodb";
 import { Key } from "aws-cdk-lib/aws-kms";
 import { Bucket, BlockPublicAccess, ObjectLockRetention, StorageClass, HttpMethods } from "aws-cdk-lib/aws-s3";
 import { Queue, QueueEncryption } from "aws-cdk-lib/aws-sqs";
@@ -308,6 +308,34 @@ export class ControlPlaneStack extends Stack {
       indexName: "gsi3", // confirmed subscriptions, ordered by subscriber id
       partitionKey: { name: "gsi3pk", type: AttributeType.STRING },
       sortKey: { name: "gsi3sk", type: AttributeType.STRING },
+    });
+    /**
+     * An org's engagement events, in TIME order (#320).
+     *
+     * Events are keyed `pk: ORG#x#CAMPAIGN#<id>`, so they are partitioned per
+     * campaign and a `Query` reads exactly one partition. Drawing a 30-day chart
+     * therefore meant one round trip PER CAMPAIGN — 32 on dev today, and roughly
+     * 2,500 after a year of seven daily publications. The work is trivial (115
+     * events on dev); the cost is the fan-out.
+     *
+     * `gsi4pk` is `ORG#<org>#EVENTS#<YYYY-MM>` — sharded by org-MONTH, not per
+     * org. A single DynamoDB partition caps at 3,000 RCU/sec, and an org sending
+     * 20k x 7 daily accumulates events fast; monthly shards keep a 30-day window
+     * to one or two partitions while spreading writes across months.
+     *
+     * INCLUDE, not ALL: the chart reads `at`, `type` and `subscriberId` and
+     * nothing else. Projecting everything would copy each event's whole `data`
+     * map into the index and double the storage for fields no query touches.
+     *
+     * SPARSE by construction — only event items carry `gsi4pk`, so subscribers,
+     * campaigns and suppression rows never enter the index.
+     */
+    table.addGlobalSecondaryIndex({
+      indexName: "gsi4", // org events, by month, time-ordered
+      partitionKey: { name: "gsi4pk", type: AttributeType.STRING },
+      sortKey: { name: "gsi4sk", type: AttributeType.STRING },
+      projectionType: ProjectionType.INCLUDE,
+      nonKeyAttributes: ["data"],
     });
 
     const archiveBucket = new Bucket(this, "ArchiveBucket", {

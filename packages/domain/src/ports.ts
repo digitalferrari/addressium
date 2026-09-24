@@ -429,6 +429,22 @@ export interface EventStore {
   append(e: EngagementEvent): Promise<void>;
   all(orgId: string, campaignId: string): Promise<EngagementEvent[]>;
   /**
+   * Every event for an org between two dates, across ALL campaigns (#320).
+   *
+   * `from`/`through` are inclusive `YYYY-MM-DD` days.
+   *
+   * `all()` reads ONE campaign, because events are partitioned per campaign —
+   * so a 30-day chart meant a round trip per campaign, ~2,500 after a year of
+   * seven daily publications. This reads a time-ordered index instead, making
+   * the cost proportional to events IN THE WINDOW rather than to the org's
+   * campaign history.
+   *
+   * Optional on the port: implementing it is an optimization with a correct
+   * fallback. A caller that finds it absent folds per campaign, which is what
+   * every caller did before.
+   */
+  betweenDates?(orgId: string, from: string, through: string): Promise<EngagementEvent[]>;
+  /**
    * Delete every engagement event naming this subscriber, across campaigns
    * (#164). Returns how many were removed.
    *
