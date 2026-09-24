@@ -157,7 +157,15 @@ Resources:
               # CreateBackupVault and rolled the whole stack back. The
               # application had never taken a single backup, and nothing said so
               # until the plan was switched on for the first time.
+              #
+              # `backup-storage` is a SEPARATE service namespace, not a prefix of
+              # `backup`, and vault creation needs both: with only `backup:*` the
+              # deploy still failed, with "Insufficient privileges to create a
+              # backup vault. Creating a backup vault requires backup-storage and
+              # KMS permissions." Granting one without the other looks correct
+              # and fails at the same point.
               - backup:*
+              - backup-storage:*
               - aoss:*
               - wafv2:*
               - cloudfront:*
@@ -198,6 +206,17 @@ Resources:
                   - lambda.amazonaws.com
                   - scheduler.amazonaws.com
                   - states.amazonaws.com
+                  # AWS Backup (#321). `BackupSelection` hands the service a role
+                  # that can read the protected resources, so creating the
+                  # selection is a PassRole — the third distinct permission this
+                  # one feature needed, after `backup:*` and `backup-storage:*`,
+                  # each of which failed at a different point with a different
+                  # message.
+                  #
+                  # Added to this allowlist rather than widening `Resource`: the
+                  # service, not the role ARN, is what bounds the escape route
+                  # this statement exists to close.
+                  - backup.amazonaws.com
           # A boundary is an INTERSECTION: an action needs an Allow here as well
           # as in the identity policy. DeployPolicy grants sts:AssumeRole on the
           # four CDK roles, but without this statement the boundary caps it away
