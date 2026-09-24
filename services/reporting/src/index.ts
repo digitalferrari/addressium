@@ -147,12 +147,26 @@ export async function trendsHandler(event: ReportEvent) {
    */
   const [events, subscriberCount] = await Promise.all([
     (async (): Promise<EngagementEvent[]> => {
+      const perCampaign = async (): Promise<EngagementEvent[]> => {
+        const campaigns = await stores().campaigns.list(orgId);
+        return (
+          await Promise.all(campaigns.map((c) => stores().events.all(orgId, c.campaignId)))
+        ).flat();
+      };
       const windowed = await stores().events.betweenDates?.(orgId, previousFrom, through);
-      if (windowed) return windowed;
-      const campaigns = await stores().campaigns.list(orgId);
-      return (
-        await Promise.all(campaigns.map((c) => stores().events.all(orgId, c.campaignId)))
-      ).flat();
+      // An EMPTY result falls back, not just an absent method.
+      //
+      // The index is populated by writes, so events written before it existed
+      // carry no `gsi4pk` and are invisible to it. Treating `[]` as an answer
+      // reported ZERO for an org with 115 real events — a chart that is
+      // confidently, silently wrong, which is worse than a slow one. Caught on
+      // the live stack minutes after the index went ACTIVE.
+      //
+      // The cost of being wrong here is asymmetric: a needless fan-out on a
+      // genuinely empty window is one slow request, while trusting an empty
+      // index under-reports every chart until someone notices by eye.
+      if (windowed && windowed.length > 0) return windowed;
+      return perCampaign();
     })(),
     // Counted server-side. This used to consume `stream()` purely to increment
     // a number: every subscriber marshalled out of DynamoDB, across the network

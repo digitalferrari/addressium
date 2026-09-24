@@ -169,3 +169,40 @@ test("events from another org never appear", async () => {
   assert.equal(got.length, 1);
   assert.equal(got[0]!.orgId, ORG);
 });
+
+/**
+ * An EMPTY index must fall back, not be believed (#320).
+ *
+ * A GSI is populated by writes, so events written before it existed carry no
+ * `gsi4pk` and are invisible to the window query. Treating `[]` as an answer
+ * reported ZERO for an org with 115 real events — verified on the live stack
+ * minutes after the index went ACTIVE.
+ *
+ * That is a chart which is confidently, silently wrong. The cost of being wrong
+ * is asymmetric: a needless fan-out on a genuinely empty window is one slow
+ * request; trusting an empty index under-reports every chart until someone
+ * notices by eye.
+ */
+test("the handler falls back when the window query returns nothing", async () => {
+  const { readFileSync } = await import("node:fs");
+  const { fileURLToPath } = await import("node:url");
+  const { dirname, resolve } = await import("node:path");
+
+  let dir = dirname(fileURLToPath(import.meta.url));
+  let root = "";
+  for (let i = 0; i < 8; i++) {
+    try {
+      const pkg = JSON.parse(readFileSync(resolve(dir, "package.json"), "utf8")) as { workspaces?: unknown };
+      if (pkg.workspaces) { root = dir; break; }
+    } catch { /* keep walking */ }
+    dir = dirname(dir);
+  }
+  const src = readFileSync(resolve(root, "services/reporting/src/index.ts"), "utf8");
+  const handler = src.slice(src.indexOf("export async function trendsHandler"), src.indexOf("export interface SeriesReportEvent"));
+
+  // `if (windowed)` alone is the bug: an empty array is truthy.
+  assert.ok(
+    /windowed && windowed\.length > 0/.test(handler),
+    "an empty window result is being treated as an answer — pre-index events would vanish from every chart",
+  );
+});
